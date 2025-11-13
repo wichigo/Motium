@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Motium</string>
+
+    <!-- Google Sign-In configuration -->
+    <!-- TODO: Replace with your actual Google Cloud Console Web Client ID -->
+    <string name="default_web_client_id">YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com</string>
+</resources>
