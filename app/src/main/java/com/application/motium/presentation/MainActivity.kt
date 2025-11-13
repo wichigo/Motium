@@ -90,8 +90,8 @@ class MainActivity : ComponentActivity() {
         // Valider et rafraîchir la session quand l'app revient au premier plan
         lifecycleScope.launch {
             try {
-                MotiumApplication.logger.i("🔄 App resumed - validating session", "MainActivity")
-                authRepository.validateCurrentSession()
+                MotiumApplication.logger.i("🔄 App resumed - refreshing session", "MainActivity")
+                authRepository.refreshSession()
 
                 // Démarrer le service de connexion si l'utilisateur est authentifié
                 if (authRepository.isUserAuthenticated()) {

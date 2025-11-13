@@ -97,13 +97,15 @@ fun VehiclesScreen(
             "VehiclesScreen"
         )
 
-        currentUserId?.let { userId ->
+        if (currentUserId != null) {
             com.application.motium.MotiumApplication.logger.i(
-                "VehiclesScreen - Loading vehicles for user: $userId",
+                "VehiclesScreen - User detected, ViewModel will load vehicles.",
                 "VehiclesScreen"
             )
-            viewModel.loadVehicles(userId)
-        } ?: run {
+            // The ViewModel now loads vehicles automatically when the user is authenticated.
+            // A manual call here can be used for force-refreshing when entering the screen.
+            viewModel.loadVehicles()
+        } else {
             com.application.motium.MotiumApplication.logger.e(
                 "VehiclesScreen - No user ID found! User might not be authenticated",
                 "VehiclesScreen",
@@ -139,9 +141,7 @@ fun VehiclesScreen(
         AddVehicleScreen(
             onNavigateBack = { showAddVehicleScreen = false },
             onAddVehicle = { name, type, licensePlate, power, fuelType, mileageRate, isDefault ->
-                currentUserId?.let { userId ->
-                    viewModel.addVehicle(userId, name, type, licensePlate, power, fuelType, mileageRate, isDefault)
-                }
+                viewModel.addVehicle(name, type, licensePlate, power, fuelType, mileageRate, isDefault)
             }
         )
         return
@@ -178,13 +178,11 @@ fun VehiclesScreen(
                     // Refresh button
                     androidx.compose.material3.IconButton(
                         onClick = {
-                            currentUserId?.let { userId ->
-                                com.application.motium.MotiumApplication.logger.i(
-                                    "VehiclesScreen - Manual refresh triggered by user",
-                                    "VehiclesScreen"
-                                )
-                                viewModel.loadVehicles(userId)
-                            }
+                            com.application.motium.MotiumApplication.logger.i(
+                                "VehiclesScreen - Manual refresh triggered by user",
+                                "VehiclesScreen"
+                            )
+                            viewModel.loadVehicles()
                         }
                     ) {
                         androidx.compose.material3.Icon(
@@ -407,9 +405,7 @@ fun VehiclesScreen(
                         vehicle = vehicle,
                         onCardClick = { selectedVehicleId = vehicle.id },
                         onSetDefault = {
-                            currentUserId?.let { userId ->
-                                viewModel.setDefaultVehicle(userId, vehicle.id)
-                            }
+                            viewModel.setDefaultVehicle(vehicle.id)
                         }
                     )
                 }
@@ -597,4 +593,3 @@ fun calculateCurrentMileageRate(vehicle: Vehicle): String {
         }
     }
 }
-

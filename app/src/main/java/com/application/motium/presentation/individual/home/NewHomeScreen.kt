@@ -104,18 +104,21 @@ fun NewHomeScreen(
         grouped
     }
 
-    // Charger les trips au démarrage
-    LaunchedEffect(Unit) {
-        // Synchroniser depuis Supabase d'abord
-        tripRepository.syncTripsFromSupabase()
-        // Puis charger tous les trips (locaux + Supabase)
-        trips = tripRepository.getAllTrips()
-        autoTrackingEnabled = tripRepository.isAutoTrackingEnabled()
+    // Charger les trips au démarrage - ATTENDRE que l'auth soit complète
+    LaunchedEffect(authState.isLoading) {
+        // Attendre que l'authentification soit complète
+        if (!authState.isLoading && authState.isAuthenticated) {
+            // Synchroniser depuis Supabase d'abord
+            tripRepository.syncTripsFromSupabase()
+            // Puis charger tous les trips (locaux + Supabase)
+            trips = tripRepository.getAllTrips()
+            autoTrackingEnabled = tripRepository.isAutoTrackingEnabled()
 
-        // Démarrer le service si l'auto-tracking est activé
-        if (autoTrackingEnabled) {
-            MotiumApplication.logger.i("Auto tracking is enabled, ensuring service is running", "HomeScreen")
-            ActivityRecognitionService.startService(context)
+            // Démarrer le service si l'auto-tracking est activé
+            if (autoTrackingEnabled) {
+                MotiumApplication.logger.i("Auto tracking is enabled, ensuring service is running", "HomeScreen")
+                ActivityRecognitionService.startService(context)
+            }
         }
     }
 

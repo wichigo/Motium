@@ -30,24 +30,11 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         val fuel_type: String?,
         val mileage_rate: Double,
         val is_default: Boolean,
-        val total_mileage_perso: Double,
-        val total_mileage_pro: Double,
         val created_at: String,
         val updated_at: String
     )
 
-    @Serializable
-    data class MileagePersonalUpdate(
-        val total_mileage_perso: Double,
-        val updated_at: String
-    )
-
-    @Serializable
-    data class MileageProfessionalUpdate(
-        val total_mileage_pro: Double,
-        val updated_at: String
-    )
-
+    // Simplified update classes since mileage is no longer stored
     @Serializable
     data class DefaultVehicleUpdate(
         val is_default: Boolean,
@@ -63,13 +50,45 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         val fuel_type: String?,
         val mileage_rate: Double,
         val is_default: Boolean,
-        val total_mileage_perso: Double,
-        val total_mileage_pro: Double,
         val updated_at: String
     )
 
+    // To query trips for mileage calculation
+    @Serializable
+    data class TripDistance(
+        val total_distance: Double
+    )
+
+
+    private suspend fun getAnnualMileageForVehicle(vehicleId: String, tripType: String): Double {
+        return try {
+            val calendar = Calendar.getInstance()
+            calendar.set(Calendar.DAY_OF_YEAR, 1)
+            calendar.set(Calendar.HOUR_OF_DAY, 0)
+            calendar.set(Calendar.MINUTE, 0)
+            calendar.set(Calendar.SECOND, 0)
+            val startOfYear = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.format(calendar.time)
+
+            val trips = postgres.from("trips").select {
+                filter {
+                    eq("vehicle_id", vehicleId)
+                    eq("is_validated", true)
+                    eq("trip_type", tripType)
+                    gte("start_time_utc", startOfYear)
+                }
+            }.decodeList<TripDistance>()
+
+            trips.sumOf { it.total_distance }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error calculating annual mileage for vehicle $vehicleId: ${e.message}", "SupabaseVehicleRepository", e)
+            0.0
+        }
+    }
+
+
     override fun getVehiclesForUser(userId: String): Flow<List<Vehicle>> {
-        // For now, return empty flow - will implement real-time subscription later
         return flowOf(emptyList())
     }
 
@@ -136,23 +155,23 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date())
 
-            val supabaseVehicle = SupabaseVehicle(
-                id = vehicle.id,
-                user_id = vehicle.userId,
-                name = vehicle.name,
-                type = vehicle.type.name,
-                license_plate = vehicle.licensePlate,
-                power = vehicle.power?.cv,
-                fuel_type = vehicle.fuelType?.name,
-                mileage_rate = vehicle.mileageRate,
-                is_default = vehicle.isDefault,
-                total_mileage_perso = vehicle.totalMileagePerso,
-                total_mileage_pro = vehicle.totalMileagePro,
-                created_at = now,
-                updated_at = now
+            // Create a map to insert, excluding the transient mileage fields
+            val vehicleMap = mapOf(
+                "id" to vehicle.id,
+                "user_id" to vehicle.userId,
+                "name" to vehicle.name,
+                "type" to vehicle.type.name,
+                "license_plate" to vehicle.licensePlate,
+                "power" to vehicle.power?.cv,
+                "fuel_type" to vehicle.fuelType?.name,
+                "mileage_rate" to vehicle.mileageRate,
+                "is_default" to vehicle.isDefault,
+                "created_at" to now,
+                "updated_at" to now
             )
 
-            postgres.from("vehicles").insert(supabaseVehicle)
+
+            postgres.from("vehicles").insert(vehicleMap)
 
             MotiumApplication.logger.i("Vehicle inserted successfully: ${vehicle.id}", "SupabaseVehicleRepository")
         } catch (e: Exception) {
@@ -177,8 +196,6 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
                 fuel_type = vehicle.fuelType?.name,
                 mileage_rate = vehicle.mileageRate,
                 is_default = vehicle.isDefault,
-                total_mileage_perso = vehicle.totalMileagePerso,
-                total_mileage_pro = vehicle.totalMileagePro,
                 updated_at = now
             )
 
@@ -239,86 +256,11 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         }
     }
 
-    override suspend fun updateMileage(vehicleId: String, additionalKm: Double) = withContext(Dispatchers.IO) {
-        // Legacy method - defaults to personal mileage
-        updateMileagePersonal(vehicleId, additionalKm)
+    // This is now obsolete, but kept for interface compatibility. It does nothing.
+    override suspend fun updateMileage(vehicleId: String, additionalKm: Double) {
+        // Deprecated: Mileage is now calculated on-the-fly.
     }
 
-    suspend fun updateMileagePersonal(vehicleId: String, additionalKm: Double) = withContext(Dispatchers.IO) {
-        try {
-            MotiumApplication.logger.i("Updating personal mileage for vehicle: $vehicleId, additional: $additionalKm km", "SupabaseVehicleRepository")
-
-            val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
-                timeZone = java.util.TimeZone.getTimeZone("UTC")
-            }.format(Date())
-
-            // Get current vehicle
-            val currentVehicle = postgres.from("vehicles")
-                .select {
-                    filter {
-                        eq("id", vehicleId)
-                    }
-                }.decodeSingle<SupabaseVehicle>()
-
-            val newMileagePerso = currentVehicle.total_mileage_perso + additionalKm
-
-            // Update with serializable class to avoid serialization issues
-            postgres.from("vehicles")
-                .update(
-                    MileagePersonalUpdate(
-                        total_mileage_perso = newMileagePerso,
-                        updated_at = now
-                    )
-                ) {
-                    filter {
-                        eq("id", vehicleId)
-                    }
-                }
-
-            MotiumApplication.logger.i("Personal mileage updated successfully for vehicle: $vehicleId, new perso total: $newMileagePerso km", "SupabaseVehicleRepository")
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error updating personal mileage: ${e.message}", "SupabaseVehicleRepository", e)
-            throw e
-        }
-    }
-
-    suspend fun updateMileageProfessional(vehicleId: String, additionalKm: Double) = withContext(Dispatchers.IO) {
-        try {
-            MotiumApplication.logger.i("Updating professional mileage for vehicle: $vehicleId, additional: $additionalKm km", "SupabaseVehicleRepository")
-
-            val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
-                timeZone = java.util.TimeZone.getTimeZone("UTC")
-            }.format(Date())
-
-            // Get current vehicle
-            val currentVehicle = postgres.from("vehicles")
-                .select {
-                    filter {
-                        eq("id", vehicleId)
-                    }
-                }.decodeSingle<SupabaseVehicle>()
-
-            val newMileagePro = currentVehicle.total_mileage_pro + additionalKm
-
-            // Update with serializable class to avoid serialization issues
-            postgres.from("vehicles")
-                .update(
-                    MileageProfessionalUpdate(
-                        total_mileage_pro = newMileagePro,
-                        updated_at = now
-                    )
-                ) {
-                    filter {
-                        eq("id", vehicleId)
-                    }
-                }
-
-            MotiumApplication.logger.i("Professional mileage updated successfully for vehicle: $vehicleId, new pro total: $newMileagePro km", "SupabaseVehicleRepository")
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error updating professional mileage: ${e.message}", "SupabaseVehicleRepository", e)
-            throw e
-        }
-    }
 
     override suspend fun deleteVehicle(vehicle: Vehicle) = withContext(Dispatchers.IO) {
         try {
@@ -357,7 +299,10 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         }
     }
 
-    private fun SupabaseVehicle.toDomainVehicle(): Vehicle {
+    private suspend fun SupabaseVehicle.toDomainVehicle(): Vehicle {
+        val annualMileagePro = getAnnualMileageForVehicle(id, "PROFESSIONAL")
+        val annualMileagePerso = getAnnualMileageForVehicle(id, "PERSONAL")
+
         return Vehicle(
             id = id,
             userId = user_id,
@@ -368,8 +313,8 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
             fuelType = fuel_type?.let { FuelType.valueOf(it) },
             mileageRate = mileage_rate,
             isDefault = is_default,
-            totalMileagePerso = total_mileage_perso,
-            totalMileagePro = total_mileage_pro,
+            totalMileagePerso = annualMileagePerso,
+            totalMileagePro = annualMileagePro,
             createdAt = kotlinx.datetime.Instant.parse(created_at),
             updatedAt = kotlinx.datetime.Instant.parse(updated_at)
         )

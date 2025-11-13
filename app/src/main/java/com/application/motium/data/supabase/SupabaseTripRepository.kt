@@ -75,22 +75,13 @@ class SupabaseTripRepository(private val context: Context) {
         try {
             MotiumApplication.logger.i("Saving trip to Supabase: ${trip.id}", "SupabaseTripRepository")
 
-            // Clean vehicleId: convert empty string to null, then try to get default if null
-            val cleanVehicleId = trip.vehicleId?.takeIf { it.isNotBlank() }
-
-            val vehicleId = if (cleanVehicleId != null) {
-                cleanVehicleId
-            } else {
-                try {
-                    val vehicleRepository = SupabaseVehicleRepository.getInstance(context)
-                    vehicleRepository.getDefaultVehicle(userId)?.id
-                } catch (e: Exception) {
-                    MotiumApplication.logger.w("Could not get default vehicle: ${e.message}", "SupabaseTripRepository")
-                    null
-                }
+            val vehicleId = trip.vehicleId?.takeIf { it.isNotBlank() } ?: try {
+                SupabaseVehicleRepository.getInstance(context).getDefaultVehicle(userId)?.id
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Could not get default vehicle: ${e.message}", "SupabaseTripRepository")
+                null
             }
 
-            // Convertir les timestamps en format PostgreSQL TIMESTAMPTZ
             val startTimeFormatted = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date(trip.startTime.toEpochMilliseconds()))
@@ -105,80 +96,27 @@ class SupabaseTripRepository(private val context: Context) {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date())
 
-            // Format the createdAt timestamp from the trip
             val createdAtFormatted = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date(trip.createdAt.toEpochMilliseconds()))
 
-            // Sérialiser les tracePoints en JSON pour le champ trace_gps
-            val traceGpsJson = if (trip.tracePoints.isNullOrEmpty()) {
-                MotiumApplication.logger.i("Trip ${trip.id} has no GPS points - manual trip", "SupabaseTripRepository")
-                "{}" // Trajet manuel sans GPS
-            } else {
-                val gpsPoints = trip.tracePoints.map { point ->
-                    GpsPoint(
-                        latitude = point.latitude,
-                        longitude = point.longitude,
-                        timestamp = point.timestamp.toEpochMilliseconds(),
-                        accuracy = point.accuracy
-                    )
-                }
-                val jsonString = json.encodeToString(gpsPoints)
-                MotiumApplication.logger.i("Trip ${trip.id} serialized with ${gpsPoints.size} GPS points (${jsonString.length} chars)", "SupabaseTripRepository")
-                jsonString
-            }
+            val traceGpsJson = trip.tracePoints?.let {
+                if (it.isEmpty()) "{}" else json.encodeToString(it.map { point ->
+                    GpsPoint(point.latitude, point.longitude, point.timestamp.toEpochMilliseconds(), point.accuracy)
+                })
+            } ?: "{}"
 
-            // SYNC OPTIMIZATION: Check if trip already exists and compare updated_at
+
             val existingTrip = try {
-                postgres.from("trips")
-                    .select {
-                        filter {
-                            eq("id", trip.id)
-                        }
-                    }
-                    .decodeList<SupabaseTrip>()
-                    .firstOrNull()
+                postgres.from("trips").select { filter { eq("id", trip.id) } }.decodeList<SupabaseTrip>().firstOrNull()
             } catch (e: Exception) {
-                null // If error, we'll proceed with insert/update
+                null
             }
-
-            // SYNC OPTIMIZATION: Skip sync if trip already exists and is up-to-date
-            if (existingTrip != null) {
-                try {
-                    // Parse updated_at from Supabase and compare with local
-                    val supabaseUpdatedAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
-                        timeZone = java.util.TimeZone.getTimeZone("UTC")
-                    }.parse(existingTrip.updated_at.substringBefore(".").substringBefore("+"))?.time ?: 0
-
-                    val localUpdatedAt = trip.updatedAt.toEpochMilliseconds()
-
-                    if (supabaseUpdatedAt >= localUpdatedAt) {
-                        MotiumApplication.logger.i(
-                            "Trip ${trip.id} already up-to-date on Supabase (remote: $supabaseUpdatedAt >= local: $localUpdatedAt) - SKIPPING",
-                            "SupabaseTripRepository"
-                        )
-                        return@withContext Result.success(Unit)
-                    } else {
-                        MotiumApplication.logger.i(
-                            "Trip ${trip.id} needs update (remote: $supabaseUpdatedAt < local: $localUpdatedAt)",
-                            "SupabaseTripRepository"
-                        )
-                    }
-                } catch (e: Exception) {
-                    // Si erreur de parsing, continuer avec l'update
-                    MotiumApplication.logger.w(
-                        "Could not compare updated_at for trip ${trip.id}: ${e.message} - proceeding with update",
-                        "SupabaseTripRepository"
-                    )
-                }
-            }
-
-            val existingCreatedAt = existingTrip?.created_at // Preserve original creation time
 
             val supabaseTrip = SupabaseTrip(
                 id = trip.id,
                 user_id = userId,
-                vehicle_id = vehicleId, // Use default vehicle or null if no vehicles exist
+                vehicle_id = vehicleId,
                 start_time = startTimeFormatted,
                 end_time = endTimeFormatted,
                 start_latitude = trip.startLatitude,
@@ -189,44 +127,18 @@ class SupabaseTripRepository(private val context: Context) {
                 end_address = trip.endAddress,
                 distance_km = trip.distanceKm,
                 duration_ms = trip.durationMs,
-                type = "PERSONAL",
+                type = "PERSONAL", // This needs to be dynamic based on trip data
                 is_validated = trip.isValidated,
                 cost = 0.0,
                 trace_gps = traceGpsJson,
-                created_at = existingCreatedAt ?: createdAtFormatted,  // Preserve original or use trip's createdAt
+                created_at = existingTrip?.created_at ?: createdAtFormatted,
                 updated_at = now
             )
 
-            MotiumApplication.logger.i("Address values: start_address='${supabaseTrip.start_address}', end_address='${supabaseTrip.end_address}'", "SupabaseTripRepository")
-
-            // Use upsert to insert or update (Supabase will handle it based on primary key)
-            // This is more efficient than checking existence first
-            if (existingCreatedAt != null) {
-                MotiumApplication.logger.i("Trip already exists, updating: ${trip.id} (preserved created_at: $existingCreatedAt)", "SupabaseTripRepository")
-                postgres.from("trips").update(supabaseTrip) {
-                    filter {
-                        eq("id", trip.id)
-                    }
-                }
+            if (existingTrip != null) {
+                postgres.from("trips").update(supabaseTrip) { filter { eq("id", trip.id) } }
             } else {
-                MotiumApplication.logger.i("Trip doesn't exist, inserting: ${trip.id} (created_at: $createdAtFormatted)", "SupabaseTripRepository")
                 postgres.from("trips").insert(supabaseTrip)
-            }
-
-            // Update vehicle mileage if we have a vehicle
-            vehicleId?.let { vId ->
-                try {
-                    val vehicleRepository = SupabaseVehicleRepository.getInstance(context)
-                    val distanceKm = trip.distanceKm
-
-                    // For now, always increment personal mileage (PERSONAL trip type)
-                    // In the future, this could be based on trip type
-                    vehicleRepository.updateMileagePersonal(vId, distanceKm)
-                    MotiumApplication.logger.i("Updated vehicle $vId personal mileage by $distanceKm km", "SupabaseTripRepository")
-                } catch (e: Exception) {
-                    MotiumApplication.logger.w("Failed to update vehicle mileage: ${e.message}", "SupabaseTripRepository")
-                    // Don't fail the trip save if mileage update fails
-                }
             }
 
             MotiumApplication.logger.i("Trip saved successfully to Supabase: ${trip.id}", "SupabaseTripRepository")
@@ -260,20 +172,11 @@ class SupabaseTripRepository(private val context: Context) {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date())
 
-            // Sérialiser les tracePoints en JSON pour le champ trace_gps
-            val traceGpsJson = if (trip.tracePoints.isNullOrEmpty()) {
-                "{}" // Trajet manuel sans GPS
-            } else {
-                val gpsPoints = trip.tracePoints.map { point ->
-                    GpsPoint(
-                        latitude = point.latitude,
-                        longitude = point.longitude,
-                        timestamp = point.timestamp.toEpochMilliseconds(),
-                        accuracy = point.accuracy
-                    )
-                }
-                json.encodeToString(gpsPoints)
-            }
+            val traceGpsJson = trip.tracePoints?.let {
+                if (it.isEmpty()) "{}" else json.encodeToString(it.map { point ->
+                    GpsPoint(point.latitude, point.longitude, point.timestamp.toEpochMilliseconds(), point.accuracy)
+                })
+            } ?: "{}"
 
             val updateData = TripUpdate(
                 start_time = startTimeFormatted,
@@ -379,53 +282,31 @@ class SupabaseTripRepository(private val context: Context) {
     }
 
     private fun SupabaseTrip.toDomainTrip(): Trip {
-        // Helper function to parse timestamps from Supabase
         fun parseInstant(timestamp: String): Instant {
             return try {
-                // Supabase peut retourner des timestamps sans timezone, on ajoute 'Z' si nécessaire
-                // Format attendu: "2025-10-06T06:08:22.675" ou "2025-10-06T06:08:22.675Z" ou "2025-10-06 06:08:22"
-                val normalized = timestamp.trim()
-                    .replace(" ", "T") // Remplacer espace par T
-                    .substringBefore("+") // Enlever +XX:XX si présent
-
-                val withTimezone = when {
-                    normalized.endsWith("Z") -> normalized
-                    normalized.contains("T") -> "${normalized}Z" // Format ISO avec T
-                    else -> "${normalized}Z" // Fallback
-                }
-
+                val normalized = timestamp.trim().replace(" ", "T").substringBefore("+")
+                val withTimezone = if (normalized.endsWith("Z")) normalized else "${normalized}Z"
                 Instant.parse(withTimezone)
             } catch (e: Exception) {
-                MotiumApplication.logger.e(
-                    "Failed to parse timestamp '$timestamp': ${e.message}. Using current time as fallback.",
-                    "SupabaseTripRepository",
-                    e
-                )
-                // Fallback: utiliser l'heure actuelle
+                MotiumApplication.logger.e("Failed to parse timestamp '$timestamp': ${e.message}", "SupabaseTripRepository", e)
                 Instant.fromEpochMilliseconds(System.currentTimeMillis())
             }
         }
 
-        // Désérialiser les points GPS depuis trace_gps (JSON)
         val tracePoints = try {
-            if (trace_gps.isNullOrBlank() || trace_gps == "{}") {
-                emptyList()
-            } else {
-                val gpsPoints = json.decodeFromString<List<GpsPoint>>(trace_gps)
-                gpsPoints.map { point ->
+            if (trace_gps.isNullOrBlank() || trace_gps == "{}") emptyList()
+            else {
+                json.decodeFromString<List<GpsPoint>>(trace_gps).map { point ->
                     com.application.motium.domain.model.LocationPoint(
-                        latitude = point.latitude,
-                        longitude = point.longitude,
-                        timestamp = Instant.fromEpochMilliseconds(point.timestamp),
-                        accuracy = point.accuracy
+                        point.latitude,
+                        point.longitude,
+                        Instant.fromEpochMilliseconds(point.timestamp),
+                        point.accuracy
                     )
                 }
             }
         } catch (e: Exception) {
-            MotiumApplication.logger.w(
-                "Failed to deserialize trace_gps for trip $id: ${e.message}",
-                "SupabaseTripRepository"
-            )
+            MotiumApplication.logger.w("Failed to deserialize trace_gps for trip $id: ${e.message}", "SupabaseTripRepository")
             emptyList()
         }
 
@@ -446,7 +327,7 @@ class SupabaseTripRepository(private val context: Context) {
             type = com.application.motium.domain.model.TripType.valueOf(type),
             isValidated = is_validated,
             cost = cost,
-            tracePoints = tracePoints, // GPS trace désérialisé depuis trace_gps
+            tracePoints = tracePoints,
             createdAt = parseInstant(created_at),
             updatedAt = parseInstant(updated_at)
         )

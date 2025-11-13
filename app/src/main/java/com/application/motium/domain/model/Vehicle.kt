@@ -1,6 +1,7 @@
 package com.application.motium.domain.model
 
 import kotlinx.datetime.Instant
+import kotlinx.serialization.Transient
 
 data class Vehicle(
     val id: String,
@@ -12,8 +13,8 @@ data class Vehicle(
     val fuelType: FuelType?,
     val mileageRate: Double,
     val isDefault: Boolean = false,
-    val totalMileagePerso: Double = 0.0,
-    val totalMileagePro: Double = 0.0,
+    @Transient val totalMileagePerso: Double = 0.0,
+    @Transient val totalMileagePro: Double = 0.0,
     val createdAt: Instant,
     val updatedAt: Instant
 )

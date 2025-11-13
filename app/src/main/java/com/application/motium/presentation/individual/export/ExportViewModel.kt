@@ -8,6 +8,7 @@ import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.SupabaseVehicleRepository
 import com.application.motium.domain.model.Vehicle
+import com.application.motium.domain.repository.AuthRepository
 import com.application.motium.utils.ExportManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,7 +43,7 @@ class ExportViewModel(private val context: Context) : ViewModel() {
 
     private val tripRepository = TripRepository.getInstance(context)
     private val vehicleRepository = SupabaseVehicleRepository.getInstance(context)
-    private val authRepository = SupabaseAuthRepository.getInstance(context)
+    private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context)
     private val exportManager = ExportManager(context)
 
     private val _filters = MutableStateFlow(ExportFilters())
@@ -58,20 +59,29 @@ class ExportViewModel(private val context: Context) : ViewModel() {
     val vehicles: StateFlow<List<Vehicle>> = _vehicles.asStateFlow()
 
     init {
-        loadVehicles()
-        loadTrips()
+        viewModelScope.launch {
+            authRepository.authState.collect { authState ->
+                if (authState.isAuthenticated && authState.user != null) {
+                    // User is authenticated, now load data
+                    loadVehicles(authState.user.id)
+                    loadTrips()
+                } else {
+                    // User logged out, clear data
+                    _vehicles.value = emptyList()
+                    _filteredTrips.value = emptyList()
+                    _stats.value = ExportStats()
+                }
+            }
+        }
     }
 
-    private fun loadVehicles() {
+    private fun loadVehicles(userId: String) {
         viewModelScope.launch {
             try {
-                val currentUser = authRepository.getCurrentAuthUser()
-                if (currentUser != null) {
-                    val vehicleList = vehicleRepository.getAllVehiclesForUser(currentUser.id)
-                    _vehicles.value = vehicleList
-                }
+                val vehicleList = vehicleRepository.getAllVehiclesForUser(userId)
+                _vehicles.value = vehicleList
             } catch (e: Exception) {
-                // Handle error silently
+                // Handle error silently, e.g., log it
             }
         }
     }

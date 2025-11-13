@@ -26,6 +26,7 @@ import com.application.motium.domain.model.VehicleType
 import com.application.motium.presentation.components.MotiumBottomNavigation
 import com.application.motium.presentation.theme.MotiumGreen
 
+// A separate composable for the details, to keep VehiclesScreen cleaner
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VehicleDetailsScreen(
@@ -96,11 +97,8 @@ fun VehicleDetailsScreen(
                     .padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "Vehicle not found",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // To prevent flicker while vehicle is loading after a change
+                CircularProgressIndicator(color = MotiumGreen)
             }
         } else {
             Column(
@@ -188,44 +186,9 @@ fun VehicleDetailsScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
                         VehicleInfoRow("Type", vehicle.type.displayName)
-                        VehicleInfoRow("Make", vehicle.licensePlate?.takeIf { it.isNotBlank() } ?: "Honda")
-                        VehicleInfoRow("Model", "Civic")
-                        VehicleInfoRow("Year", "2021")
-                        VehicleInfoRow("Power (hp)", vehicle.power?.toString() ?: "N/A")
-                    }
-                }
-
-                // Mileage Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Text(
-                            "Mileage",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                        VehicleInfoRow(
-                            "Total Professional",
-                            "${vehicle.totalMileagePro.toInt()} km"
-                        )
-                        VehicleInfoRow(
-                            "Total Personal",
-                            "${vehicle.totalMileagePerso.toInt()} km"
-                        )
+                        VehicleInfoRow("License Plate", vehicle.licensePlate ?: "N/A")
+                        VehicleInfoRow("Fiscal Power", vehicle.power?.displayName ?: "N/A")
+                        VehicleInfoRow("Fuel Type", vehicle.fuelType?.displayName ?: "N/A")
                     }
                 }
 
@@ -245,30 +208,58 @@ fun VehicleDetailsScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(
-                            "Mileage Rates",
+                            "Annual Mileage & Rates",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
-                        val currentRate = calculateCurrentMileageRate(vehicle)
+                        // Professional Section
+                        val proRate = calculateCurrentMileageRate(vehicle, isProfessional = true)
                         VehicleInfoRow(
-                            "Current Professional Rate",
-                            "$currentRate €/km"
+                            "Professional Mileage",
+                            "${"%.1f".format(vehicle.totalMileagePro / 1000)} km"
+                        )
+                        VehicleInfoRow(
+                            "Current Pro Rate",
+                            "$proRate €/km"
                         )
                         Text(
-                            text = "Rate calculated based on ${vehicle.totalMileagePro.toInt()} km professional mileage",
+                            text = "Based on the official scale for the current annual mileage.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                        // Personal Section
+                        val persoRate = calculateCurrentMileageRate(vehicle, isProfessional = false)
+                        VehicleInfoRow(
+                            "Personal Mileage",
+                            "${"%.1f".format(vehicle.totalMileagePerso / 1000)} km"
+                        )
+                        VehicleInfoRow(
+                            "Current Personal Rate",
+                            "$persoRate €/km"
+                        )
+                        Text(
+                            text = "Personal mileage rate is indicative.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             modifier = Modifier.padding(top = 4.dp)
                         )
+
                     }
                 }
 
                 // Delete Button
                 Button(
-                    onClick = { /* TODO: Delete vehicle */ },
+                    onClick = {
+                        viewModel.deleteVehicle(vehicle)
+                        onNavigateBack()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp),
@@ -309,5 +300,58 @@ fun VehicleInfoRow(label: String, value: String) {
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
+    }
+}
+
+// Recalculate the rate based on the correct mileage (pro or perso)
+private fun calculateCurrentMileageRate(vehicle: Vehicle, isProfessional: Boolean): String {
+    // For personal trips, you might have a fixed rate or different logic.
+    // Here, we'll assume it's the same scale for demonstration, but it could be different.
+    val mileage = if (isProfessional) vehicle.totalMileagePro else vehicle.totalMileagePerso
+
+    // For bikes, the rate is fixed
+    if (vehicle.type == VehicleType.BIKE) {
+        return "0.25"
+    }
+
+    // For motorcycles and scooters
+    if (vehicle.type == VehicleType.MOTORCYCLE || vehicle.type == VehicleType.SCOOTER) {
+        // A more detailed implementation could check engine size
+        return "0.395"
+    }
+
+    // For cars, use the official tiered rates
+    val power = vehicle.power ?: return "N/A" // Default if power is not set
+
+    val mileageKm = mileage / 1000 // Convert meters to km
+
+    return when {
+        mileageKm <= 5000 -> {
+            when (power) {
+                VehiclePower.CV_3 -> "0.537"
+                VehiclePower.CV_4 -> "0.603"
+                VehiclePower.CV_5 -> "0.631"
+                VehiclePower.CV_6 -> "0.661"
+                VehiclePower.CV_7_PLUS -> "0.685"
+            }
+        }
+        mileageKm <= 20000 -> {
+            when (power) {
+                VehiclePower.CV_3 -> "0.291"
+                VehiclePower.CV_4 -> "0.337"
+                VehiclePower.CV_5 -> "0.356"
+                VehiclePower.CV_6 -> "0.375"
+                VehiclePower.CV_7_PLUS -> "0.394"
+            }
+        }
+        else -> { // Over 20000 km
+            when (power) {
+                VehiclePower.CV_3 -> "0.213"
+                VehiclePower.CV_4 -> "0.245"
+                VehiclePower.CV_5 -> "0.260"
+                VehiclePower.CV_6 -> "0.273"
+                VehiclePower.CV_7_PLUS -> "0.286"
+            }
+        }
     }
 }

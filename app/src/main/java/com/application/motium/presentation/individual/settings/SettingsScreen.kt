@@ -21,7 +21,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
@@ -54,10 +53,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     val themeManager = remember { ThemeManager.getInstance(context) }
     val isDarkMode by themeManager.isDarkMode.collectAsState()
-    val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
 
-    // User and premium state
-    var currentUser by remember { mutableStateOf<User?>(null) }
+    // User and premium state from AuthViewModel
+    val authState by authViewModel.authState.collectAsState()
+    val currentUser = authState.user
     val isPremium = currentUser?.isPremium() ?: false
 
     // Premium dialog state
@@ -71,12 +70,6 @@ fun SettingsScreen(
     var shareProfessionalTrips by remember { mutableStateOf(true) }
     var sharePersonalTrips by remember { mutableStateOf(false) }
     var sharePersonalInfo by remember { mutableStateOf(true) }
-
-    // Load user
-    LaunchedEffect(Unit) {
-        currentUser = authRepository.getCurrentUser()
-        MotiumApplication.logger.i("User loaded in settings: ${currentUser?.name} (${currentUser?.email})", "SettingsScreen")
-    }
 
     val backgroundColor = if (isDarkMode) BackgroundDark else BackgroundLight
     val surfaceColor = if (isDarkMode) SurfaceDark else SurfaceLight
@@ -1673,4 +1666,3 @@ fun LogoutSection(
         )
     }
 }
-

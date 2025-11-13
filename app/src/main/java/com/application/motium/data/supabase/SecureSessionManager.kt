@@ -7,14 +7,8 @@ import io.github.jan.supabase.auth.user.UserSession
 import io.github.jan.supabase.auth.SessionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
-/**
- * SessionManager personnalise pour Supabase qui utilise SecureSessionStorage (chiffre)
- * au lieu de SharedPreferences (non chiffre).
- *
- * Cela permet au SDK Supabase de persister automatiquement les sessions
- * de maniere securisee sans conflit avec notre systeme de gestion de session.
- */
 class SecureSessionManager(context: Context) : SessionManager {
 
     private val secureStorage = SecureSessionStorage(context.applicationContext)
@@ -36,28 +30,23 @@ class SecureSessionManager(context: Context) : SessionManager {
                 val savedSession = secureStorage.restoreSession()
 
                 if (savedSession != null) {
-                    // Calculer le temps d'expiration restant
                     val expiresInMs = savedSession.expiresAt - System.currentTimeMillis()
                     val expiresInSeconds = (expiresInMs / 1000).toLong()
 
-                    // Si le token est expire, ne pas le retourner
+                    // Log the state but do not return null if expired.
+                    // The Supabase client needs the refresh token to attempt a refresh.
                     if (expiresInSeconds <= 0) {
-                        MotiumApplication.logger.w("SecureSessionManager: Token expired, returning null", "SecureSessionManager")
-                        return@withContext null
+                        MotiumApplication.logger.w("SecureSessionManager: Token is expired. Passing to Supabase client for refresh.", "SecureSessionManager")
+                    } else {
+                        MotiumApplication.logger.d("SecureSessionManager: Loaded session (expires in ${expiresInSeconds}s)", "SecureSessionManager")
                     }
 
-                    MotiumApplication.logger.d(
-                        "SecureSessionManager: Loaded session (expires in ${expiresInSeconds}s)",
-                        "SecureSessionManager"
-                    )
-
-                    // Convertir notre SavedSession en UserSession du SDK
                     UserSession(
                         accessToken = savedSession.accessToken,
                         refreshToken = savedSession.refreshToken,
                         expiresIn = expiresInSeconds,
                         tokenType = savedSession.tokenType,
-                        user = null
+                        user = null // User object is handled by Supabase client
                     )
                 } else {
                     MotiumApplication.logger.d("SecureSessionManager: No session found", "SecureSessionManager")
@@ -73,7 +62,6 @@ class SecureSessionManager(context: Context) : SessionManager {
     override suspend fun saveSession(session: UserSession) {
         withContext(Dispatchers.IO) {
             try {
-                // Calculer le timestamp d'expiration
                 val expiresAtMs = System.currentTimeMillis() + (session.expiresIn * 1000)
 
                 MotiumApplication.logger.d(
@@ -81,36 +69,22 @@ class SecureSessionManager(context: Context) : SessionManager {
                     "SecureSessionManager"
                 )
 
-                // IMPORTANT: Obtenir userId et userEmail de differentes sources
-                // Priorite: session.user > storage existant > extraction du JWT
-                var userId = session.user?.id
-                var userEmail = session.user?.email
+                var userId: String? = session.user?.id
+                var userEmail: String? = session.user?.email
 
-                // Si user est null, essayer de recuperer depuis le storage
-                if (userId.isNullOrBlank()) {
-                    userId = secureStorage.getUserId()
-                }
-                if (userEmail.isNullOrBlank()) {
-                    userEmail = secureStorage.getUserEmail()
-                }
-
-                // Si toujours vide, extraire du JWT access token
+                // If user info is not in the session, extract it from the JWT
                 if (userId.isNullOrBlank() || userEmail.isNullOrBlank()) {
                     try {
-                        // Decoder le JWT pour extraire sub (userId) et email
                         val parts = session.accessToken.split(".")
                         if (parts.size == 3) {
                             val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP))
-                            // Parse JSON basique pour extraire sub et email
-                            val subMatch = Regex("\"sub\":\"([^\"]+)\"").find(payload)
-                            val emailMatch = Regex("\"email\":\"([^\"]+)\"").find(payload)
-
-                            if (userId.isNullOrBlank() && subMatch != null) {
-                                userId = subMatch.groupValues[1]
+                            val jsonPayload = JSONObject(payload)
+                            if (userId.isNullOrBlank()) {
+                                userId = jsonPayload.optString("sub", null)
                                 MotiumApplication.logger.d("Extracted userId from JWT: $userId", "SecureSessionManager")
                             }
-                            if (userEmail.isNullOrBlank() && emailMatch != null) {
-                                userEmail = emailMatch.groupValues[1]
+                            if (userEmail.isNullOrBlank()) {
+                                userEmail = jsonPayload.optString("email", null)
                                 MotiumApplication.logger.d("Extracted email from JWT: $userEmail", "SecureSessionManager")
                             }
                         }
@@ -119,21 +93,23 @@ class SecureSessionManager(context: Context) : SessionManager {
                     }
                 }
 
-                // Valeurs finales (ne jamais stocker vide)
                 val finalUserId = userId ?: ""
                 val finalUserEmail = userEmail ?: ""
 
-                // Creer un SessionData
+                if (finalUserId.isBlank()) {
+                    MotiumApplication.logger.e("CRITICAL: Could not determine userId before saving session.", "SecureSessionManager")
+                    return@withContext
+                }
+
                 val sessionData = SecureSessionStorage.SessionData(
                     accessToken = session.accessToken,
-                    refreshToken = session.refreshToken,
+                    refreshToken = session.refreshToken ?: "", // Ensure non-null
                     expiresAt = expiresAtMs,
                     tokenType = session.tokenType,
                     userEmail = finalUserEmail,
                     userId = finalUserId
                 )
 
-                // Sauvegarder avec SecureSessionStorage
                 secureStorage.saveSession(sessionData)
 
                 MotiumApplication.logger.i(
