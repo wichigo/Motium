@@ -21,16 +21,17 @@ import com.application.motium.presentation.theme.MotiumPrimary
 
 data class BottomNavItem(
     val route: String,
-    val icon: ImageVector,
+    val iconFilled: ImageVector,
+    val iconOutlined: ImageVector,
     val label: String
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem("home", Icons.Outlined.Home, "Home"),
-    BottomNavItem("calendar", Icons.Outlined.CalendarToday, "Calendar"),
-    BottomNavItem("vehicles", Icons.Outlined.DirectionsCar, "Vehicles"),
-    BottomNavItem("export", Icons.Outlined.IosShare, "Export"),
-    BottomNavItem("settings", Icons.Outlined.Settings, "Settings")
+    BottomNavItem("home", Icons.Filled.Home, Icons.Outlined.Home, "Home"),
+    BottomNavItem("calendar", Icons.Filled.CalendarToday, Icons.Outlined.CalendarToday, "Calendar"),
+    BottomNavItem("vehicles", Icons.Filled.DirectionsCar, Icons.Outlined.DirectionsCar, "Vehicles"),
+    BottomNavItem("export", Icons.Filled.IosShare, Icons.Outlined.IosShare, "Export"),
+    BottomNavItem("settings", Icons.Filled.Settings, Icons.Outlined.Settings, "Settings")
 )
 
 @Composable
@@ -50,20 +51,20 @@ fun MotiumBottomNavigation(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(72.dp),
-            shape = RoundedCornerShape(24.dp),
+                .height(68.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
                 containerColor = Color.White
             ),
             elevation = CardDefaults.cardElevation(
-                defaultElevation = 8.dp
+                defaultElevation = 12.dp
             )
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.White)
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -74,13 +75,17 @@ fun MotiumBottomNavigation(
                     val iconColor = when {
                         !isEnabled -> Color(0xFFD1D5DB) // Gris clair si désactivé
                         isSelected -> MotiumPrimary
-                        else -> Color(0xFF9CA3AF)
+                        else -> Color(0xFF64748b).copy(alpha = 0.5f)
                     }
 
                     Column(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
+                            .background(
+                                color = if (isSelected) MotiumPrimary.copy(alpha = 0.1f) else Color.Transparent,
+                                shape = RoundedCornerShape(8.dp)
+                            )
                             .clickable {
                                 if (isExport && !isPremium) {
                                     onPremiumFeatureClick()
@@ -93,7 +98,7 @@ fun MotiumBottomNavigation(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = item.icon,
+                            imageVector = if (isSelected) item.iconFilled else item.iconOutlined,
                             contentDescription = item.label,
                             modifier = Modifier.size(24.dp),
                             tint = iconColor
@@ -101,8 +106,8 @@ fun MotiumBottomNavigation(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = item.label,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                             color = iconColor
                         )
                     }

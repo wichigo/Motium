@@ -173,12 +173,12 @@ fun NewHomeScreen(
                         onClick = onNavigateToAddTrip,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(56.dp),
+                            .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MotiumPrimary,
                             contentColor = Color.White
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(24.dp) // Fully rounded
                     ) {
                         Text(
                             "Add Trip",
@@ -194,16 +194,16 @@ fun NewHomeScreen(
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(8.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = surfaceColor
                         ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(10.dp),
+                                .padding(12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -241,11 +241,11 @@ fun NewHomeScreen(
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(8.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = surfaceColor
                         ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                     ) {
                         Column(
                             modifier = Modifier
@@ -258,6 +258,7 @@ fun NewHomeScreen(
                                     fontWeight = FontWeight.SemiBold
                                 ),
                                 color = textColor,
+                                fontSize = 16.sp,
                                 modifier = Modifier.padding(bottom = 12.dp)
                             )
                             Row(
@@ -267,19 +268,16 @@ fun NewHomeScreen(
                                 NewHomeDailyStat(
                                     value = String.format("%.1f", todayDistance / 1000),
                                     label = "Kilometers",
-                                    textColor = textColor,
                                     textSecondaryColor = textSecondaryColor
                                 )
                                 NewHomeDailyStat(
-                                    value = String.format("€%.2f", todayIndemnities / 1000),
+                                    value = String.format("$%.2f", todayIndemnities / 1000),
                                     label = "Indemnities",
-                                    textColor = textColor,
                                     textSecondaryColor = textSecondaryColor
                                 )
                                 NewHomeDailyStat(
                                     value = todayTrips.size.toString(),
                                     label = "Trips",
-                                    textColor = textColor,
                                     textSecondaryColor = textSecondaryColor
                                 )
                             }
@@ -373,7 +371,6 @@ fun NewHomeScreen(
 private fun NewHomeDailyStat(
     value: String,
     label: String,
-    textColor: Color,
     textSecondaryColor: Color
 ) {
     Column(
@@ -407,8 +404,6 @@ private fun NewHomeTripCard(
     textColor: Color,
     textSecondaryColor: Color
 ) {
-    val duration = (trip.endTime ?: System.currentTimeMillis()) - trip.startTime
-    val minutes = duration / 1000 / 60
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
             if (dismissValue == SwipeToDismissBoxValue.EndToStart || dismissValue == SwipeToDismissBoxValue.StartToEnd) {
@@ -419,6 +414,10 @@ private fun NewHomeTripCard(
             }
         }
     )
+
+    // Calculer les coordonnées de départ et d'arrivée depuis les locations
+    val startLocation = trip.locations.firstOrNull()
+    val endLocation = trip.locations.lastOrNull()
 
     SwipeToDismissBox(
         state = dismissState,
@@ -453,62 +452,164 @@ private fun NewHomeTripCard(
             colors = CardDefaults.cardColors(
                 containerColor = surfaceColor
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Icône véhicule
             Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(Color.White, RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = MotiumPrimary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Mini-map à gauche (96x96dp)
+                    Box(
+                        modifier = Modifier
+                            .size(96.dp)
+                            .background(Color(0xFFe5e7eb), RoundedCornerShape(8.dp))
+                    ) {
+                        if (startLocation != null && endLocation != null) {
+                            MiniMap(
+                                startLatitude = startLocation.latitude,
+                                startLongitude = startLocation.longitude,
+                                endLatitude = endLocation.latitude,
+                                endLongitude = endLocation.longitude,
+                                routeCoordinates = trip.locations.map {
+                                    listOf(it.longitude, it.latitude)
+                                },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xFFe5e7eb), RoundedCornerShape(8.dp))
+                            )
+                        } else {
+                            // Placeholder si pas de coordonnées
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = MotiumPrimary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                    }
 
-            // Détails du trip
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
+                    // Colonne avec origine et destination
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 60.dp), // Espace pour le prix et le toggle
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        // Point de départ
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .size(8.dp)
+                                    .background(MotiumPrimary, shape = RoundedCornerShape(4.dp))
+                            )
+                            Column {
+                                Text(
+                                    trip.startAddress ?: "Unknown",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    color = textColor,
+                                    fontSize = 14.sp,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.startTime)).uppercase(Locale.US),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = textSecondaryColor,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+
+                        // Ligne pointillée
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 3.dp)
+                                .width(1.dp)
+                                .height(12.dp)
+                                .background(textSecondaryColor.copy(alpha = 0.3f))
+                        )
+
+                        // Point d'arrivée
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .size(8.dp)
+                                    .background(MotiumPrimary, shape = RoundedCornerShape(4.dp))
+                            )
+                            Column {
+                                Text(
+                                    trip.endAddress ?: "Unknown",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    color = textColor,
+                                    fontSize = 14.sp,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    SimpleDateFormat("hh:mm a", Locale.US).format(
+                                        Date(trip.endTime ?: System.currentTimeMillis())
+                                    ).uppercase(Locale.US),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = textSecondaryColor,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Prix en haut à droite
                 Text(
-                    "${trip.startAddress ?: "Unknown"} to ${trip.endAddress ?: "Unknown"}",
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontWeight = FontWeight.SemiBold
+                    String.format("$%.2f", trip.totalDistance * 0.20 / 1000),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = FontWeight.Bold
                     ),
-                    color = textColor,
-                    maxLines = 1
+                    color = MotiumPrimary,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 12.dp, end = 12.dp)
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "${trip.getFormattedDistance()} · $minutes min · €${String.format("%.2f", trip.totalDistance * 0.20 / 1000)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = textSecondaryColor
-                )
-            }
 
-            // Toggle validation
-            Switch(
-                checked = trip.isValidated,
-                onCheckedChange = { onToggleValidation() },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = MotiumPrimary,
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = Color(0xFFe2e8f0)
-                )
-            )
-        }
+                // Toggle en bas à droite
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 12.dp, end = 12.dp)
+                ) {
+                    Switch(
+                        checked = trip.isValidated,
+                        onCheckedChange = { onToggleValidation() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = MotiumPrimary,
+                            uncheckedThumbColor = Color.White,
+                            uncheckedTrackColor = Color(0xFFe2e8f0)
+                        ),
+                        modifier = Modifier.height(24.dp)
+                    )
+                }
+            }
         }
     }
 }
