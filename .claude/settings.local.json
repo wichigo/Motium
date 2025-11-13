@@ -51,7 +51,8 @@
       "Bash(timeout 5 adb logcat:*)",
       "Bash(nul)",
       "Bash(git add:*)",
-      "Bash(cmd /c \"dir /b | findstr nul\")"
+      "Bash(cmd /c \"dir /b | findstr nul\")",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
