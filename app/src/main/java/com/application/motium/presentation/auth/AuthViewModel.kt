@@ -22,7 +22,7 @@ class AuthViewModel(
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = AuthState()
+            initialValue = AuthState(isLoading = true)  // ⚠️ CRITICAL: Must start as loading to wait for repository initialization
         )
 
     private val _loginState = MutableStateFlow(LoginUiState())

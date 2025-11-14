@@ -15,7 +15,7 @@ lifecycleViewmodel = "2.7.0"
 navigationCompose = "2.7.6"
 
 # Room
-room = "2.6.1"
+room = "2.8.3"
 
 # Location & Maps
 playServicesLocation = "21.0.1"
@@ -62,8 +62,8 @@ multiplatformSettings = "1.1.1"
 # Google Sign-In
 googleSignIn = "21.0.0"
 
-# KSP for Hilt
-ksp = "2.2.0-1.0.29"
+# KSP for Hilt and Room (compatible with Kotlin 2.2.0)
+ksp = "2.2.0-2.0.2"
 
 # Compose Compiler
 composeCompiler = "1.5.8"

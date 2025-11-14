@@ -94,7 +94,7 @@ fun EnterpriseBottomNavigation(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(72.dp),
+                    .height(82.dp),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = Color.White

@@ -3,7 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.compose.compiler)
-    // alias(libs.plugins.ksp)  // Disable for now
+    alias(libs.plugins.ksp)
     // alias(libs.plugins.hilt) // Disable for now
 }
 
@@ -88,10 +88,10 @@ dependencies {
     implementation(libs.ktor.client.android)
     implementation(libs.multiplatform.settings)
 
-    // Room - Disabled for now (needs KSP)
-    // implementation(libs.androidx.room.runtime)
-    // implementation(libs.androidx.room.ktx)
-    // ksp(libs.androidx.room.compiler)
+    // Room Database
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     // Location Services
     implementation(libs.play.services.location)

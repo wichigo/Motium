@@ -126,14 +126,21 @@ fun EditTripScreen(
                 // Load vehicles for user
                 try {
                     val currentUser = authRepository.getCurrentAuthUser()
+                    MotiumApplication.logger.i("🚗 Loading vehicles for user: ${currentUser?.email}", "EditTripScreen")
                     val userId = currentUser?.id
                     if (!userId.isNullOrEmpty()) {
                         val vehicles = vehicleRepository.getAllVehiclesForUser(userId)
                         availableVehicles = vehicles
-                        MotiumApplication.logger.i("Loaded ${vehicles.size} vehicles for editing", "EditTripScreen")
+                        if (vehicles.isNotEmpty()) {
+                            MotiumApplication.logger.i("✅ Loaded ${vehicles.size} vehicles: ${vehicles.map { it.name }}", "EditTripScreen")
+                        } else {
+                            MotiumApplication.logger.w("⚠️ No vehicles found for user", "EditTripScreen")
+                        }
+                    } else {
+                        MotiumApplication.logger.w("⚠️ No userId available", "EditTripScreen")
                     }
                 } catch (e: Exception) {
-                    MotiumApplication.logger.w("Failed to load vehicles: ${e.message}", "EditTripScreen")
+                    MotiumApplication.logger.e("❌ Failed to load vehicles: ${e.message}", "EditTripScreen", e)
                 }
 
                 // Load expenses

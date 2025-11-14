@@ -56,7 +56,7 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
     // To query trips for mileage calculation
     @Serializable
     data class TripDistance(
-        val total_distance: Double
+        val distance_km: Double
     )
 
 
@@ -75,12 +75,13 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
                 filter {
                     eq("vehicle_id", vehicleId)
                     eq("is_validated", true)
-                    eq("trip_type", tripType)
-                    gte("start_time_utc", startOfYear)
+                    eq("type", tripType)
+                    gte("start_time", startOfYear)
                 }
             }.decodeList<TripDistance>()
 
-            trips.sumOf { it.total_distance }
+            // Convert km to meters (distance_km * 1000) to match Vehicle model expectations
+            trips.sumOf { it.distance_km * 1000 }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error calculating annual mileage for vehicle $vehicleId: ${e.message}", "SupabaseVehicleRepository", e)
             0.0

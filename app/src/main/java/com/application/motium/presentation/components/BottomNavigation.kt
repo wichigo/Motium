@@ -51,7 +51,7 @@ fun MotiumBottomNavigation(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(68.dp),
+                .height(82.dp),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
                 containerColor = Color.White

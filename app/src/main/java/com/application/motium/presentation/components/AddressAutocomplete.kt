@@ -30,7 +30,9 @@ fun AddressAutocomplete(
     value: String,
     onValueChange: (String) -> Unit,
     onAddressSelected: (NominatimResult) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    placeholder: String = ""
 ) {
     var suggestions by remember { mutableStateOf<List<NominatimResult>>(emptyList()) }
     var showSuggestions by remember { mutableStateOf(false) }
@@ -78,22 +80,23 @@ fun AddressAutocomplete(
                 onValueChange(it)
                 showSuggestions = true
             },
-            label = { Text(label) },
+            label = if (label.isNotEmpty()) { { Text(label) } } else null,
+            placeholder = if (placeholder.isNotEmpty()) { { Text(placeholder) } } else null,
             modifier = Modifier.fillMaxWidth(),
+            leadingIcon = leadingIcon,
             trailingIcon = {
                 if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp
                     )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = "Localisation"
-                    )
                 }
             },
-            singleLine = true
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+            )
         )
 
         if (showSuggestions && suggestions.isNotEmpty()) {

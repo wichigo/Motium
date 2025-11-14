@@ -59,7 +59,10 @@
       "Skill(android-kotlin-dev)",
       "Bash(timeout 15 powershell:*)",
       "Bash(timeout 10 powershell:*)",
-      "Bash(timeout 5 powershell:*)"
+      "Bash(timeout 5 powershell:*)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" compileDebugKotlin --refresh-dependencies)",
+      "Bash(del /S \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\data\\local\")",
+      "Bash(git check-ignore:*)"
     ],
     "deny": [],
     "ask": []

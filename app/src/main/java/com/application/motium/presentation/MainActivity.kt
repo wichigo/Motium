@@ -87,11 +87,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
 
-        // Valider et rafraîchir la session quand l'app revient au premier plan
+        // Note: refreshSession() est géré automatiquement par SupabaseAuthRepository en arrière-plan
+        // Ne pas l'appeler ici pour éviter de perturber l'initialisation au démarrage
+
         lifecycleScope.launch {
             try {
-                MotiumApplication.logger.i("🔄 App resumed - refreshing session", "MainActivity")
-                authRepository.refreshSession()
+                MotiumApplication.logger.i("🔄 App resumed", "MainActivity")
 
                 // Démarrer le service de connexion si l'utilisateur est authentifié
                 if (authRepository.isUserAuthenticated()) {
@@ -116,7 +117,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Erreur lors de la validation de session au resume: ${e.message}", "MainActivity", e)
+                MotiumApplication.logger.e("❌ Erreur au resume: ${e.message}", "MainActivity", e)
             }
         }
     }

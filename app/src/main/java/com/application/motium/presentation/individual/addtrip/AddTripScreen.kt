@@ -24,8 +24,12 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
 import com.application.motium.data.geocoding.NominatimService
+import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.domain.model.AuthState
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
+import com.application.motium.domain.model.Vehicle
 import com.application.motium.presentation.components.AddressAutocomplete
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.theme.MotiumGreen
@@ -51,6 +55,11 @@ fun AddTripScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val nominatimService = remember { NominatimService.getInstance() }
+    val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
+    val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
+
+    val authState by authRepository.authState.collectAsState(initial = AuthState())
+    val currentUser = authState.user
 
     // Trip fields
     var startLocation by remember { mutableStateOf("") }
@@ -67,6 +76,10 @@ fun AddTripScreen(
     var notes by remember { mutableStateOf("") }
     var isCalculatingRoute by remember { mutableStateOf(false) }
 
+    // Vehicle fields
+    var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
+    var selectedVehicleId by remember { mutableStateOf<String?>(null) }
+
     // Expense fields
     var expenses by remember { mutableStateOf(listOf<ExpenseItem>()) }
 
@@ -80,9 +93,33 @@ fun AddTripScreen(
         endTime = timeFormat.format(Date(now.time + (23 * 60 * 1000))) // +23 min
     }
 
+    // Load vehicles when currentUser becomes available
+    LaunchedEffect(currentUser?.id) {
+        val userId = currentUser?.id
+        if (!userId.isNullOrEmpty()) {
+            try {
+                MotiumApplication.logger.i("🚗 Loading vehicles for user: ${currentUser.email}", "AddTripScreen")
+                val vehicles = vehicleRepository.getAllVehiclesForUser(userId)
+                availableVehicles = vehicles
+                // Select first vehicle by default
+                if (vehicles.isNotEmpty()) {
+                    selectedVehicleId = vehicles.first().id
+                    MotiumApplication.logger.i("✅ Loaded ${vehicles.size} vehicles, selected: ${vehicles.first().name}", "AddTripScreen")
+                } else {
+                    MotiumApplication.logger.w("⚠️ No vehicles found for user", "AddTripScreen")
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("❌ Failed to load vehicles: ${e.message}", "AddTripScreen", e)
+            }
+        } else {
+            MotiumApplication.logger.w("⚠️ No userId available yet (user=$currentUser)", "AddTripScreen")
+        }
+    }
+
     // Calculate route
     fun calculateRoute() {
         if (startCoordinates != null && endCoordinates != null) {
+            MotiumApplication.logger.i("🗺️ Calculating route from ${startCoordinates} to ${endCoordinates}", "AddTripScreen")
             isCalculatingRoute = true
             coroutineScope.launch {
                 try {
@@ -98,17 +135,23 @@ fun AddTripScreen(
                         distance = String.format("%.1f", route.distance / 1000)
                         duration = String.format("%.0f", route.duration / 60)
 
+                        MotiumApplication.logger.i("✅ Route calculated: ${route.coordinates.size} points, ${route.distance/1000}km, ${route.duration/60}min", "AddTripScreen")
+
                         // Calculate end time
                         val startTimeDate = timeFormat.parse(selectedTime) ?: Date()
                         val endTimeDate = Date(startTimeDate.time + route.duration.toLong() * 1000)
                         endTime = timeFormat.format(endTimeDate)
+                    } else {
+                        MotiumApplication.logger.w("⚠️ Route calculation returned null", "AddTripScreen")
                     }
                 } catch (e: Exception) {
-                    MotiumApplication.logger.e("Route error: ${e.message}", "AddTripScreen", e)
+                    MotiumApplication.logger.e("❌ Route error: ${e.message}", "AddTripScreen", e)
                 } finally {
                     isCalculatingRoute = false
                 }
             }
+        } else {
+            MotiumApplication.logger.w("⚠️ Cannot calculate route: start=$startCoordinates, end=$endCoordinates", "AddTripScreen")
         }
     }
 
@@ -172,20 +215,40 @@ fun AddTripScreen(
                                 val startTimeMs = calendar.timeInMillis
                                 val endTimeMs = startTimeMs + (durationMin * 60 * 1000)
 
-                                val locations = listOf(
-                                    TripLocation(
-                                        latitude = startCoordinates?.first ?: 0.0,
-                                        longitude = startCoordinates?.second ?: 0.0,
-                                        accuracy = 10.0f,
-                                        timestamp = startTimeMs
-                                    ),
-                                    TripLocation(
-                                        latitude = endCoordinates?.first ?: 0.0,
-                                        longitude = endCoordinates?.second ?: 0.0,
-                                        accuracy = 10.0f,
-                                        timestamp = endTimeMs
+                                // Build locations list from route coordinates if available
+                                val routePoints = routeCoordinates
+                                MotiumApplication.logger.i("📍 Creating trip locations: routePoints=${routePoints?.size} points", "AddTripScreen")
+
+                                val locations = if (!routePoints.isNullOrEmpty()) {
+                                    MotiumApplication.logger.i("✅ Using route coordinates (${routePoints.size} points)", "AddTripScreen")
+                                    // Use route coordinates to create intermediate points
+                                    val timeStep = (endTimeMs - startTimeMs) / routePoints.size.toDouble()
+                                    routePoints.mapIndexed { index, coord ->
+                                        TripLocation(
+                                            latitude = coord.getOrNull(1) ?: 0.0,
+                                            longitude = coord.getOrNull(0) ?: 0.0,
+                                            accuracy = 10.0f,
+                                            timestamp = (startTimeMs + (index * timeStep)).toLong()
+                                        )
+                                    }
+                                } else {
+                                    MotiumApplication.logger.w("⚠️ No route coordinates, using simple 2-point route", "AddTripScreen")
+                                    // Fallback to simple 2-point route
+                                    listOf(
+                                        TripLocation(
+                                            latitude = startCoordinates?.first ?: 0.0,
+                                            longitude = startCoordinates?.second ?: 0.0,
+                                            accuracy = 10.0f,
+                                            timestamp = startTimeMs
+                                        ),
+                                        TripLocation(
+                                            latitude = endCoordinates?.first ?: 0.0,
+                                            longitude = endCoordinates?.second ?: 0.0,
+                                            accuracy = 10.0f,
+                                            timestamp = endTimeMs
+                                        )
                                     )
-                                )
+                                }
 
                                 val tripId = UUID.randomUUID().toString()
                                 val trip = Trip(
@@ -195,7 +258,7 @@ fun AddTripScreen(
                                     locations = locations,
                                     totalDistance = distanceKm * 1000,
                                     isValidated = false,
-                                    vehicleId = null,
+                                    vehicleId = selectedVehicleId,
                                     startAddress = startLocation,
                                     endAddress = endLocation,
                                     notes = notes.ifBlank { null }
@@ -278,9 +341,10 @@ fun AddTripScreen(
 
             // Location fields
             item {
-                AddressAutocomplete(
+                LocationField(
                     label = "Departure Location",
                     value = startLocation,
+                    iconColor = MotiumGreen,
                     onValueChange = { startLocation = it },
                     onAddressSelected = { result ->
                         startCoordinates = result.lat.toDouble() to result.lon.toDouble()
@@ -291,9 +355,10 @@ fun AddTripScreen(
             }
 
             item {
-                AddressAutocomplete(
+                LocationField(
                     label = "Arrival Location",
                     value = endLocation,
+                    iconColor = Color(0xFFEF4444),
                     onValueChange = { endLocation = it },
                     onAddressSelected = { result ->
                         endCoordinates = result.lat.toDouble() to result.lon.toDouble()
@@ -332,68 +397,105 @@ fun AddTripScreen(
                 }
             }
 
-            // Notes section
+            // Vehicle selection
             item {
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("Notes") },
-                    placeholder = { Text("Add any notes for this trip...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
-                    maxLines = 5
+                VehicleSelectionField(
+                    availableVehicles = availableVehicles,
+                    selectedVehicleId = selectedVehicleId,
+                    onVehicleSelected = { selectedVehicleId = it }
                 )
             }
 
-            // Expense Notes section
+            // Notes section
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Column {
                     Text(
-                        "Expense Notes",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
+                        text = "Notes",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        placeholder = { Text("Add any notes for this trip...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 5,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                         )
                     )
-                    Button(
-                        onClick = {
-                            expenses = expenses + ExpenseItem()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MotiumGreen
-                        ),
-                        shape = RoundedCornerShape(20.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add")
-                    }
                 }
             }
 
-            // Expense items
-            itemsIndexed(expenses) { index, expense ->
-                ExpenseItemCard(
-                    expense = expense,
-                    onExpenseChange = { updatedExpense ->
-                        expenses = expenses.toMutableList().apply {
-                            set(index, updatedExpense)
+            // Expense Notes section header (inside card)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Expense Notes",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                            Button(
+                                onClick = {
+                                    expenses = expenses + ExpenseItem()
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MotiumGreen
+                                ),
+                                shape = RoundedCornerShape(20.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Add", style = MaterialTheme.typography.bodySmall)
+                            }
                         }
-                    },
-                    onRemove = {
-                        expenses = expenses.toMutableList().apply {
-                            removeAt(index)
+
+                        // Expense items will be rendered here
+                        expenses.forEachIndexed { index, expense ->
+                            ExpenseItemRow(
+                                expense = expense,
+                                onExpenseChange = { updatedExpense ->
+                                    expenses = expenses.toMutableList().apply {
+                                        set(index, updatedExpense)
+                                    }
+                                },
+                                onRemove = {
+                                    expenses = expenses.toMutableList().apply {
+                                        removeAt(index)
+                                    }
+                                }
+                            )
                         }
                     }
-                )
+                }
             }
         }
     }
@@ -406,21 +508,34 @@ fun DateTimeField(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = {},
-        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-        readOnly = true,
-        leadingIcon = {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            leadingIcon = {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyMedium,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedBorderColor = Color.Transparent
             )
-        },
-        modifier = modifier,
-        textStyle = MaterialTheme.typography.bodyMedium
-    )
+        )
+    }
 }
 
 @Composable
@@ -430,25 +545,68 @@ fun ReadOnlyField(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = {},
-        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-        readOnly = true,
-        leadingIcon = {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        },
-        modifier = modifier,
-        colors = OutlinedTextFieldDefaults.colors(
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-        ),
-        enabled = false
-    )
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            leadingIcon = {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                disabledBorderColor = Color.Transparent,
+                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            ),
+            enabled = false
+        )
+    }
+}
+
+@Composable
+fun LocationField(
+    label: String,
+    value: String,
+    iconColor: Color,
+    onValueChange: (String) -> Unit,
+    onAddressSelected: (com.application.motium.data.geocoding.NominatimResult) -> Unit
+) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        AddressAutocomplete(
+            label = "",
+            value = value,
+            onValueChange = onValueChange,
+            onAddressSelected = onAddressSelected,
+            placeholder = "Enter address",
+            leadingIcon = {
+                Icon(
+                    Icons.Default.LocationOn,
+                    contentDescription = null,
+                    tint = iconColor
+                )
+            }
+        )
+    }
 }
 
 @Composable
@@ -462,18 +620,18 @@ fun ProfessionalTripToggle(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 "Professional Trip",
-                style = MaterialTheme.typography.titleMedium.copy(
+                style = MaterialTheme.typography.bodyLarge.copy(
                     fontWeight = FontWeight.Medium
                 )
             )
@@ -491,7 +649,88 @@ fun ProfessionalTripToggle(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExpenseItemCard(
+fun VehicleSelectionField(
+    availableVehicles: List<Vehicle>,
+    selectedVehicleId: String?,
+    onVehicleSelected: (String?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column {
+        Text(
+            text = "Vehicle",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+
+        if (availableVehicles.isEmpty()) {
+            OutlinedTextField(
+                value = "No vehicles available",
+                onValueChange = {},
+                readOnly = true,
+                enabled = false,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    disabledBorderColor = Color.Transparent,
+                    disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            )
+        } else {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it }
+            ) {
+                OutlinedTextField(
+                    value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "Select a vehicle",
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = {
+                        Icon(
+                            Icons.Default.ExpandMore,
+                            contentDescription = null
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.DirectionsCar,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                    )
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    availableVehicles.forEach { vehicle ->
+                        DropdownMenuItem(
+                            text = { Text(vehicle.name) },
+                            onClick = {
+                                onVehicleSelected(vehicle.id)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExpenseItemRow(
     expense: ExpenseItem,
     onExpenseChange: (ExpenseItem) -> Unit,
     onRemove: () -> Unit
@@ -508,116 +747,137 @@ fun ExpenseItemCard(
 
     var expanded by remember { mutableStateOf(false) }
 
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            onExpenseChange(expense.copy(photoUri = it))
-        }
-    }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        border = CardDefaults.outlinedCardBorder()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Type and Amount row
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Type dropdown
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = it },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Type") },
-                        trailingIcon = {
-                            Icon(
-                                Icons.Default.ExpandMore,
-                                contentDescription = null
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
-                        textStyle = MaterialTheme.typography.bodyMedium
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Type",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 4.dp)
                     )
-                    ExposedDropdownMenu(
+                    ExposedDropdownMenuBox(
                         expanded = expanded,
-                        onDismissRequest = { expanded = false }
+                        onExpandedChange = { expanded = it }
                     ) {
-                        expenseTypes.forEach { (type, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    onExpenseChange(expense.copy(type = type))
-                                    expanded = false
-                                }
+                        OutlinedTextField(
+                            value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.ExpandMore,
+                                    contentDescription = null
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                             )
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            expenseTypes.forEach { (type, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        onExpenseChange(expense.copy(type = type))
+                                        expanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
                 // Amount field
-                OutlinedTextField(
-                    value = expense.amount,
-                    onValueChange = { onExpenseChange(expense.copy(amount = it)) },
-                    label = { Text("Amount") },
-                    leadingIcon = { Text("$", fontWeight = FontWeight.Bold) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("0.00") }
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Amount",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = expense.amount,
+                        onValueChange = { onExpenseChange(expense.copy(amount = it)) },
+                        leadingIcon = {
+                            Text(
+                                "$",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            )
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("0.00") },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        )
+                    )
+                }
             }
 
             // Note field
-            OutlinedTextField(
-                value = expense.note,
-                onValueChange = { onExpenseChange(expense.copy(note = it)) },
-                label = { Text("Note (Optional)") },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("e.g., Gas station receipt") }
-            )
+            Column {
+                Text(
+                    text = "Note (Optional)",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                OutlinedTextField(
+                    value = expense.note,
+                    onValueChange = { onExpenseChange(expense.copy(note = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("e.g., Gas station receipt") },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                    )
+                )
+            }
 
-            // Photo button
+            // Remove button
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.End
             ) {
-                OutlinedButton(
-                    onClick = { imagePickerLauncher.launch("image/*") }
-                ) {
-                    Icon(
-                        Icons.Default.CameraAlt,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (expense.photoUri != null) "Photo added" else "Add photo")
-                }
-
                 TextButton(
                     onClick = onRemove,
                     colors = ButtonDefaults.textButtonColors(
-                        contentColor = Color.Red
+                        contentColor = Color(0xFFEF4444)
                     )
                 ) {
-                    Text("Remove")
+                    Text("Remove", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
