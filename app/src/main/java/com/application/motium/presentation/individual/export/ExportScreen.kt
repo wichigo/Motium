@@ -513,6 +513,163 @@ fun ExportScreen(
                             }
                         }
                     }
+
+                    // Expense Mode filter
+                    Column {
+                        Text(
+                            "Export Content",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = textSecondaryColor,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        var expenseModeExpanded by remember { mutableStateOf(false) }
+
+                        ExposedDropdownMenuBox(
+                            expanded = expenseModeExpanded,
+                            onExpandedChange = {
+                                expenseModeExpanded = !expenseModeExpanded
+                                selectedField = if (expenseModeExpanded) "expenseMode" else null
+                            }
+                        ) {
+                            OutlinedTextField(
+                                value = when (filters.expenseMode) {
+                                    "trips_only" -> "Trips only"
+                                    "trips_with_expenses" -> "Trips with expenses"
+                                    "expenses_only" -> "Expenses only"
+                                    else -> "Trips only"
+                                },
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                trailingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = if (selectedField == "expenseMode") MotiumGreen else MotiumPrimary
+                                    )
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    unfocusedContainerColor = backgroundColor,
+                                    focusedContainerColor = backgroundColor,
+                                    unfocusedBorderColor = if (selectedField == "expenseMode") MotiumGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumGreen,
+                                    unfocusedTextColor = textColor,
+                                    focusedTextColor = textColor
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+
+                            ExposedDropdownMenu(
+                                expanded = expenseModeExpanded,
+                                onDismissRequest = {
+                                    expenseModeExpanded = false
+                                    selectedField = null
+                                }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Trips only") },
+                                    onClick = {
+                                        viewModel.setExpenseModeFilter("trips_only")
+                                        expenseModeExpanded = false
+                                        selectedField = null
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Trips with expenses") },
+                                    onClick = {
+                                        viewModel.setExpenseModeFilter("trips_with_expenses")
+                                        expenseModeExpanded = false
+                                        selectedField = null
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Expenses only") },
+                                    onClick = {
+                                        viewModel.setExpenseModeFilter("expenses_only")
+                                        expenseModeExpanded = false
+                                        selectedField = null
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Include Photos filter (only visible if expenses are included)
+                    if (filters.expenseMode != "trips_only") {
+                        Column {
+                            Text(
+                                "Include Photos",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = textSecondaryColor,
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            var includePhotosExpanded by remember { mutableStateOf(false) }
+
+                            ExposedDropdownMenuBox(
+                                expanded = includePhotosExpanded,
+                                onExpandedChange = {
+                                    includePhotosExpanded = !includePhotosExpanded
+                                    selectedField = if (includePhotosExpanded) "includePhotos" else null
+                                }
+                            ) {
+                                OutlinedTextField(
+                                    value = if (filters.includePhotos) "With photos" else "Without photos",
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    trailingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = null,
+                                            tint = if (selectedField == "includePhotos") MotiumGreen else MotiumPrimary
+                                        )
+                                    },
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        unfocusedContainerColor = backgroundColor,
+                                        focusedContainerColor = backgroundColor,
+                                        unfocusedBorderColor = if (selectedField == "includePhotos") MotiumGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        focusedBorderColor = MotiumGreen,
+                                        unfocusedTextColor = textColor,
+                                        focusedTextColor = textColor
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+
+                                ExposedDropdownMenu(
+                                    expanded = includePhotosExpanded,
+                                    onDismissRequest = {
+                                        includePhotosExpanded = false
+                                        selectedField = null
+                                    }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Without photos") },
+                                        onClick = {
+                                            viewModel.setIncludePhotos(false)
+                                            includePhotosExpanded = false
+                                            selectedField = null
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("With photos") },
+                                        onClick = {
+                                            viewModel.setIncludePhotos(true)
+                                            includePhotosExpanded = false
+                                            selectedField = null
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

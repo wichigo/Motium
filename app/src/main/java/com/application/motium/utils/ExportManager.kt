@@ -62,6 +62,8 @@ class ExportManager(private val context: Context) {
         trips: List<Trip>,
         startDate: Long,
         endDate: Long,
+        expenseMode: String = "trips_only",
+        includePhotos: Boolean = false,
         onSuccess: (File) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -87,41 +89,75 @@ class ExportManager(private val context: Context) {
                 appendLine("Période du ${dateFormat.format(Date(startDate))} au ${dateFormat.format(Date(endDate))}")
                 appendLine()
 
-                // Résumé
-                val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                val totalIndemnities = totalKm * MILEAGE_RATE
-                val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
-                val grandTotal = totalIndemnities + totalExpenses
+                // Résumé selon le mode
+                when (expenseMode) {
+                    "trips_only" -> {
+                        val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
+                        val totalIndemnities = totalKm * MILEAGE_RATE
 
-                appendLine("RÉSUMÉ")
-                appendLine("Nombre de trajets,${trips.size}")
-                appendLine("Distance totale (km),${String.format("%.2f", totalKm)}")
-                appendLine("Indemnités kilométriques (${MILEAGE_RATE}€/km),${String.format("%.2f", totalIndemnities)}€")
-                appendLine("Frais annexes,${String.format("%.2f", totalExpenses)}€")
-                appendLine("TOTAL GÉNÉRAL,${String.format("%.2f", grandTotal)}€")
-                appendLine()
+                        appendLine("RÉSUMÉ")
+                        appendLine("Nombre de trajets,${trips.size}")
+                        appendLine("Distance totale (km),${String.format("%.2f", totalKm)}")
+                        appendLine("Indemnités kilométriques (${MILEAGE_RATE}€/km),${String.format("%.2f", totalIndemnities)}€")
+                        appendLine("TOTAL,${String.format("%.2f", totalIndemnities)}€")
+                        appendLine()
+                    }
+                    "trips_with_expenses" -> {
+                        val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
+                        val totalIndemnities = totalKm * MILEAGE_RATE
+                        val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
+                        val grandTotal = totalIndemnities + totalExpenses
 
-                // Détail des trajets
-                appendLine("DÉTAIL DES TRAJETS")
-                appendLine("Date,Heure,Départ,Arrivée,Distance (km),Indemnités (€),Notes de frais (€)")
+                        appendLine("RÉSUMÉ")
+                        appendLine("Nombre de trajets,${trips.size}")
+                        appendLine("Distance totale (km),${String.format("%.2f", totalKm)}")
+                        appendLine("Indemnités kilométriques (${MILEAGE_RATE}€/km),${String.format("%.2f", totalIndemnities)}€")
+                        appendLine("Frais annexes,${String.format("%.2f", totalExpenses)}€")
+                        appendLine("TOTAL GÉNÉRAL,${String.format("%.2f", grandTotal)}€")
+                        appendLine()
+                    }
+                    "expenses_only" -> {
+                        val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
 
-                tripsWithExpenses.sortedBy { it.trip.startTime }.forEach { tripWithExpenses ->
-                    val trip = tripWithExpenses.trip
-                    val tripDate = dateFormat.format(Date(trip.startTime))
-                    val tripTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(trip.startTime))
-                    val distanceKm = trip.totalDistance / 1000.0
-                    val indemnity = distanceKm * MILEAGE_RATE
-                    val expensesTotal = tripWithExpenses.expenses.sumOf { it.amount }
-                    val startAddr = trip.startAddress?.replace(",", " ") ?: "Non géocodé"
-                    val endAddr = trip.endAddress?.replace(",", " ") ?: "Non géocodé"
-
-                    appendLine("$tripDate,$tripTime,\"$startAddr\",\"$endAddr\",${String.format("%.2f", distanceKm)},${String.format("%.2f", indemnity)},${String.format("%.2f", expensesTotal)}")
+                        appendLine("RÉSUMÉ")
+                        appendLine("Nombre de notes de frais,${tripsWithExpenses.flatMap { it.expenses }.size}")
+                        appendLine("Frais totaux,${String.format("%.2f", totalExpenses)}€")
+                        appendLine("TOTAL,${String.format("%.2f", totalExpenses)}€")
+                        appendLine()
+                    }
                 }
 
-                appendLine()
+                // Détail selon le mode
+                if (expenseMode == "trips_only" || expenseMode == "trips_with_expenses") {
+                    appendLine("DÉTAIL DES TRAJETS")
+                    if (expenseMode == "trips_only") {
+                        appendLine("Date,Heure,Départ,Arrivée,Distance (km),Indemnités (€)")
+                    } else {
+                        appendLine("Date,Heure,Départ,Arrivée,Distance (km),Indemnités (€),Notes de frais (€)")
+                    }
+
+                    tripsWithExpenses.sortedBy { it.trip.startTime }.forEach { tripWithExpenses ->
+                        val trip = tripWithExpenses.trip
+                        val tripDate = dateFormat.format(Date(trip.startTime))
+                        val tripTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(trip.startTime))
+                        val distanceKm = trip.totalDistance / 1000.0
+                        val indemnity = distanceKm * MILEAGE_RATE
+                        val startAddr = trip.startAddress?.replace(",", " ") ?: "Non géocodé"
+                        val endAddr = trip.endAddress?.replace(",", " ") ?: "Non géocodé"
+
+                        if (expenseMode == "trips_only") {
+                            appendLine("$tripDate,$tripTime,\"$startAddr\",\"$endAddr\",${String.format("%.2f", distanceKm)},${String.format("%.2f", indemnity)}")
+                        } else {
+                            val expensesTotal = tripWithExpenses.expenses.sumOf { it.amount }
+                            appendLine("$tripDate,$tripTime,\"$startAddr\",\"$endAddr\",${String.format("%.2f", distanceKm)},${String.format("%.2f", indemnity)},${String.format("%.2f", expensesTotal)}")
+                        }
+                    }
+
+                    appendLine()
+                }
 
                 // Détail des notes de frais
-                if (tripsWithExpenses.any { it.expenses.isNotEmpty() }) {
+                if (expenseMode != "trips_only" && tripsWithExpenses.any { it.expenses.isNotEmpty() }) {
                     appendLine("DÉTAIL DES NOTES DE FRAIS")
                     appendLine("Date,Type,Montant (€),Note")
 
@@ -154,6 +190,8 @@ class ExportManager(private val context: Context) {
         trips: List<Trip>,
         startDate: Long,
         endDate: Long,
+        expenseMode: String = "trips_only",
+        includePhotos: Boolean = false,
         onSuccess: (File) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -180,14 +218,16 @@ class ExportManager(private val context: Context) {
             addPdfHeader(document, startDate, endDate)
 
             // Résumé
-            addPdfSummary(document, trips, tripsWithExpenses)
+            addPdfSummary(document, trips, tripsWithExpenses, expenseMode)
 
-            // Détail des trajets
-            addPdfTripsTable(document, tripsWithExpenses)
+            // Détail des trajets (si trips_only ou trips_with_expenses)
+            if (expenseMode == "trips_only" || expenseMode == "trips_with_expenses") {
+                addPdfTripsTable(document, tripsWithExpenses, expenseMode)
+            }
 
-            // Détail des notes de frais
-            if (tripsWithExpenses.any { it.expenses.isNotEmpty() }) {
-                addPdfExpensesTable(document, tripsWithExpenses)
+            // Détail des notes de frais (si trips_with_expenses ou expenses_only)
+            if (expenseMode != "trips_only" && tripsWithExpenses.any { it.expenses.isNotEmpty() }) {
+                addPdfExpensesTable(document, tripsWithExpenses, includePhotos)
             }
 
             // Pied de page
@@ -238,7 +278,7 @@ class ExportManager(private val context: Context) {
         document.add(separator)
     }
 
-    private fun addPdfSummary(document: Document, trips: List<Trip>, tripsWithExpenses: List<TripWithExpenses>) {
+    private fun addPdfSummary(document: Document, trips: List<Trip>, tripsWithExpenses: List<TripWithExpenses>, expenseMode: String) {
         val summaryTitle = Paragraph("RÉSUMÉ")
             .setFontSize(14f)
             .setBold()
@@ -246,37 +286,88 @@ class ExportManager(private val context: Context) {
             .setMarginBottom(10f)
         document.add(summaryTitle)
 
-        val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-        val totalIndemnities = totalKm * MILEAGE_RATE
-        val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
-        val grandTotal = totalIndemnities + totalExpenses
-
         val summaryTable = Table(UnitValue.createPercentArray(floatArrayOf(60f, 40f)))
             .setWidth(UnitValue.createPercentValue(100f))
             .setMarginBottom(20f)
 
-        // Rows
-        addSummaryRow(summaryTable, "Nombre de trajets", trips.size.toString())
-        addSummaryRow(summaryTable, "Distance totale", "${String.format("%.2f", totalKm)} km")
-        addSummaryRow(summaryTable, "Indemnités kilométriques ($MILEAGE_RATE€/km)", "${String.format("%.2f", totalIndemnities)} €")
-        addSummaryRow(summaryTable, "Frais annexes", "${String.format("%.2f", totalExpenses)} €")
+        when (expenseMode) {
+            "trips_only" -> {
+                val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
+                val totalIndemnities = totalKm * MILEAGE_RATE
 
-        // Total en vert
-        summaryTable.addCell(
-            Cell().add(Paragraph("TOTAL GÉNÉRAL").setBold())
-                .setBackgroundColor(MOTIUM_GREEN)
-                .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
-                .setPadding(8f)
-                .setBorder(null)
-        )
-        summaryTable.addCell(
-            Cell().add(Paragraph("${String.format("%.2f", grandTotal)} €").setBold())
-                .setBackgroundColor(MOTIUM_GREEN)
-                .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
-                .setTextAlignment(TextAlignment.RIGHT)
-                .setPadding(8f)
-                .setBorder(null)
-        )
+                addSummaryRow(summaryTable, "Nombre de trajets", trips.size.toString())
+                addSummaryRow(summaryTable, "Distance totale", "${String.format("%.2f", totalKm)} km")
+                addSummaryRow(summaryTable, "Indemnités kilométriques ($MILEAGE_RATE€/km)", "${String.format("%.2f", totalIndemnities)} €")
+
+                // Total en vert
+                summaryTable.addCell(
+                    Cell().add(Paragraph("TOTAL").setBold())
+                        .setBackgroundColor(MOTIUM_GREEN)
+                        .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                        .setPadding(8f)
+                        .setBorder(null)
+                )
+                summaryTable.addCell(
+                    Cell().add(Paragraph("${String.format("%.2f", totalIndemnities)} €").setBold())
+                        .setBackgroundColor(MOTIUM_GREEN)
+                        .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                        .setTextAlignment(TextAlignment.RIGHT)
+                        .setPadding(8f)
+                        .setBorder(null)
+                )
+            }
+            "trips_with_expenses" -> {
+                val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
+                val totalIndemnities = totalKm * MILEAGE_RATE
+                val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
+                val grandTotal = totalIndemnities + totalExpenses
+
+                addSummaryRow(summaryTable, "Nombre de trajets", trips.size.toString())
+                addSummaryRow(summaryTable, "Distance totale", "${String.format("%.2f", totalKm)} km")
+                addSummaryRow(summaryTable, "Indemnités kilométriques ($MILEAGE_RATE€/km)", "${String.format("%.2f", totalIndemnities)} €")
+                addSummaryRow(summaryTable, "Frais annexes", "${String.format("%.2f", totalExpenses)} €")
+
+                // Total en vert
+                summaryTable.addCell(
+                    Cell().add(Paragraph("TOTAL GÉNÉRAL").setBold())
+                        .setBackgroundColor(MOTIUM_GREEN)
+                        .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                        .setPadding(8f)
+                        .setBorder(null)
+                )
+                summaryTable.addCell(
+                    Cell().add(Paragraph("${String.format("%.2f", grandTotal)} €").setBold())
+                        .setBackgroundColor(MOTIUM_GREEN)
+                        .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                        .setTextAlignment(TextAlignment.RIGHT)
+                        .setPadding(8f)
+                        .setBorder(null)
+                )
+            }
+            "expenses_only" -> {
+                val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
+
+                addSummaryRow(summaryTable, "Nombre de notes de frais", tripsWithExpenses.flatMap { it.expenses }.size.toString())
+                addSummaryRow(summaryTable, "Frais totaux", "${String.format("%.2f", totalExpenses)} €")
+
+                // Total en vert
+                summaryTable.addCell(
+                    Cell().add(Paragraph("TOTAL").setBold())
+                        .setBackgroundColor(MOTIUM_GREEN)
+                        .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                        .setPadding(8f)
+                        .setBorder(null)
+                )
+                summaryTable.addCell(
+                    Cell().add(Paragraph("${String.format("%.2f", totalExpenses)} €").setBold())
+                        .setBackgroundColor(MOTIUM_GREEN)
+                        .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                        .setTextAlignment(TextAlignment.RIGHT)
+                        .setPadding(8f)
+                        .setBorder(null)
+                )
+            }
+        }
 
         document.add(summaryTable)
     }
@@ -296,7 +387,7 @@ class ExportManager(private val context: Context) {
         )
     }
 
-    private fun addPdfTripsTable(document: Document, tripsWithExpenses: List<TripWithExpenses>) {
+    private fun addPdfTripsTable(document: Document, tripsWithExpenses: List<TripWithExpenses>, expenseMode: String) {
         val tripsTitle = Paragraph("DÉTAIL DES TRAJETS")
             .setFontSize(14f)
             .setBold()
@@ -305,9 +396,16 @@ class ExportManager(private val context: Context) {
             .setMarginBottom(10f)
         document.add(tripsTitle)
 
-        val tripsTable = Table(UnitValue.createPercentArray(floatArrayOf(12f, 8f, 25f, 25f, 10f, 10f, 10f)))
-            .setWidth(UnitValue.createPercentValue(100f))
-            .setFontSize(9f)
+        // Adapter les colonnes selon le mode
+        val tripsTable = if (expenseMode == "trips_only") {
+            Table(UnitValue.createPercentArray(floatArrayOf(15f, 10f, 28f, 28f, 10f, 9f)))
+                .setWidth(UnitValue.createPercentValue(100f))
+                .setFontSize(9f)
+        } else {
+            Table(UnitValue.createPercentArray(floatArrayOf(12f, 8f, 25f, 25f, 10f, 10f, 10f)))
+                .setWidth(UnitValue.createPercentValue(100f))
+                .setFontSize(9f)
+        }
 
         // Headers
         addTableHeader(tripsTable, "Date")
@@ -316,7 +414,9 @@ class ExportManager(private val context: Context) {
         addTableHeader(tripsTable, "Arrivée")
         addTableHeader(tripsTable, "Km")
         addTableHeader(tripsTable, "Indemnités")
-        addTableHeader(tripsTable, "Frais")
+        if (expenseMode == "trips_with_expenses") {
+            addTableHeader(tripsTable, "Frais")
+        }
 
         val dateFormat = SimpleDateFormat("dd/MM/yy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -325,7 +425,6 @@ class ExportManager(private val context: Context) {
             val trip = tripWithExpenses.trip
             val distanceKm = trip.totalDistance / 1000.0
             val indemnity = distanceKm * MILEAGE_RATE
-            val expensesTotal = tripWithExpenses.expenses.sumOf { it.amount }
 
             addTableCell(tripsTable, dateFormat.format(Date(trip.startTime)))
             addTableCell(tripsTable, timeFormat.format(Date(trip.startTime)))
@@ -333,13 +432,17 @@ class ExportManager(private val context: Context) {
             addTableCell(tripsTable, trip.endAddress?.take(35) ?: "Non géocodé")
             addTableCell(tripsTable, String.format("%.1f", distanceKm))
             addTableCell(tripsTable, String.format("%.2f€", indemnity))
-            addTableCell(tripsTable, String.format("%.2f€", expensesTotal))
+
+            if (expenseMode == "trips_with_expenses") {
+                val expensesTotal = tripWithExpenses.expenses.sumOf { it.amount }
+                addTableCell(tripsTable, String.format("%.2f€", expensesTotal))
+            }
         }
 
         document.add(tripsTable)
     }
 
-    private fun addPdfExpensesTable(document: Document, tripsWithExpenses: List<TripWithExpenses>) {
+    private fun addPdfExpensesTable(document: Document, tripsWithExpenses: List<TripWithExpenses>, includePhotos: Boolean) {
         val expensesTitle = Paragraph("DÉTAIL DES NOTES DE FRAIS")
             .setFontSize(14f)
             .setBold()
@@ -348,28 +451,137 @@ class ExportManager(private val context: Context) {
             .setMarginBottom(10f)
         document.add(expensesTitle)
 
-        val expensesTable = Table(UnitValue.createPercentArray(floatArrayOf(15f, 20f, 15f, 50f)))
-            .setWidth(UnitValue.createPercentValue(100f))
-            .setFontSize(9f)
+        if (includePhotos) {
+            // Format avec photos - Une note de frais par section
+            val dateFormat = SimpleDateFormat("dd/MM/yy", Locale.getDefault())
 
-        // Headers
-        addTableHeader(expensesTable, "Date")
-        addTableHeader(expensesTable, "Type")
-        addTableHeader(expensesTable, "Montant")
-        addTableHeader(expensesTable, "Note")
+            tripsWithExpenses.sortedBy { it.trip.startTime }.forEach { tripWithExpenses ->
+                tripWithExpenses.expenses.forEach { expense ->
+                    // Tableau pour chaque note de frais
+                    val expenseTable = Table(UnitValue.createPercentArray(floatArrayOf(25f, 75f)))
+                        .setWidth(UnitValue.createPercentValue(100f))
+                        .setFontSize(9f)
+                        .setMarginBottom(10f)
 
-        val dateFormat = SimpleDateFormat("dd/MM/yy", Locale.getDefault())
+                    // Date
+                    expenseTable.addCell(
+                        Cell().add(Paragraph("Date").setBold())
+                            .setBackgroundColor(GRAY_LIGHT)
+                            .setPadding(5f)
+                            .setBorder(null)
+                    )
+                    expenseTable.addCell(
+                        Cell().add(Paragraph(dateFormat.format(Date(tripWithExpenses.trip.startTime))))
+                            .setPadding(5f)
+                            .setBorder(Border.NO_BORDER)
+                    )
 
-        tripsWithExpenses.sortedBy { it.trip.startTime }.forEach { tripWithExpenses ->
-            tripWithExpenses.expenses.forEach { expense ->
-                addTableCell(expensesTable, dateFormat.format(Date(tripWithExpenses.trip.startTime)))
-                addTableCell(expensesTable, expense.getExpenseTypeLabel())
-                addTableCell(expensesTable, String.format("%.2f€", expense.amount))
-                addTableCell(expensesTable, expense.note.ifEmpty { "-" })
+                    // Type
+                    expenseTable.addCell(
+                        Cell().add(Paragraph("Type").setBold())
+                            .setBackgroundColor(GRAY_LIGHT)
+                            .setPadding(5f)
+                            .setBorder(null)
+                    )
+                    expenseTable.addCell(
+                        Cell().add(Paragraph(expense.getExpenseTypeLabel()))
+                            .setPadding(5f)
+                            .setBorder(Border.NO_BORDER)
+                    )
+
+                    // Montant
+                    expenseTable.addCell(
+                        Cell().add(Paragraph("Montant").setBold())
+                            .setBackgroundColor(GRAY_LIGHT)
+                            .setPadding(5f)
+                            .setBorder(null)
+                    )
+                    expenseTable.addCell(
+                        Cell().add(Paragraph(String.format("%.2f€", expense.amount)))
+                            .setPadding(5f)
+                            .setBorder(Border.NO_BORDER)
+                    )
+
+                    // Note
+                    expenseTable.addCell(
+                        Cell().add(Paragraph("Note").setBold())
+                            .setBackgroundColor(GRAY_LIGHT)
+                            .setPadding(5f)
+                            .setBorder(null)
+                    )
+                    expenseTable.addCell(
+                        Cell().add(Paragraph(expense.note.ifEmpty { "-" }))
+                            .setPadding(5f)
+                            .setBorder(Border.NO_BORDER)
+                    )
+
+                    document.add(expenseTable)
+
+                    // Ajouter la photo si elle existe
+                    if (expense.photoUri != null) {
+                        try {
+                            // L'URI peut être soit un chemin local soit une URL Supabase
+                            val imageFile = if (expense.photoUri.startsWith("content://") || expense.photoUri.startsWith("file://")) {
+                                // C'est un URI local, on peut le charger directement
+                                val uri = android.net.Uri.parse(expense.photoUri)
+                                val inputStream = context.contentResolver.openInputStream(uri)
+                                inputStream?.use { stream ->
+                                    val bytes = stream.readBytes()
+                                    com.itextpdf.io.image.ImageDataFactory.create(bytes)
+                                }
+                            } else {
+                                // C'est une URL Supabase, on peut essayer de la charger
+                                // Pour l'instant, on skip car ça nécessiterait un appel réseau
+                                null
+                            }
+
+                            if (imageFile != null) {
+                                val image = com.itextpdf.layout.element.Image(imageFile)
+                                    .setWidth(UnitValue.createPercentValue(40f))
+                                    .setMarginTop(5f)
+                                    .setMarginBottom(15f)
+                                document.add(image)
+                            } else {
+                                document.add(Paragraph("Photo non disponible pour l'export")
+                                    .setFontSize(8f)
+                                    .setFontColor(GRAY_DARK)
+                                    .setMarginBottom(15f))
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Failed to add photo to PDF: ${e.message}", "ExportManager", e)
+                            document.add(Paragraph("Erreur lors du chargement de la photo")
+                                .setFontSize(8f)
+                                .setFontColor(GRAY_DARK)
+                                .setMarginBottom(15f))
+                        }
+                    }
+                }
             }
-        }
+        } else {
+            // Format tabulaire sans photos
+            val expensesTable = Table(UnitValue.createPercentArray(floatArrayOf(15f, 20f, 15f, 50f)))
+                .setWidth(UnitValue.createPercentValue(100f))
+                .setFontSize(9f)
 
-        document.add(expensesTable)
+            // Headers
+            addTableHeader(expensesTable, "Date")
+            addTableHeader(expensesTable, "Type")
+            addTableHeader(expensesTable, "Montant")
+            addTableHeader(expensesTable, "Note")
+
+            val dateFormat = SimpleDateFormat("dd/MM/yy", Locale.getDefault())
+
+            tripsWithExpenses.sortedBy { it.trip.startTime }.forEach { tripWithExpenses ->
+                tripWithExpenses.expenses.forEach { expense ->
+                    addTableCell(expensesTable, dateFormat.format(Date(tripWithExpenses.trip.startTime)))
+                    addTableCell(expensesTable, expense.getExpenseTypeLabel())
+                    addTableCell(expensesTable, String.format("%.2f€", expense.amount))
+                    addTableCell(expensesTable, expense.note.ifEmpty { "-" })
+                }
+            }
+
+            document.add(expensesTable)
+        }
     }
 
     private fun addTableHeader(table: Table, text: String) {
@@ -408,6 +620,8 @@ class ExportManager(private val context: Context) {
         trips: List<Trip>,
         startDate: Long,
         endDate: Long,
+        expenseMode: String = "trips_only",
+        includePhotos: Boolean = false,
         onSuccess: (File) -> Unit,
         onError: (String) -> Unit
     ) {

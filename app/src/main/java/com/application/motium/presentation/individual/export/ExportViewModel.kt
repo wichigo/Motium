@@ -27,7 +27,9 @@ data class ExportFilters(
     }.timeInMillis,
     val endDate: Long = System.currentTimeMillis(),
     val vehicleId: String? = null,
-    val tripType: String? = null
+    val tripType: String? = null,
+    val expenseMode: String = "trips_only", // "trips_only", "trips_with_expenses", "expenses_only"
+    val includePhotos: Boolean = false
 )
 
 data class ExportStats(
@@ -113,6 +115,15 @@ class ExportViewModel(private val context: Context) : ViewModel() {
         loadTrips()
     }
 
+    fun setExpenseModeFilter(expenseMode: String) {
+        _filters.value = _filters.value.copy(expenseMode = expenseMode)
+        loadTrips()
+    }
+
+    fun setIncludePhotos(includePhotos: Boolean) {
+        _filters.value = _filters.value.copy(includePhotos = includePhotos)
+    }
+
     private fun applyFilters(trips: List<Trip>) {
         val currentFilters = _filters.value
 
@@ -164,6 +175,8 @@ class ExportViewModel(private val context: Context) : ViewModel() {
             trips = _filteredTrips.value,
             startDate = currentFilters.startDate,
             endDate = currentFilters.endDate,
+            expenseMode = currentFilters.expenseMode,
+            includePhotos = currentFilters.includePhotos,
             onSuccess = { file ->
                 onSuccess(file)
                 exportManager.shareFile(file)
@@ -178,6 +191,8 @@ class ExportViewModel(private val context: Context) : ViewModel() {
             trips = _filteredTrips.value,
             startDate = currentFilters.startDate,
             endDate = currentFilters.endDate,
+            expenseMode = currentFilters.expenseMode,
+            includePhotos = currentFilters.includePhotos,
             onSuccess = { file ->
                 onSuccess(file)
                 exportManager.shareFile(file)
@@ -192,6 +207,8 @@ class ExportViewModel(private val context: Context) : ViewModel() {
             trips = _filteredTrips.value,
             startDate = currentFilters.startDate,
             endDate = currentFilters.endDate,
+            expenseMode = currentFilters.expenseMode,
+            includePhotos = currentFilters.includePhotos,
             onSuccess = { file ->
                 onSuccess(file)
                 exportManager.shareFile(file)
