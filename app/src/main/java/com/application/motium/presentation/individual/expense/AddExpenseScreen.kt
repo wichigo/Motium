@@ -25,6 +25,7 @@ import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.service.ReceiptAnalysisService
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
 import java.util.*
@@ -40,6 +41,7 @@ fun AddExpenseScreen(
     val coroutineScope = rememberCoroutineScope()
     val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
     val tripRepository = remember { TripRepository.getInstance(context) }
+    val receiptAnalysisService = remember { ReceiptAnalysisService.getInstance(context) }
 
     // Expense fields
     var selectedType by remember { mutableStateOf(ExpenseType.FUEL) }
@@ -48,6 +50,8 @@ fun AddExpenseScreen(
     var note by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf<Uri?>(null) }
     var tripName by remember { mutableStateOf("") }
+    var isAnalyzingReceipt by remember { mutableStateOf(false) }
+    var isAutoFilled by remember { mutableStateOf(false) }
 
     // Load trip name
     LaunchedEffect(tripId) {
@@ -60,6 +64,46 @@ fun AddExpenseScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         photoUri = uri
+
+        // Automatically analyze receipt when photo is selected
+        if (uri != null) {
+            isAnalyzingReceipt = true
+            coroutineScope.launch {
+                receiptAnalysisService.analyzeReceipt(uri).onSuccess { result ->
+                    // Auto-fill amounts if found
+                    result.amountTTC?.let { ttc ->
+                        amountTTC = String.format("%.2f", ttc)
+                        isAutoFilled = true
+                    }
+                    result.amountHT?.let { ht ->
+                        amountHT = String.format("%.2f", ht)
+                        isAutoFilled = true
+                    }
+
+                    if (result.amountTTC != null || result.amountHT != null) {
+                        Toast.makeText(
+                            context,
+                            "Amounts detected automatically ✓",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "Could not detect amounts, please enter manually",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }.onFailure { error ->
+                    MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "AddExpenseScreen", error)
+                    Toast.makeText(
+                        context,
+                        "Analysis failed, please enter amounts manually",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                isAnalyzingReceipt = false
+            }
+        }
     }
 
     Scaffold(
@@ -163,8 +207,12 @@ fun AddExpenseScreen(
                 AmountField(
                     label = "Amount TTC",
                     value = amountTTC,
-                    onValueChange = { amountTTC = it },
-                    isMandatory = true
+                    onValueChange = {
+                        amountTTC = it
+                        isAutoFilled = false
+                    },
+                    isMandatory = true,
+                    isAutoDetected = isAutoFilled && amountTTC.isNotBlank()
                 )
             }
 
@@ -173,8 +221,12 @@ fun AddExpenseScreen(
                 AmountField(
                     label = "Amount HT (Optional)",
                     value = amountHT,
-                    onValueChange = { amountHT = it },
-                    isMandatory = false
+                    onValueChange = {
+                        amountHT = it
+                        isAutoFilled = false
+                    },
+                    isMandatory = false,
+                    isAutoDetected = isAutoFilled && amountHT.isNotBlank()
                 )
             }
 
@@ -216,18 +268,31 @@ fun AddExpenseScreen(
                     OutlinedButton(
                         onClick = { imagePickerLauncher.launch("image/*") },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isAnalyzingReceipt
                     ) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            if (photoUri != null) "Photo added ✓" else "Add photo",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        if (isAnalyzingReceipt) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Analyzing receipt...",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                if (photoUri != null) "Photo added ✓" else "Add photo (auto-detect amounts)",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
             }
@@ -350,7 +415,8 @@ fun AmountField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
-    isMandatory: Boolean
+    isMandatory: Boolean,
+    isAutoDetected: Boolean = false
 ) {
     Column {
         Row(
@@ -358,12 +424,23 @@ fun AmountField(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+                if (isAutoDetected) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = "Auto-detected",
+                        tint = MotiumGreen,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
             if (isMandatory) {
                 Text(
                     text = "Required",
@@ -388,7 +465,14 @@ fun AmountField(
             placeholder = { Text("0.00") },
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                unfocusedBorderColor = if (isAutoDetected)
+                    MotiumGreen.copy(alpha = 0.5f)
+                else
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                focusedBorderColor = if (isAutoDetected)
+                    MotiumGreen
+                else
+                    MaterialTheme.colorScheme.primary
             )
         )
     }
