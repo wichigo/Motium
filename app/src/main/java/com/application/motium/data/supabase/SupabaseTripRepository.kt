@@ -214,6 +214,25 @@ class SupabaseTripRepository(private val context: Context) {
         }
     }
 
+    suspend fun tripExists(tripId: String, userId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val trip = postgres.from("trips")
+                .select {
+                    filter {
+                        eq("id", tripId)
+                        eq("user_id", userId)
+                    }
+                }
+                .decodeList<SupabaseTrip>()
+                .firstOrNull()
+
+            trip != null
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error checking if trip exists: ${e.message}", "SupabaseTripRepository", e)
+            false
+        }
+    }
+
     suspend fun deleteTrip(tripId: String, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Deleting trip from Supabase: $tripId", "SupabaseTripRepository")

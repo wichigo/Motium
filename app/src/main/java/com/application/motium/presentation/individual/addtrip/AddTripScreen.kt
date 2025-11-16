@@ -50,7 +50,7 @@ data class ExpenseItem(
 @Composable
 fun AddTripScreen(
     onNavigateBack: () -> Unit,
-    onTripSaved: (Trip, List<Expense>) -> Unit
+    onTripSaved: (Trip) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -79,9 +79,6 @@ fun AddTripScreen(
     // Vehicle fields
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var selectedVehicleId by remember { mutableStateOf<String?>(null) }
-
-    // Expense fields
-    var expenses by remember { mutableStateOf(listOf<ExpenseItem>()) }
 
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
@@ -197,7 +194,9 @@ fun AddTripScreen(
                                 MotiumApplication.logger.d("Creating trip...", "AddTripScreen")
 
                                 // Create trip
-                                val distanceKm = distance.toDoubleOrNull() ?: 5.0
+                                // Fix locale issue: replace comma with period before parsing
+                                val distanceStr = distance.replace(',', '.')
+                                val distanceKm = distanceStr.toDoubleOrNull() ?: 5.0
                                 val durationMin = duration.toIntOrNull() ?: 15
 
                                 val timeArray = selectedTime.split(":")
@@ -261,37 +260,13 @@ fun AddTripScreen(
                                     vehicleId = selectedVehicleId,
                                     startAddress = startLocation,
                                     endAddress = endLocation,
-                                    notes = notes.ifBlank { null }
+                                    notes = notes.ifBlank { null },
+                                    tripType = if (isProfessional) "PROFESSIONAL" else "PERSONAL"
                                 )
 
-                                // Convert ExpenseItem to Expense
-                                val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
-                                val expensesToSave = expenses.mapNotNull { expenseItem ->
-                                    // Only save expenses with amount
-                                    if (expenseItem.amount.isNotBlank()) {
-                                        try {
-                                            Expense(
-                                                id = expenseItem.id,
-                                                tripId = tripId,
-                                                type = expenseItem.type,
-                                                amount = expenseItem.amount.toDouble(),
-                                                note = expenseItem.note,
-                                                photoUri = expenseItem.photoUri?.toString(),
-                                                createdAt = now,
-                                                updatedAt = now
-                                            )
-                                        } catch (e: NumberFormatException) {
-                                            MotiumApplication.logger.w("Invalid expense amount: ${expenseItem.amount}", "AddTripScreen")
-                                            null
-                                        }
-                                    } else {
-                                        null
-                                    }
-                                }
-
-                                MotiumApplication.logger.d("Trip created: ${trip.id} with ${expensesToSave.size} expenses", "AddTripScreen")
+                                MotiumApplication.logger.d("Trip created: ${trip.id}", "AddTripScreen")
                                 Toast.makeText(context, "Trip saved successfully", Toast.LENGTH_SHORT).show()
-                                onTripSaved(trip, expensesToSave)
+                                onTripSaved(trip)
                             } catch (e: Exception) {
                                 MotiumApplication.logger.e("Error creating trip: ${e.message}", "AddTripScreen", e)
                                 Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
@@ -428,73 +403,6 @@ fun AddTripScreen(
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                         )
                     )
-                }
-            }
-
-            // Expense Notes section header (inside card)
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "Expense Notes",
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.Bold
-                                )
-                            )
-                            Button(
-                                onClick = {
-                                    expenses = expenses + ExpenseItem()
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MotiumGreen
-                                ),
-                                shape = RoundedCornerShape(20.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Add", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-
-                        // Expense items will be rendered here
-                        expenses.forEachIndexed { index, expense ->
-                            ExpenseItemRow(
-                                expense = expense,
-                                onExpenseChange = { updatedExpense ->
-                                    expenses = expenses.toMutableList().apply {
-                                        set(index, updatedExpense)
-                                    }
-                                },
-                                onRemove = {
-                                    expenses = expenses.toMutableList().apply {
-                                        removeAt(index)
-                                    }
-                                }
-                            )
-                        }
-                    }
                 }
             }
         }

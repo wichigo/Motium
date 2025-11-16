@@ -63,6 +63,10 @@ fun EditTripScreen(
     val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
 
+    // Auth state
+    val authState by authRepository.authState.collectAsState(initial = com.application.motium.domain.model.AuthState())
+    val currentUser = authState.user
+
     // Loading state
     var isLoading by remember { mutableStateOf(true) }
     var isCalculatingRoute by remember { mutableStateOf(false) }
@@ -84,13 +88,29 @@ fun EditTripScreen(
     var selectedVehicleId by remember { mutableStateOf<String?>(null) }
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
 
-    // Expense fields
-    var expenses by remember { mutableStateOf(listOf<ExpenseItem>()) }
-    var originalExpenseIds by remember { mutableStateOf(setOf<String>()) }
-    var deletedExpenseIds by remember { mutableStateOf(setOf<String>()) }
-
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+
+    // Load vehicles when currentUser becomes available (same logic as Add Trip)
+    LaunchedEffect(currentUser?.id) {
+        val userId = currentUser?.id
+        if (!userId.isNullOrEmpty()) {
+            try {
+                MotiumApplication.logger.i("🚗 Loading vehicles for user: ${currentUser.email}", "EditTripScreen")
+                val vehicles = vehicleRepository.getAllVehiclesForUser(userId)
+                availableVehicles = vehicles
+                if (vehicles.isNotEmpty()) {
+                    MotiumApplication.logger.i("✅ Loaded ${vehicles.size} vehicles: ${vehicles.map { it.name }}", "EditTripScreen")
+                } else {
+                    MotiumApplication.logger.w("⚠️ No vehicles found for user", "EditTripScreen")
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("❌ Failed to load vehicles: ${e.message}", "EditTripScreen", e)
+            }
+        } else {
+            MotiumApplication.logger.w("⚠️ No userId available yet (user=$currentUser)", "EditTripScreen")
+        }
+    }
 
     // Load trip and expenses
     LaunchedEffect(tripId) {
@@ -112,7 +132,17 @@ fun EditTripScreen(
                 startCoordinates = firstLocation?.let { it.latitude to it.longitude }
                 endCoordinates = lastLocation?.let { it.latitude to it.longitude }
 
+                // Load existing route coordinates from trip locations
+                if (trip.locations.size > 2) {
+                    // Convert trip locations to route coordinates format [lon, lat]
+                    routeCoordinates = trip.locations.map { location ->
+                        listOf(location.longitude, location.latitude)
+                    }
+                    MotiumApplication.logger.i("✅ Loaded ${trip.locations.size} route points from existing trip", "EditTripScreen")
+                }
+
                 distance = String.format("%.1f", trip.totalDistance / 1000)
+                MotiumApplication.logger.i("📏 Loaded trip distance: ${trip.totalDistance}m (${distance}km)", "EditTripScreen")
                 val durationMin = ((trip.endTime ?: trip.startTime) - trip.startTime) / 1000 / 60
                 duration = durationMin.toString()
 
@@ -122,44 +152,7 @@ fun EditTripScreen(
 
                 notes = trip.notes ?: ""
                 selectedVehicleId = trip.vehicleId
-
-                // Load vehicles for user
-                try {
-                    val currentUser = authRepository.getCurrentAuthUser()
-                    MotiumApplication.logger.i("🚗 Loading vehicles for user: ${currentUser?.email}", "EditTripScreen")
-                    val userId = currentUser?.id
-                    if (!userId.isNullOrEmpty()) {
-                        val vehicles = vehicleRepository.getAllVehiclesForUser(userId)
-                        availableVehicles = vehicles
-                        if (vehicles.isNotEmpty()) {
-                            MotiumApplication.logger.i("✅ Loaded ${vehicles.size} vehicles: ${vehicles.map { it.name }}", "EditTripScreen")
-                        } else {
-                            MotiumApplication.logger.w("⚠️ No vehicles found for user", "EditTripScreen")
-                        }
-                    } else {
-                        MotiumApplication.logger.w("⚠️ No userId available", "EditTripScreen")
-                    }
-                } catch (e: Exception) {
-                    MotiumApplication.logger.e("❌ Failed to load vehicles: ${e.message}", "EditTripScreen", e)
-                }
-
-                // Load expenses
-                expenseRepository.getExpensesForTrip(tripId).onSuccess { expenseList ->
-                    expenses = expenseList.map { expense ->
-                        ExpenseItem(
-                            id = expense.id,
-                            type = expense.type,
-                            amount = expense.amount.toString(),
-                            note = expense.note,
-                            photoUri = expense.photoUri?.let { Uri.parse(it) },
-                            isExisting = true
-                        )
-                    }
-                    originalExpenseIds = expenseList.map { it.id }.toSet()
-                    MotiumApplication.logger.i("Loaded ${expenseList.size} expenses for editing", "EditTripScreen")
-                }.onFailure { error ->
-                    MotiumApplication.logger.e("Failed to load expenses: ${error.message}", "EditTripScreen", error)
-                }
+                isProfessional = trip.tripType == "PROFESSIONAL"
             } else {
                 MotiumApplication.logger.e("Trip not found: $tripId", "EditTripScreen")
                 Toast.makeText(context, "Trip not found", Toast.LENGTH_SHORT).show()
@@ -167,6 +160,38 @@ fun EditTripScreen(
             }
 
             isLoading = false
+        }
+    }
+
+    // Auto-recalculate route if distance seems wrong (for old trips with default 5km)
+    LaunchedEffect(startCoordinates, endCoordinates, originalTrip?.totalDistance) {
+        val trip = originalTrip
+        if (!isLoading && trip != null && startCoordinates != null && endCoordinates != null) {
+            val tripDistance = trip.totalDistance
+            // If distance is suspiciously small (< 10km) but we have coordinates, recalculate
+            if (tripDistance < 10000) {
+                MotiumApplication.logger.i("⚠️ Distance seems incorrect (${tripDistance}m < 10km), recalculating route...", "EditTripScreen")
+                isCalculatingRoute = true
+                try {
+                    val route = nominatimService.getRoute(
+                        startCoordinates!!.first,
+                        startCoordinates!!.second,
+                        endCoordinates!!.first,
+                        endCoordinates!!.second
+                    )
+
+                    if (route != null) {
+                        routeCoordinates = route.coordinates
+                        distance = String.format("%.1f", route.distance / 1000)
+                        duration = String.format("%.0f", route.duration / 60)
+                        MotiumApplication.logger.i("✅ Route recalculated: ${distance}km", "EditTripScreen")
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e("Route recalculation error: ${e.message}", "EditTripScreen", e)
+                } finally {
+                    isCalculatingRoute = false
+                }
+            }
         }
     }
 
@@ -246,7 +271,10 @@ fun EditTripScreen(
 
                                 coroutineScope.launch {
                                     try {
-                                        val distanceKm = distance.toDoubleOrNull() ?: 5.0
+                                        // Fix locale issue: replace comma with period before parsing
+                                        val distanceStr = distance.replace(',', '.')
+                                        val distanceKm = distanceStr.toDoubleOrNull() ?: 5.0
+                                        MotiumApplication.logger.i("💾 Saving trip with distance: ${distance} (normalized: ${distanceStr}) -> ${distanceKm}km (${distanceKm * 1000}m)", "EditTripScreen")
                                         val durationMin = duration.toIntOrNull() ?: 15
 
                                         val timeArray = selectedTime.split(":")
@@ -264,20 +292,36 @@ fun EditTripScreen(
                                         val startTimeMs = calendar.timeInMillis
                                         val endTimeMs = startTimeMs + (durationMin * 60 * 1000)
 
-                                        val locations = listOf(
-                                            TripLocation(
-                                                latitude = startCoordinates?.first ?: 0.0,
-                                                longitude = startCoordinates?.second ?: 0.0,
-                                                accuracy = 10.0f,
-                                                timestamp = startTimeMs
-                                            ),
-                                            TripLocation(
-                                                latitude = endCoordinates?.first ?: 0.0,
-                                                longitude = endCoordinates?.second ?: 0.0,
-                                                accuracy = 10.0f,
-                                                timestamp = endTimeMs
+                                        // Use route coordinates if available, otherwise fallback to start/end only
+                                        val routePoints = routeCoordinates
+                                        val locations = if (!routePoints.isNullOrEmpty()) {
+                                            // Use route coordinates with interpolated timestamps
+                                            val timeStep = (endTimeMs - startTimeMs) / routePoints.size.toDouble()
+                                            routePoints.mapIndexed { index, coord ->
+                                                TripLocation(
+                                                    latitude = coord.getOrNull(1) ?: 0.0,
+                                                    longitude = coord.getOrNull(0) ?: 0.0,
+                                                    accuracy = 10.0f,
+                                                    timestamp = (startTimeMs + (index * timeStep)).toLong()
+                                                )
+                                            }
+                                        } else {
+                                            // Fallback to 2-point route (straight line)
+                                            listOf(
+                                                TripLocation(
+                                                    latitude = startCoordinates?.first ?: 0.0,
+                                                    longitude = startCoordinates?.second ?: 0.0,
+                                                    accuracy = 10.0f,
+                                                    timestamp = startTimeMs
+                                                ),
+                                                TripLocation(
+                                                    latitude = endCoordinates?.first ?: 0.0,
+                                                    longitude = endCoordinates?.second ?: 0.0,
+                                                    accuracy = 10.0f,
+                                                    timestamp = endTimeMs
+                                                )
                                             )
-                                        )
+                                        }
 
                                         // Update trip
                                         val updatedTrip = originalTrip!!.copy(
@@ -288,45 +332,15 @@ fun EditTripScreen(
                                             startAddress = startLocation,
                                             endAddress = endLocation,
                                             notes = notes.ifBlank { null },
-                                            vehicleId = selectedVehicleId
+                                            vehicleId = selectedVehicleId,
+                                            tripType = if (isProfessional) "PROFESSIONAL" else "PERSONAL"
                                         )
 
+                                        MotiumApplication.logger.i("✅ Updated trip object: totalDistance=${updatedTrip.totalDistance}m, locations=${updatedTrip.locations.size} points", "EditTripScreen")
                                         tripRepository.saveTrip(updatedTrip)
+                                        MotiumApplication.logger.i("✅ Trip saved to repository", "EditTripScreen")
 
-                                        // Handle expense deletions
-                                        deletedExpenseIds.forEach { expenseId ->
-                                            expenseRepository.deleteExpense(expenseId)
-                                        }
-
-                                        // Save/update expenses
-                                        val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
-                                        val expensesToSave = expenses.mapNotNull { expenseItem ->
-                                            if (expenseItem.amount.isNotBlank()) {
-                                                try {
-                                                    Expense(
-                                                        id = expenseItem.id,
-                                                        tripId = tripId,
-                                                        type = expenseItem.type,
-                                                        amount = expenseItem.amount.toDouble(),
-                                                        note = expenseItem.note,
-                                                        photoUri = expenseItem.photoUri?.toString(),
-                                                        createdAt = now,
-                                                        updatedAt = now
-                                                    )
-                                                } catch (e: NumberFormatException) {
-                                                    MotiumApplication.logger.w("Invalid expense amount: ${expenseItem.amount}", "EditTripScreen")
-                                                    null
-                                                }
-                                            } else {
-                                                null
-                                            }
-                                        }
-
-                                        if (expensesToSave.isNotEmpty()) {
-                                            expenseRepository.saveExpenses(expensesToSave)
-                                        }
-
-                                        MotiumApplication.logger.i("Trip updated: $tripId with ${expensesToSave.size} expenses", "EditTripScreen")
+                                        MotiumApplication.logger.i("Trip updated: $tripId", "EditTripScreen")
                                         Toast.makeText(context, "Trip updated successfully", Toast.LENGTH_SHORT).show()
                                         onTripUpdated()
                                     } catch (e: Exception) {
@@ -379,9 +393,10 @@ fun EditTripScreen(
 
                 // Location fields
                 item {
-                    AddressAutocomplete(
+                    LocationField(
                         label = "Departure Location",
                         value = startLocation,
+                        iconColor = MotiumGreen,
                         onValueChange = { startLocation = it },
                         onAddressSelected = { result ->
                             startCoordinates = result.lat.toDouble() to result.lon.toDouble()
@@ -392,9 +407,10 @@ fun EditTripScreen(
                 }
 
                 item {
-                    AddressAutocomplete(
+                    LocationField(
                         label = "Arrival Location",
                         value = endLocation,
+                        iconColor = Color.Red,
                         onValueChange = { endLocation = it },
                         onAddressSelected = { result ->
                             endCoordinates = result.lat.toDouble() to result.lon.toDouble()
@@ -446,70 +462,27 @@ fun EditTripScreen(
 
                 // Notes section
                 item {
-                    OutlinedTextField(
-                        value = notes,
-                        onValueChange = { notes = it },
-                        label = { Text("Notes") },
-                        placeholder = { Text("Add any notes for this trip...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3,
-                        maxLines = 5
-                    )
-                }
-
-                // Expense Notes section
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Column {
                         Text(
-                            "Expense Notes",
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontWeight = FontWeight.Bold
+                            text = "Notes",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                        OutlinedTextField(
+                            value = notes,
+                            onValueChange = { notes = it },
+                            placeholder = { Text("Add any notes for this trip...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 3,
+                            maxLines = 5,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                             )
                         )
-                        Button(
-                            onClick = {
-                                expenses = expenses + ExpenseItem()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MotiumGreen
-                            ),
-                            shape = RoundedCornerShape(20.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Add,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Add")
-                        }
                     }
-                }
-
-                // Expense items
-                itemsIndexed(expenses) { index, expense ->
-                    ExpenseItemCard(
-                        expense = expense,
-                        onExpenseChange = { updatedExpense ->
-                            expenses = expenses.toMutableList().apply {
-                                set(index, updatedExpense)
-                            }
-                        },
-                        onRemove = {
-                            // Track deleted existing expenses
-                            if (expense.isExisting && expense.id in originalExpenseIds) {
-                                deletedExpenseIds = deletedExpenseIds + expense.id
-                            }
-                            expenses = expenses.toMutableList().apply {
-                                removeAt(index)
-                            }
-                        }
-                    )
                 }
             }
         }
@@ -523,21 +496,34 @@ fun DateTimeField(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = {},
-        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-        readOnly = true,
-        leadingIcon = {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            leadingIcon = {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyMedium,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedBorderColor = Color.Transparent
             )
-        },
-        modifier = modifier,
-        textStyle = MaterialTheme.typography.bodyMedium
-    )
+        )
+    }
 }
 
 @Composable
@@ -547,25 +533,68 @@ fun ReadOnlyField(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = {},
-        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-        readOnly = true,
-        leadingIcon = {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        },
-        modifier = modifier,
-        colors = OutlinedTextFieldDefaults.colors(
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-        ),
-        enabled = false
-    )
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            leadingIcon = {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                disabledBorderColor = Color.Transparent,
+                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            ),
+            enabled = false
+        )
+    }
+}
+
+@Composable
+fun LocationField(
+    label: String,
+    value: String,
+    iconColor: Color,
+    onValueChange: (String) -> Unit,
+    onAddressSelected: (com.application.motium.data.geocoding.NominatimResult) -> Unit
+) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        AddressAutocomplete(
+            label = "",
+            value = value,
+            onValueChange = onValueChange,
+            onAddressSelected = onAddressSelected,
+            placeholder = "Enter address",
+            leadingIcon = {
+                Icon(
+                    Icons.Default.LocationOn,
+                    contentDescription = null,
+                    tint = iconColor
+                )
+            }
+        )
+    }
 }
 
 @Composable
@@ -608,7 +637,7 @@ fun ProfessionalTripToggle(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExpenseItemCard(
+fun ExpenseItemRow(
     expense: ExpenseItem,
     onExpenseChange: (ExpenseItem) -> Unit,
     onRemove: () -> Unit
@@ -635,97 +664,137 @@ fun ExpenseItemCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        border = CardDefaults.outlinedCardBorder()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Type and Amount row
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Type dropdown
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = it },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Type") },
-                        trailingIcon = {
-                            Icon(
-                                Icons.Default.ExpandMore,
-                                contentDescription = null
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
-                        textStyle = MaterialTheme.typography.bodyMedium
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Type",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 4.dp)
                     )
-                    ExposedDropdownMenu(
+                    ExposedDropdownMenuBox(
                         expanded = expanded,
-                        onDismissRequest = { expanded = false }
+                        onExpandedChange = { expanded = it }
                     ) {
-                        expenseTypes.forEach { (type, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    onExpenseChange(expense.copy(type = type))
-                                    expanded = false
-                                }
+                        OutlinedTextField(
+                            value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.ExpandMore,
+                                    contentDescription = null
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                             )
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            expenseTypes.forEach { (type, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        onExpenseChange(expense.copy(type = type))
+                                        expanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
                 // Amount field
-                OutlinedTextField(
-                    value = expense.amount,
-                    onValueChange = { onExpenseChange(expense.copy(amount = it)) },
-                    label = { Text("Amount") },
-                    leadingIcon = { Text("$", fontWeight = FontWeight.Bold) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("0.00") }
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Amount",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = expense.amount,
+                        onValueChange = { onExpenseChange(expense.copy(amount = it)) },
+                        leadingIcon = { Text("€", fontWeight = FontWeight.Bold) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("0.00") },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        )
+                    )
+                }
             }
 
             // Note field
-            OutlinedTextField(
-                value = expense.note,
-                onValueChange = { onExpenseChange(expense.copy(note = it)) },
-                label = { Text("Note (Optional)") },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("e.g., Gas station receipt") }
-            )
+            Column {
+                Text(
+                    text = "Note (Optional)",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                OutlinedTextField(
+                    value = expense.note,
+                    onValueChange = { onExpenseChange(expense.copy(note = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("e.g., Gas station receipt") },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                    )
+                )
+            }
 
-            // Photo button
+            // Photo and Remove buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedButton(
-                    onClick = { imagePickerLauncher.launch("image/*") }
+                    onClick = { imagePickerLauncher.launch("image/*") },
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(
                         Icons.Default.CameraAlt,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (expense.photoUri != null) "Photo added" else "Add photo")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        if (expense.photoUri != null) "Photo added" else "Add photo",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
 
                 TextButton(
@@ -734,7 +803,7 @@ fun ExpenseItemCard(
                         contentColor = Color.Red
                     )
                 ) {
-                    Text("Remove")
+                    Text("Remove", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

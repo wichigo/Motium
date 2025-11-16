@@ -37,6 +37,7 @@ data class Trip(
     val startAddress: String? = null,
     val endAddress: String? = null,
     val notes: String? = null,  // Notes générales du trajet
+    val tripType: String? = null,  // "PROFESSIONAL" or "PERSONAL"
     val createdAt: Long = System.currentTimeMillis(),  // Timestamp de création
     val updatedAt: Long = System.currentTimeMillis(),   // Timestamp de mise à jour
     val lastSyncedAt: Long? = null,  // SYNC OPTIMIZATION: Timestamp de dernière synchronisation vers Supabase
@@ -366,7 +367,11 @@ private fun Trip.toDomainTrip(userId: String = ""): DomainTrip {
         endAddress = this.endAddress, // From data Trip
         distanceKm = totalDistance / 1000.0, // Convert meters to km
         durationMs = (endTime ?: System.currentTimeMillis()) - startTime,
-        type = TripType.PERSONAL, // Default to personal
+        type = when(this.tripType) {
+            "PROFESSIONAL" -> TripType.PROFESSIONAL
+            "PERSONAL" -> TripType.PERSONAL
+            else -> TripType.PERSONAL // Default to personal if null/unknown
+        },
         isValidated = isValidated,
         cost = 0.0, // Default cost
         tracePoints = locationPoints,
@@ -400,6 +405,10 @@ private fun DomainTrip.toDataTrip(): Trip {
         vehicleId = vehicleId,
         startAddress = startAddress,
         endAddress = endAddress,
+        tripType = when(type) {
+            TripType.PROFESSIONAL -> "PROFESSIONAL"
+            TripType.PERSONAL -> "PERSONAL"
+        },
         createdAt = createdAt.toEpochMilliseconds(),  // Preserve creation time
         updatedAt = updatedAt.toEpochMilliseconds(),  // Preserve update time
         lastSyncedAt = System.currentTimeMillis(),  // 🔧 FIX: Mark as synced since it came from Supabase

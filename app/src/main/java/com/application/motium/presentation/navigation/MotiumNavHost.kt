@@ -22,6 +22,8 @@ import com.application.motium.presentation.individual.settings.SettingsScreen
 import com.application.motium.presentation.individual.tripdetails.TripDetailsScreen
 import com.application.motium.presentation.individual.addtrip.AddTripScreen
 import com.application.motium.presentation.individual.edittrip.EditTripScreen
+import com.application.motium.presentation.individual.expense.AddExpenseScreen
+import com.application.motium.presentation.individual.expense.ExpenseDetailsScreen
 import com.application.motium.presentation.debug.LogViewerScreen
 import com.application.motium.presentation.splash.SplashScreen
 import com.application.motium.presentation.enterprise.home.EnterpriseHomeScreen
@@ -37,6 +39,7 @@ import com.application.motium.MotiumApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun MotiumNavHost(
@@ -123,6 +126,13 @@ fun MotiumNavHost(
                     navController.navigate("trip_details/$tripId")
                 },
                 onNavigateToAddTrip = { navController.navigate("add_trip") },
+                onNavigateToAddExpense = { tripId ->
+                    navController.navigate("add_expense/$tripId")
+                },
+                onNavigateToExpenseDetails = { dateLabel, tripIds ->
+                    val tripIdsStr = tripIds.joinToString(",")
+                    navController.navigate("expense_details/$dateLabel/$tripIdsStr")
+                },
                 authViewModel = authViewModel
             )
         }
@@ -130,21 +140,32 @@ fun MotiumNavHost(
         composable("add_trip") {
             val context = LocalContext.current
             val tripRepository = TripRepository.getInstance(context)
-            val expenseRepository = SupabaseExpenseRepository.getInstance(context)
 
             AddTripScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onTripSaved = { trip, expenses ->
+                onTripSaved = { trip ->
                     CoroutineScope(Dispatchers.IO).launch {
-                        // Save trip first
-                        tripRepository.saveTrip(trip)
+                        try {
+                            // Save trip (this also syncs to Supabase)
+                            MotiumApplication.logger.i("💾 Saving trip: ${trip.id}, distance=${trip.totalDistance}m, vehicle=${trip.vehicleId}, type=${trip.tripType}", "MotiumNavHost")
+                            tripRepository.saveTrip(trip)
+                            MotiumApplication.logger.i("✅ Trip saved: ${trip.id}", "MotiumNavHost")
 
-                        // Then save expenses if any
-                        if (expenses.isNotEmpty()) {
-                            expenseRepository.saveExpenses(expenses)
+                            // Navigate back on main thread
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                navController.popBackStack()
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("❌ Failed to save trip: ${e.message}", "MotiumNavHost", e)
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Failed to save trip: ${e.message}",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }
-                    navController.popBackStack()
                 }
             )
         }
@@ -175,6 +196,37 @@ fun MotiumNavHost(
                 onTripUpdated = {
                     navController.popBackStack()
                 }
+            )
+        }
+
+        composable(
+            route = "add_expense/{tripId}",
+            arguments = listOf(navArgument("tripId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            AddExpenseScreen(
+                tripId = tripId,
+                onNavigateBack = { navController.popBackStack() },
+                onExpenseSaved = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
+            route = "expense_details/{dateLabel}/{tripIds}",
+            arguments = listOf(
+                navArgument("dateLabel") { type = NavType.StringType },
+                navArgument("tripIds") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val dateLabel = backStackEntry.arguments?.getString("dateLabel") ?: ""
+            val tripIdsStr = backStackEntry.arguments?.getString("tripIds") ?: ""
+            val tripIds = tripIdsStr.split(",").filter { it.isNotBlank() }
+            ExpenseDetailsScreen(
+                dateLabel = dateLabel,
+                tripIds = tripIds,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

@@ -38,11 +38,18 @@ fun AddressAutocomplete(
     var showSuggestions by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var isProgrammaticChange by remember { mutableStateOf(false) }
+    var isInitialLoad by remember { mutableStateOf(true) }
 
     val nominatimService = remember { NominatimService.getInstance() }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(value) {
+        // Ignorer le chargement initial (quand on pré-remplit le champ)
+        if (isInitialLoad) {
+            isInitialLoad = false
+            return@LaunchedEffect
+        }
+
         // Ignorer les changements programmatiques (quand on sélectionne une suggestion)
         if (isProgrammaticChange) {
             isProgrammaticChange = false

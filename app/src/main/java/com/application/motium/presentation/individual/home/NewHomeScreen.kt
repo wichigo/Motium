@@ -50,6 +50,8 @@ fun NewHomeScreen(
     onNavigateToSettings: () -> Unit = {},
     onNavigateToTripDetails: (String) -> Unit = {},
     onNavigateToAddTrip: () -> Unit = {},
+    onNavigateToAddExpense: (String) -> Unit = {},
+    onNavigateToExpenseDetails: (String, List<String>) -> Unit = { _, _ -> },
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -291,14 +293,53 @@ fun NewHomeScreen(
                 // Liste des trips groupés par date
                 groupedTrips.forEach { (dateLabel, tripsForDate) ->
                     item {
-                        Text(
-                            dateLabel,
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = textColor,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp, bottom = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                dateLabel,
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = textColor
+                            )
+
+                            // Buttons for expenses
+                            if (tripsForDate.isNotEmpty()) {
+                                Row {
+                                    // Button to view expense details for this day
+                                    IconButton(
+                                        onClick = {
+                                            val tripIds = tripsForDate.map { it.id }
+                                            onNavigateToExpenseDetails(dateLabel, tripIds)
+                                        }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Visibility,
+                                            contentDescription = "View Expenses",
+                                            tint = MotiumPrimary
+                                        )
+                                    }
+
+                                    // Button to add expense for the first trip of the day
+                                    IconButton(
+                                        onClick = {
+                                            onNavigateToAddExpense(tripsForDate.first().id)
+                                        }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Receipt,
+                                            contentDescription = "Add Expense",
+                                            tint = MotiumGreen
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     items(
