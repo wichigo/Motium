@@ -102,6 +102,9 @@ dependencies {
     // ML Kit Text Recognition (on-device, free)
     implementation("com.google.mlkit:text-recognition:16.0.1")
 
+    // Coil for image loading
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
     // OSMDroid for maps
     implementation(libs.osmdroid.android)
 

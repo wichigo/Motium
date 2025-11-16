@@ -1,6 +1,8 @@
 package com.application.motium.presentation.individual.expense
 
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,10 +14,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseExpenseRepository
@@ -41,6 +46,59 @@ fun ExpenseDetailsScreen(
     var isLoading by remember { mutableStateOf(true) }
     var totalTTC by remember { mutableStateOf(0.0) }
     var totalHT by remember { mutableStateOf(0.0) }
+    var selectedPhotoUri by remember { mutableStateOf<String?>(null) }
+
+    // Photo viewer dialog
+    selectedPhotoUri?.let { photoUri ->
+        Dialog(onDismissRequest = { selectedPhotoUri = null }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column {
+                    // Header with close button
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Receipt Photo",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                        IconButton(onClick = { selectedPhotoUri = null }) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    // Photo
+                    AsyncImage(
+                        model = Uri.parse(photoUri),
+                        contentDescription = "Receipt photo",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 500.dp)
+                            .padding(16.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+            }
+        }
+    }
 
     // Load all expenses for the trips of this day
     LaunchedEffect(tripIds) {
@@ -233,7 +291,12 @@ fun ExpenseDetailsScreen(
                     }
                 } else {
                     items(expenses) { expense ->
-                        ExpenseCard(expense = expense)
+                        ExpenseCard(
+                            expense = expense,
+                            onPhotoClick = { photoUri ->
+                                selectedPhotoUri = photoUri
+                            }
+                        )
                     }
                 }
             }
@@ -242,7 +305,10 @@ fun ExpenseDetailsScreen(
 }
 
 @Composable
-fun ExpenseCard(expense: Expense) {
+fun ExpenseCard(
+    expense: Expense,
+    onPhotoClick: (String) -> Unit = {}
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -280,12 +346,17 @@ fun ExpenseCard(expense: Expense) {
                 }
 
                 if (expense.photoUri != null) {
-                    Icon(
-                        Icons.Default.CameraAlt,
-                        contentDescription = "Has photo",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.size(20.dp)
-                    )
+                    IconButton(
+                        onClick = { onPhotoClick(expense.photoUri) },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.CameraAlt,
+                            contentDescription = "View photo",
+                            tint = MotiumGreen,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 
