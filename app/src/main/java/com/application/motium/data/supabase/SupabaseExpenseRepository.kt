@@ -153,6 +153,39 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     }
 
     /**
+     * Get all expenses for multiple trips in a single query (optimized for batch export)
+     */
+    suspend fun getExpensesForTrips(tripIds: List<String>): Result<Map<String, List<Expense>>> = withContext(Dispatchers.IO) {
+        try {
+            if (tripIds.isEmpty()) {
+                return@withContext Result.success(emptyMap())
+            }
+
+            MotiumApplication.logger.i("Fetching expenses for ${tripIds.size} trips in batch", "SupabaseExpenseRepository")
+
+            val supabaseExpenses = postgres
+                .from("expenses_trips")
+                .select {
+                    filter {
+                        isIn("trip_id", tripIds)
+                    }
+                }
+                .decodeList<SupabaseExpense>()
+
+            // Group expenses by trip_id
+            val expensesByTrip = supabaseExpenses
+                .map { it.toExpense() }
+                .groupBy { it.tripId }
+
+            MotiumApplication.logger.i("Fetched ${supabaseExpenses.size} expenses for ${tripIds.size} trips in batch", "SupabaseExpenseRepository")
+            Result.success(expensesByTrip)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error fetching expenses in batch: ${e.message}", "SupabaseExpenseRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Delete an expense
      */
     suspend fun deleteExpense(expenseId: String): Result<Unit> = withContext(Dispatchers.IO) {

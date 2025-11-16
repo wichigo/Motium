@@ -60,6 +60,32 @@ class SupabaseStorageService(private val context: Context) {
     }
 
     /**
+     * Download a receipt photo from Supabase Storage
+     * @param photoUrl The public URL of the photo to download
+     * @return Result with the photo bytes
+     */
+    suspend fun downloadReceiptPhoto(photoUrl: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("📥 Downloading receipt photo from Supabase Storage", "SupabaseStorage")
+
+            // Extract file path from URL
+            val filePath = extractFilePathFromUrl(photoUrl) ?: return@withContext Result.failure(
+                Exception("Invalid photo URL")
+            )
+
+            // Download from Supabase Storage
+            val photoBytes = storage.from(RECEIPTS_BUCKET).downloadAuthenticated(filePath)
+
+            MotiumApplication.logger.i("✅ Receipt photo downloaded successfully: $filePath", "SupabaseStorage")
+            Result.success(photoBytes)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to download receipt photo: ${e.message}", "SupabaseStorage", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Delete a receipt photo from Supabase Storage
      * @param photoUrl The public URL of the photo to delete
      */

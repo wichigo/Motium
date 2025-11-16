@@ -6,6 +6,7 @@ import androidx.core.content.FileProvider
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.supabase.SupabaseExpenseRepository
+import com.application.motium.service.SupabaseStorageService
 import com.application.motium.domain.model.Expense
 import com.itextpdf.kernel.colors.Color
 import com.itextpdf.kernel.colors.DeviceRgb
@@ -44,13 +45,23 @@ class ExportManager(private val context: Context) {
     }
 
     private val expenseRepository = SupabaseExpenseRepository.getInstance(context)
+    private val storageService = SupabaseStorageService.getInstance(context)
 
     /**
-     * Charge les expenses pour une liste de trips
+     * Charge les expenses pour une liste de trips en une seule requête batch (optimisé)
      */
     private suspend fun loadExpensesForTrips(trips: List<Trip>): List<TripWithExpenses> {
+        if (trips.isEmpty()) {
+            return emptyList()
+        }
+
+        // Charger toutes les expenses en une seule requête
+        val tripIds = trips.map { it.id }
+        val expensesByTrip = expenseRepository.getExpensesForTrips(tripIds).getOrNull() ?: emptyMap()
+
+        // Mapper les trips avec leurs expenses
         return trips.map { trip ->
-            val expenses = expenseRepository.getExpensesForTrip(trip.id).getOrNull() ?: emptyList()
+            val expenses = expensesByTrip[trip.id] ?: emptyList()
             TripWithExpenses(trip, expenses)
         }
     }
@@ -521,21 +532,32 @@ class ExportManager(private val context: Context) {
                     if (expense.photoUri != null) {
                         try {
                             // L'URI peut être soit un chemin local soit une URL Supabase
-                            val imageFile = if (expense.photoUri.startsWith("content://") || expense.photoUri.startsWith("file://")) {
-                                // C'est un URI local, on peut le charger directement
-                                val uri = android.net.Uri.parse(expense.photoUri)
-                                val inputStream = context.contentResolver.openInputStream(uri)
-                                inputStream?.use { stream ->
-                                    val bytes = stream.readBytes()
-                                    com.itextpdf.io.image.ImageDataFactory.create(bytes)
+                            val imageData = when {
+                                expense.photoUri.startsWith("content://") || expense.photoUri.startsWith("file://") -> {
+                                    // C'est un URI local, on peut le charger directement
+                                    val uri = android.net.Uri.parse(expense.photoUri)
+                                    val inputStream = context.contentResolver.openInputStream(uri)
+                                    inputStream?.use { stream ->
+                                        stream.readBytes()
+                                    }
                                 }
-                            } else {
-                                // C'est une URL Supabase, on peut essayer de la charger
-                                // Pour l'instant, on skip car ça nécessiterait un appel réseau
-                                null
+                                expense.photoUri.startsWith("http://") || expense.photoUri.startsWith("https://") -> {
+                                    // C'est une URL Supabase, il faut la télécharger
+                                    runBlocking {
+                                        try {
+                                            MotiumApplication.logger.i("Downloading photo from Supabase: ${expense.photoUri}", "ExportManager")
+                                            storageService.downloadReceiptPhoto(expense.photoUri).getOrNull()
+                                        } catch (e: Exception) {
+                                            MotiumApplication.logger.e("Error downloading photo from Supabase: ${e.message}", "ExportManager", e)
+                                            null
+                                        }
+                                    }
+                                }
+                                else -> null
                             }
 
-                            if (imageFile != null) {
+                            if (imageData != null) {
+                                val imageFile = com.itextpdf.io.image.ImageDataFactory.create(imageData)
                                 val image = com.itextpdf.layout.element.Image(imageFile)
                                     .setWidth(UnitValue.createPercentValue(40f))
                                     .setMarginTop(5f)
@@ -549,7 +571,7 @@ class ExportManager(private val context: Context) {
                             }
                         } catch (e: Exception) {
                             MotiumApplication.logger.e("Failed to add photo to PDF: ${e.message}", "ExportManager", e)
-                            document.add(Paragraph("Erreur lors du chargement de la photo")
+                            document.add(Paragraph("Erreur lors du chargement de la photo: ${e.message}")
                                 .setFontSize(8f)
                                 .setFontColor(GRAY_DARK)
                                 .setMarginBottom(15f))

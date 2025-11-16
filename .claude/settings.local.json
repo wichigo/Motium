@@ -63,7 +63,9 @@
       "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" compileDebugKotlin --refresh-dependencies)",
       "Bash(del /S \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\data\\local\")",
       "Bash(git check-ignore:*)",
-      "Bash(npm i:*)"
+      "Bash(npm i:*)",
+      "Bash(git restore:*)",
+      "Bash(del appsrcmainjavacomapplicationmotiumutilsFileUtils.kt)"
     ],
     "deny": [],
     "ask": []
