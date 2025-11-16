@@ -202,20 +202,6 @@ fun AddExpenseScreen(
                 )
             }
 
-            // Amount TTC
-            item {
-                AmountField(
-                    label = "Amount TTC",
-                    value = amountTTC,
-                    onValueChange = {
-                        amountTTC = it
-                        isAutoFilled = false
-                    },
-                    isMandatory = true,
-                    isAutoDetected = isAutoFilled && amountTTC.isNotBlank()
-                )
-            }
-
             // Amount HT
             item {
                 AmountField(
@@ -227,6 +213,20 @@ fun AddExpenseScreen(
                     },
                     isMandatory = false,
                     isAutoDetected = isAutoFilled && amountHT.isNotBlank()
+                )
+            }
+
+            // Amount TTC
+            item {
+                AmountField(
+                    label = "Amount TTC",
+                    value = amountTTC,
+                    onValueChange = {
+                        amountTTC = it
+                        isAutoFilled = false
+                    },
+                    isMandatory = true,
+                    isAutoDetected = isAutoFilled && amountTTC.isNotBlank()
                 )
             }
 
