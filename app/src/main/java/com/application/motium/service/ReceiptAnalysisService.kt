@@ -1,21 +1,16 @@
 package com.application.motium.service
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Base64
-import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.io.ByteArrayOutputStream
+import java.util.regex.Pattern
 
 @Serializable
 data class ReceiptAnalysisResult(
@@ -26,8 +21,7 @@ data class ReceiptAnalysisResult(
 
 class ReceiptAnalysisService(private val context: Context) {
 
-    private val client = HttpClient()
-    private val json = Json { ignoreUnknownKeys = true }
+    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     companion object {
         @Volatile
@@ -41,24 +35,27 @@ class ReceiptAnalysisService(private val context: Context) {
     }
 
     /**
-     * Analyze a receipt image and extract amounts
+     * Analyze a receipt image and extract amounts using ML Kit (on-device, free)
      */
     suspend fun analyzeReceipt(imageUri: Uri): Result<ReceiptAnalysisResult> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("🔍 Analyzing receipt image: $imageUri", "ReceiptAnalysis")
+            MotiumApplication.logger.i("🔍 Analyzing receipt image with ML Kit: $imageUri", "ReceiptAnalysis")
 
-            // Convert image to base64
-            val base64Image = imageUriToBase64(imageUri)
-            if (base64Image == null) {
-                MotiumApplication.logger.e("❌ Failed to convert image to base64", "ReceiptAnalysis")
-                return@withContext Result.failure(Exception("Failed to convert image"))
-            }
+            // Create InputImage from URI
+            val image = InputImage.fromFilePath(context, imageUri)
 
-            // Call Claude API
-            val response = callClaudeVisionAPI(base64Image)
+            // Perform OCR using ML Kit
+            val visionText = recognizer.process(image).await()
 
-            MotiumApplication.logger.i("✅ Receipt analysis completed: TTC=${response.amountTTC}, HT=${response.amountHT}", "ReceiptAnalysis")
-            Result.success(response)
+            // Extract all text
+            val fullText = visionText.text
+            MotiumApplication.logger.d("📝 OCR Text extracted: $fullText", "ReceiptAnalysis")
+
+            // Parse amounts from text
+            val result = parseAmountsFromText(fullText)
+
+            MotiumApplication.logger.i("✅ Receipt analysis completed: TTC=${result.amountTTC}, HT=${result.amountHT}", "ReceiptAnalysis")
+            Result.success(result)
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error analyzing receipt: ${e.message}", "ReceiptAnalysis", e)
@@ -67,129 +64,118 @@ class ReceiptAnalysisService(private val context: Context) {
     }
 
     /**
-     * Convert image URI to base64 string
+     * Parse amounts from OCR text
+     * Looks for common patterns like "Total TTC", "Montant TTC", "Total HT", etc.
      */
-    private fun imageUriToBase64(uri: Uri): String? {
-        return try {
-            val inputStream = context.contentResolver.openInputStream(uri)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
+    private fun parseAmountsFromText(text: String): ReceiptAnalysisResult {
+        var amountTTC: Double? = null
+        var amountHT: Double? = null
 
-            // Resize image if too large (max 1024x1024 to save bandwidth)
-            val resizedBitmap = if (bitmap.width > 1024 || bitmap.height > 1024) {
-                val ratio = minOf(1024f / bitmap.width, 1024f / bitmap.height)
-                val width = (bitmap.width * ratio).toInt()
-                val height = (bitmap.height * ratio).toInt()
-                Bitmap.createScaledBitmap(bitmap, width, height, true)
-            } else {
-                bitmap
-            }
+        try {
+            // Normalize text: replace common separators
+            val normalizedText = text
+                .replace(",", ".")  // French decimal separator
+                .replace("€", " EUR ")
+                .replace("EUR", " EUR ")
 
-            // Convert to JPEG and encode to base64
-            val outputStream = ByteArrayOutputStream()
-            resizedBitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-            val byteArray = outputStream.toByteArray()
-            Base64.encodeToString(byteArray, Base64.NO_WRAP)
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error converting image to base64: ${e.message}", "ReceiptAnalysis", e)
-            null
-        }
-    }
+            // Split into lines for better parsing
+            val lines = normalizedText.lines()
 
-    /**
-     * Call Claude Vision API to analyze receipt
-     */
-    private suspend fun callClaudeVisionAPI(base64Image: String): ReceiptAnalysisResult {
-        val apiKey = BuildConfig.CLAUDE_API_KEY
+            // Patterns for TTC (Total, Montant TTC, Total TTC, etc.)
+            val ttcPatterns = listOf(
+                Pattern.compile("(?i)(total|montant|à payer).*?ttc.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)total.*?([0-9]+[.,][0-9]{2})\\s*€?\\s*$", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)à payer.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)net à payer.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)total ttc.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE)
+            )
 
-        val requestBody = """
-        {
-            "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": 1024,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": "$base64Image"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Analyse cette facture/reçu et extrait les montants suivants:\n- Montant TTC (Toutes Taxes Comprises) ou montant total\n- Montant HT (Hors Taxes) si présent\n\nRéponds UNIQUEMENT au format JSON suivant, sans texte supplémentaire:\n{\n  \"amountTTC\": <nombre ou null>,\n  \"amountHT\": <nombre ou null>\n}\n\nUtilise le point comme séparateur décimal (pas de virgule). Si un montant n'est pas trouvé, mets null."
+            // Patterns for HT (Montant HT, Total HT, Sous-total HT, etc.)
+            val htPatterns = listOf(
+                Pattern.compile("(?i)(total|montant|sous.?total).*?ht.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)total ht.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)sous.?total.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE)
+            )
+
+            // Try to find TTC amount
+            for (pattern in ttcPatterns) {
+                for (line in lines) {
+                    val matcher = pattern.matcher(line)
+                    if (matcher.find()) {
+                        val amountStr = matcher.group(matcher.groupCount()).replace(",", ".")
+                        amountTTC = amountStr.toDoubleOrNull()
+                        if (amountTTC != null) {
+                            MotiumApplication.logger.d("Found TTC: $amountTTC from line: $line", "ReceiptAnalysis")
+                            break
                         }
-                    ]
+                    }
                 }
-            ]
-        }
-        """.trimIndent()
-
-        return try {
-            val response: HttpResponse = client.post("https://api.anthropic.com/v1/messages") {
-                headers {
-                    append("x-api-key", apiKey)
-                    append("anthropic-version", "2023-06-01")
-                    append("content-type", "application/json")
-                }
-                setBody(requestBody)
+                if (amountTTC != null) break
             }
 
-            val responseBody = response.bodyAsText()
-            MotiumApplication.logger.d("Claude API Response: $responseBody", "ReceiptAnalysis")
+            // Try to find HT amount
+            for (pattern in htPatterns) {
+                for (line in lines) {
+                    val matcher = pattern.matcher(line)
+                    if (matcher.find()) {
+                        val amountStr = matcher.group(matcher.groupCount()).replace(",", ".")
+                        amountHT = amountStr.toDoubleOrNull()
+                        if (amountHT != null) {
+                            MotiumApplication.logger.d("Found HT: $amountHT from line: $line", "ReceiptAnalysis")
+                            break
+                        }
+                    }
+                }
+                if (amountHT != null) break
+            }
 
-            // Parse Claude's response
-            parseClaudeResponse(responseBody)
+            // If we didn't find TTC but found HT, try to find the largest amount as TTC
+            if (amountTTC == null && amountHT != null) {
+                val allAmounts = extractAllAmounts(normalizedText)
+                amountTTC = allAmounts.filter { it > (amountHT ?: 0.0) }.maxOrNull()
+                MotiumApplication.logger.d("Inferred TTC from largest amount: $amountTTC", "ReceiptAnalysis")
+            }
+
+            // If we only found one amount and no keywords, assume it's TTC (total)
+            if (amountTTC == null && amountHT == null) {
+                val allAmounts = extractAllAmounts(normalizedText)
+                if (allAmounts.isNotEmpty()) {
+                    // Take the largest amount as TTC
+                    amountTTC = allAmounts.maxOrNull()
+                    MotiumApplication.logger.d("Using largest amount as TTC: $amountTTC", "ReceiptAnalysis")
+                }
+            }
 
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error calling Claude API: ${e.message}", "ReceiptAnalysis", e)
-            throw e
+            MotiumApplication.logger.e("Error parsing amounts: ${e.message}", "ReceiptAnalysis", e)
         }
+
+        val confidence = when {
+            amountTTC != null && amountHT != null -> "high"
+            amountTTC != null -> "medium"
+            else -> "low"
+        }
+
+        return ReceiptAnalysisResult(
+            amountTTC = amountTTC,
+            amountHT = amountHT,
+            confidence = confidence
+        )
     }
 
     /**
-     * Parse Claude's response to extract amounts
+     * Extract all monetary amounts from text
      */
-    private fun parseClaudeResponse(responseBody: String): ReceiptAnalysisResult {
-        return try {
-            // Parse the Claude API response structure
-            @Serializable
-            data class ClaudeContent(val text: String, val type: String)
-            @Serializable
-            data class ClaudeResponse(val content: List<ClaudeContent>)
+    private fun extractAllAmounts(text: String): List<Double> {
+        val amounts = mutableListOf<Double>()
+        val pattern = Pattern.compile("([0-9]+[.,][0-9]{2})(?:\\s*€)?")
+        val matcher = pattern.matcher(text)
 
-            val claudeResponse = json.decodeFromString<ClaudeResponse>(responseBody)
-            val textContent = claudeResponse.content.firstOrNull { it.type == "text" }?.text
-
-            if (textContent != null) {
-                // Extract JSON from the text (might have markdown code blocks)
-                val jsonText = textContent
-                    .replace("```json", "")
-                    .replace("```", "")
-                    .trim()
-
-                MotiumApplication.logger.d("Extracted JSON: $jsonText", "ReceiptAnalysis")
-
-                // Parse the amounts
-                @Serializable
-                data class AmountsResponse(val amountTTC: Double? = null, val amountHT: Double? = null)
-
-                val amounts = json.decodeFromString<AmountsResponse>(jsonText)
-                ReceiptAnalysisResult(
-                    amountTTC = amounts.amountTTC,
-                    amountHT = amounts.amountHT,
-                    confidence = if (amounts.amountTTC != null) "high" else "low"
-                )
-            } else {
-                MotiumApplication.logger.w("No text content in Claude response", "ReceiptAnalysis")
-                ReceiptAnalysisResult()
-            }
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error parsing Claude response: ${e.message}", "ReceiptAnalysis", e)
-            ReceiptAnalysisResult()
+        while (matcher.find()) {
+            val amountStr = matcher.group(1).replace(",", ".")
+            amountStr.toDoubleOrNull()?.let { amounts.add(it) }
         }
+
+        return amounts.distinct().sorted()
     }
 }

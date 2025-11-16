@@ -23,9 +23,6 @@ android {
         // Build config for Supabase keys
         buildConfigField("String", "SUPABASE_URL", "\"https://hjknuqqtmvbfvrmvvtxh.supabase.co\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhqa251cXF0bXZiZnZybXZ2dHhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3MTA0MjIsImV4cCI6MjA3NDI4NjQyMn0.VLh94hdp1Q1OFcKx-yM3j2EifxC5KJjUQEyZ7eMFOIk\"")
-
-        // Build config for Claude API (for receipt OCR)
-        buildConfigField("String", "CLAUDE_API_KEY", "\"sk-ant-api03-LjCHAzFuOOi-oQwp64X3wUGd1Yxk28q3j99Ue6NfqcBjwSI7wZ-4k-vhPhW2h3VRZfgE4t88xkO_2kVm-Xy4OQ-sY2QMAAA\"")
     }
 
     buildTypes {
@@ -101,6 +98,9 @@ dependencies {
 
     // Google Sign-In
     implementation(libs.play.services.auth)
+
+    // ML Kit Text Recognition (on-device, free)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     // OSMDroid for maps
     implementation(libs.osmdroid.android)
