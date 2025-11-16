@@ -11,8 +11,7 @@ import java.util.UUID
 
 class SupabaseStorageService(private val context: Context) {
 
-    private val supabaseClient = SupabaseClient.getInstance(context)
-    private val storage = supabaseClient.client.storage
+    private val storage = SupabaseClient.client.storage
 
     companion object {
         @Volatile
