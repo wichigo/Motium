@@ -8,6 +8,7 @@ import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
+import io.github.jan.supabase.storage.Storage
 import io.ktor.client.engine.android.Android
 import kotlin.time.Duration.Companion.seconds
 
@@ -49,6 +50,7 @@ object SupabaseClient {
                 // Le module Realtime gère automatiquement la reconnexion
                 heartbeatInterval = 15.seconds // Réduit à 15s pour détection rapide de déconnexion
             }
+            install(Storage)
 
             // Configurer le moteur HTTP Android avec timeouts plus longs et retry
             httpEngine = Android.create {

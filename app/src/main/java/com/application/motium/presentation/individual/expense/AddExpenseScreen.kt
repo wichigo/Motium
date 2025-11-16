@@ -42,6 +42,7 @@ fun AddExpenseScreen(
     val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
     val tripRepository = remember { TripRepository.getInstance(context) }
     val receiptAnalysisService = remember { ReceiptAnalysisService.getInstance(context) }
+    val storageService = remember { com.application.motium.service.SupabaseStorageService.getInstance(context) }
 
     // Expense fields
     var selectedType by remember { mutableStateOf(ExpenseType.FUEL) }
@@ -63,12 +64,11 @@ fun AddExpenseScreen(
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        photoUri = uri
-
-        // Automatically analyze receipt when photo is selected
+        // Automatically analyze and upload receipt when photo is selected
         if (uri != null) {
             isAnalyzingReceipt = true
             coroutineScope.launch {
+                // First, analyze the receipt for amounts (using original URI for better quality)
                 receiptAnalysisService.analyzeReceipt(uri).onSuccess { result ->
                     // Auto-fill amounts if found
                     result.amountTTC?.let { ttc ->
@@ -86,21 +86,31 @@ fun AddExpenseScreen(
                             "Amounts detected automatically ✓",
                             Toast.LENGTH_SHORT
                         ).show()
-                    } else {
+                    }
+                }.onFailure { error ->
+                    MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "AddExpenseScreen", error)
+                }
+
+                // Then upload the photo to Supabase Storage
+                storageService.uploadReceiptPhoto(uri).onSuccess { publicUrl ->
+                    photoUri = Uri.parse(publicUrl)
+                    MotiumApplication.logger.i("Receipt photo uploaded: $publicUrl", "AddExpenseScreen")
+                    if (amountTTC.isBlank() && amountHT.isBlank()) {
                         Toast.makeText(
                             context,
-                            "Could not detect amounts, please enter manually",
+                            "Photo uploaded, please enter amounts manually",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
                 }.onFailure { error ->
-                    MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "AddExpenseScreen", error)
+                    MotiumApplication.logger.e("Failed to upload receipt photo: ${error.message}", "AddExpenseScreen", error)
                     Toast.makeText(
                         context,
-                        "Analysis failed, please enter amounts manually",
-                        Toast.LENGTH_SHORT
+                        "Failed to upload photo: ${error.message}",
+                        Toast.LENGTH_LONG
                     ).show()
                 }
+
                 isAnalyzingReceipt = false
             }
         }
