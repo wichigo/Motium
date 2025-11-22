@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
-import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.utils.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,15 +124,15 @@ fun EmployeeDetailsScreen(
                             )
                         },
                         colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MotiumPrimary.copy(alpha = 0.2f),
-                            labelColor = MotiumPrimary
+                            containerColor = MockupGreen.copy(alpha = 0.2f),
+                            labelColor = MockupGreen
                         ),
                         leadingIcon = {
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(MotiumPrimary)
+                                    .background(MockupGreen)
                             )
                         }
                     )
@@ -159,7 +159,7 @@ fun EmployeeDetailsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(80.dp),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = Color(0xFFE8F5E9)
                         )
@@ -174,7 +174,7 @@ fun EmployeeDetailsScreen(
                             Icon(
                                 imageVector = Icons.Default.Email,
                                 contentDescription = null,
-                                tint = MotiumPrimary,
+                                tint = MockupGreen,
                                 modifier = Modifier.size(28.dp)
                             )
                             Column(
@@ -203,7 +203,7 @@ fun EmployeeDetailsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(80.dp),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = Color(0xFFE8F5E9)
                         )
@@ -218,7 +218,7 @@ fun EmployeeDetailsScreen(
                             Icon(
                                 imageVector = Icons.Default.Phone,
                                 contentDescription = null,
-                                tint = MotiumPrimary,
+                                tint = MockupGreen,
                                 modifier = Modifier.size(28.dp)
                             )
                             Column(
@@ -266,7 +266,7 @@ fun EmployeeDetailsScreen(
                         // Total Trips
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = surfaceColor
                             )
@@ -297,7 +297,7 @@ fun EmployeeDetailsScreen(
                         // Total Mileage
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = surfaceColor
                             )
@@ -328,7 +328,7 @@ fun EmployeeDetailsScreen(
                         // Associated Vehicles
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = surfaceColor
                             )
@@ -371,9 +371,9 @@ fun EmployeeDetailsScreen(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MotiumPrimary
+                            containerColor = MockupGreen
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Text(
                             "View Trips",
@@ -391,13 +391,13 @@ fun EmployeeDetailsScreen(
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color.Transparent
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Text(
                             "Edit Details",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
-                            color = MotiumPrimary
+                            color = MockupGreen
                         )
                     }
                 }

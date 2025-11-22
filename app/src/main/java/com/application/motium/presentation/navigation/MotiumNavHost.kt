@@ -27,6 +27,16 @@ import com.application.motium.presentation.individual.expense.ExpenseDetailsScre
 import com.application.motium.presentation.debug.LogViewerScreen
 import com.application.motium.presentation.splash.SplashScreen
 import com.application.motium.presentation.enterprise.home.EnterpriseHomeScreen
+import com.application.motium.presentation.enterprise.home.EnterpriseNewHomeScreen
+import com.application.motium.presentation.enterprise.calendar.EnterpriseCalendarScreen
+import com.application.motium.presentation.enterprise.vehicles.EnterpriseVehiclesScreen
+import com.application.motium.presentation.enterprise.export.EnterpriseExportScreen
+import com.application.motium.presentation.enterprise.settings.EnterpriseSettingsScreen
+import com.application.motium.presentation.enterprise.addtrip.EnterpriseAddTripScreen
+import com.application.motium.presentation.enterprise.edittrip.EnterpriseEditTripScreen
+import com.application.motium.presentation.enterprise.tripdetails.EnterpriseTripDetailsScreen
+import com.application.motium.presentation.enterprise.expense.EnterpriseAddExpenseScreen
+import com.application.motium.presentation.enterprise.expense.EnterpriseExpenseDetailsScreen
 import com.application.motium.presentation.enterprise.employees.EmployeesManagementScreen
 import com.application.motium.presentation.enterprise.employees.EmployeeDetailsScreen
 import com.application.motium.presentation.enterprise.schedule.EmployeeScheduleScreen
@@ -126,12 +136,11 @@ fun MotiumNavHost(
                     navController.navigate("trip_details/$tripId")
                 },
                 onNavigateToAddTrip = { navController.navigate("add_trip") },
-                onNavigateToAddExpense = { tripId ->
-                    navController.navigate("add_expense/$tripId")
+                onNavigateToAddExpense = { date ->
+                    navController.navigate("add_expense/$date")
                 },
-                onNavigateToExpenseDetails = { dateLabel, tripIds ->
-                    val tripIdsStr = tripIds.joinToString(",")
-                    navController.navigate("expense_details/$dateLabel/$tripIdsStr")
+                onNavigateToExpenseDetails = { date ->
+                    navController.navigate("expense_details/$date")
                 },
                 authViewModel = authViewModel
             )
@@ -200,12 +209,12 @@ fun MotiumNavHost(
         }
 
         composable(
-            route = "add_expense/{tripId}",
-            arguments = listOf(navArgument("tripId") { type = NavType.StringType })
+            route = "add_expense/{date}",
+            arguments = listOf(navArgument("date") { type = NavType.StringType })
         ) { backStackEntry ->
-            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            val date = backStackEntry.arguments?.getString("date") ?: ""
             AddExpenseScreen(
-                tripId = tripId,
+                date = date,
                 onNavigateBack = { navController.popBackStack() },
                 onExpenseSaved = {
                     navController.popBackStack()
@@ -214,18 +223,12 @@ fun MotiumNavHost(
         }
 
         composable(
-            route = "expense_details/{dateLabel}/{tripIds}",
-            arguments = listOf(
-                navArgument("dateLabel") { type = NavType.StringType },
-                navArgument("tripIds") { type = NavType.StringType }
-            )
+            route = "expense_details/{date}",
+            arguments = listOf(navArgument("date") { type = NavType.StringType })
         ) { backStackEntry ->
-            val dateLabel = backStackEntry.arguments?.getString("dateLabel") ?: ""
-            val tripIdsStr = backStackEntry.arguments?.getString("tripIds") ?: ""
-            val tripIds = tripIdsStr.split(",").filter { it.isNotBlank() }
+            val date = backStackEntry.arguments?.getString("date") ?: ""
             ExpenseDetailsScreen(
-                dateLabel = dateLabel,
-                tripIds = tripIds,
+                date = date,
                 onNavigateBack = { navController.popBackStack() }
             )
         }
@@ -291,19 +294,21 @@ fun MotiumNavHost(
 
         // Enterprise/Professional interface screens
         composable("enterprise_home") {
-            EnterpriseHomeScreen(
+            EnterpriseNewHomeScreen(
                 onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToEmployees = { navController.navigate("employees_management") },
-                onNavigateToSchedule = { navController.navigate("employee_schedule") },
                 onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
                 onNavigateToExport = { navController.navigate("enterprise_export") },
                 onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                onNavigateToEmployeeExport = { navController.navigate("employee_export") },
-                onNavigateToFacturation = { navController.navigate("employee_facturation") },
                 onNavigateToTripDetails = { tripId ->
-                    navController.navigate("trip_details/$tripId")
+                    navController.navigate("enterprise_trip_details/$tripId")
                 },
-                onNavigateToAddTrip = { navController.navigate("add_trip") },
+                onNavigateToAddTrip = { navController.navigate("enterprise_add_trip") },
+                onNavigateToAddExpense = { date ->
+                    navController.navigate("enterprise_add_expense/$date")
+                },
+                onNavigateToExpenseDetails = { date ->
+                    navController.navigate("enterprise_expense_details/$date")
+                },
                 authViewModel = authViewModel
             )
         }
@@ -380,24 +385,23 @@ fun MotiumNavHost(
             )
         }
 
-        // Placeholder routes for enterprise versions of existing screens
-        // These will reuse the individual screens for now
+        // Enterprise versions of screens with EnterpriseBottomNavigationSimple
         composable("enterprise_calendar") {
-            CalendarScreen(
+            EnterpriseCalendarScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
                 onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
                 onNavigateToExport = { navController.navigate("enterprise_export") },
                 onNavigateToSettings = { navController.navigate("enterprise_settings") },
                 onNavigateToTripDetails = { tripId ->
-                    navController.navigate("trip_details/$tripId")
+                    navController.navigate("enterprise_trip_details/$tripId")
                 },
                 authViewModel = authViewModel
             )
         }
 
         composable("enterprise_vehicles") {
-            VehiclesScreen(
+            EnterpriseVehiclesScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
                 onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
@@ -408,7 +412,7 @@ fun MotiumNavHost(
         }
 
         composable("enterprise_export") {
-            ExportScreen(
+            EnterpriseExportScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
                 onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
@@ -419,7 +423,7 @@ fun MotiumNavHost(
         }
 
         composable("enterprise_settings") {
-            SettingsScreen(
+            EnterpriseSettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
                 onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
@@ -432,6 +436,92 @@ fun MotiumNavHost(
                     }
                 },
                 authViewModel = authViewModel
+            )
+        }
+
+        // Enterprise versions of trip/expense screens
+        composable("enterprise_add_trip") {
+            val context = LocalContext.current
+            val tripRepository = TripRepository.getInstance(context)
+
+            EnterpriseAddTripScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onTripSaved = { trip ->
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            MotiumApplication.logger.i("💾 Saving enterprise trip: ${trip.id}, distance=${trip.totalDistance}m, vehicle=${trip.vehicleId}, type=${trip.tripType}", "MotiumNavHost")
+                            tripRepository.saveTrip(trip)
+                            MotiumApplication.logger.i("✅ Enterprise trip saved: ${trip.id}", "MotiumNavHost")
+
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                navController.popBackStack()
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("❌ Failed to save enterprise trip: ${e.message}", "MotiumNavHost", e)
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Failed to save trip: ${e.message}",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        composable(
+            route = "enterprise_trip_details/{tripId}",
+            arguments = listOf(navArgument("tripId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            EnterpriseTripDetailsScreen(
+                tripId = tripId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToEdit = { tripId ->
+                    navController.navigate("enterprise_edit_trip/$tripId")
+                },
+                authViewModel = authViewModel
+            )
+        }
+
+        composable(
+            route = "enterprise_edit_trip/{tripId}",
+            arguments = listOf(navArgument("tripId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            EnterpriseEditTripScreen(
+                tripId = tripId,
+                onNavigateBack = { navController.popBackStack() },
+                onTripUpdated = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
+            route = "enterprise_add_expense/{date}",
+            arguments = listOf(navArgument("date") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val date = backStackEntry.arguments?.getString("date") ?: ""
+            EnterpriseAddExpenseScreen(
+                date = date,
+                onNavigateBack = { navController.popBackStack() },
+                onExpenseSaved = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
+            route = "enterprise_expense_details/{date}",
+            arguments = listOf(navArgument("date") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val date = backStackEntry.arguments?.getString("date") ?: ""
+            EnterpriseExpenseDetailsScreen(
+                date = date,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
     }

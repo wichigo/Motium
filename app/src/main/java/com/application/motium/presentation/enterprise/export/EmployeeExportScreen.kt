@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigation
-import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.utils.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -121,9 +121,9 @@ fun EmployeeExportScreen(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MotiumPrimary
+                            containerColor = MockupGreen
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Download,
@@ -173,7 +173,7 @@ fun ExportCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(120.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = surfaceColor
         )

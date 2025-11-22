@@ -15,6 +15,22 @@ import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * MIGRATION SQL REQUIRED:
+ * Exécutez ce script dans Supabase SQL Editor pour ajouter le champ date:
+ *
+ * -- Ajouter la colonne date
+ * ALTER TABLE expenses_trips ADD COLUMN IF NOT EXISTS date DATE;
+ *
+ * -- Migrer les données existantes (extraire la date depuis les trips associés)
+ * UPDATE expenses_trips e
+ * SET date = DATE(t.start_time)
+ * FROM trips t
+ * WHERE e.trip_id = t.id AND e.date IS NULL;
+ *
+ * -- Rendre trip_id optionnel
+ * ALTER TABLE expenses_trips ALTER COLUMN trip_id DROP NOT NULL;
+ */
 class SupabaseExpenseRepository private constructor(private val context: Context) {
 
     private val client = SupabaseClient.client
@@ -35,7 +51,8 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     @Serializable
     private data class SupabaseExpense(
         val id: String,
-        val trip_id: String,
+        val date: String,               // NOUVEAU: Date au format YYYY-MM-DD
+        val trip_id: String? = null,    // MODIFIÉ: Optionnel
         val type: String,
         val amount: Double,
         val amount_ht: Double? = null,
@@ -58,7 +75,8 @@ class SupabaseExpenseRepository private constructor(private val context: Context
 
             val supabaseExpense = SupabaseExpense(
                 id = expense.id,
-                trip_id = expense.tripId,
+                date = expense.date,          // NOUVEAU: Date de la dépense
+                trip_id = expense.tripId,     // Maintenant optionnel
                 type = expense.type.name,
                 amount = expense.amount,
                 amount_ht = expense.amountHT,
@@ -172,10 +190,11 @@ class SupabaseExpenseRepository private constructor(private val context: Context
                 }
                 .decodeList<SupabaseExpense>()
 
-            // Group expenses by trip_id
+            // Group expenses by trip_id (filter out null tripIds)
             val expensesByTrip = supabaseExpenses
                 .map { it.toExpense() }
-                .groupBy { it.tripId }
+                .filter { it.tripId != null }
+                .groupBy { it.tripId!! }
 
             MotiumApplication.logger.i("Fetched ${supabaseExpenses.size} expenses for ${tripIds.size} trips in batch", "SupabaseExpenseRepository")
             Result.success(expensesByTrip)
@@ -252,12 +271,75 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     }
 
     /**
+     * Get all expenses for a specific day
+     * NOUVEAU: Récupère les dépenses par journée au lieu de par trip
+     */
+    suspend fun getExpensesForDay(date: String): Result<List<Expense>> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("Fetching expenses for date: $date", "SupabaseExpenseRepository")
+
+            val supabaseExpenses = postgres
+                .from("expenses_trips")
+                .select {
+                    filter {
+                        eq("date", date)
+                    }
+                }
+                .decodeList<SupabaseExpense>()
+
+            val expenses = supabaseExpenses.map { it.toExpense() }
+
+            MotiumApplication.logger.i("Fetched ${expenses.size} expenses for date $date", "SupabaseExpenseRepository")
+            Result.success(expenses)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error fetching expenses for day: ${e.message}", "SupabaseExpenseRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get all expenses for multiple days in a single query (optimized for batch export)
+     * NOUVEAU: Récupère les dépenses pour plusieurs journées
+     */
+    suspend fun getExpensesForDays(dates: List<String>): Result<Map<String, List<Expense>>> = withContext(Dispatchers.IO) {
+        try {
+            if (dates.isEmpty()) {
+                return@withContext Result.success(emptyMap())
+            }
+
+            MotiumApplication.logger.i("Fetching expenses for ${dates.size} days in batch", "SupabaseExpenseRepository")
+
+            val supabaseExpenses = postgres
+                .from("expenses_trips")
+                .select {
+                    filter {
+                        isIn("date", dates)
+                    }
+                }
+                .decodeList<SupabaseExpense>()
+
+            // Group expenses by date
+            val expensesByDay = supabaseExpenses
+                .map { it.toExpense() }
+                .filter { it.date.isNotEmpty() }
+                .groupBy { it.date }
+
+            MotiumApplication.logger.i("Fetched ${supabaseExpenses.size} expenses for ${dates.size} days in batch", "SupabaseExpenseRepository")
+            Result.success(expensesByDay)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error fetching expenses for days in batch: ${e.message}", "SupabaseExpenseRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Convert SupabaseExpense to Expense
      */
     private fun SupabaseExpense.toExpense(): Expense {
         return Expense(
             id = id,
-            tripId = trip_id,
+            date = date,              // NOUVEAU: Date de la dépense
+            tripId = trip_id,         // Maintenant optionnel
             type = ExpenseType.valueOf(type),
             amount = amount,
             amountHT = amount_ht,

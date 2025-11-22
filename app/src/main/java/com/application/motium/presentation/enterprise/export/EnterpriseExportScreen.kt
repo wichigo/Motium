@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.export
+package com.application.motium.presentation.enterprise.export
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
@@ -23,17 +23,16 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
-import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.*
-import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.utils.ThemeManager
 import java.text.SimpleDateFormat
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExportScreen(
+fun EnterpriseExportScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onNavigateToCalendar: () -> Unit = {},
@@ -49,7 +48,7 @@ fun ExportScreen(
     val authState by authViewModel.authState.collectAsState()
     val currentUser = authState.user
 
-    val viewModel: ExportViewModel = viewModel { ExportViewModel(context) }
+    val viewModel: EnterpriseExportViewModel = viewModel { EnterpriseExportViewModel(context) }
     val filters by viewModel.filters.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val vehicles by viewModel.vehicles.collectAsState()
@@ -110,15 +109,15 @@ fun ExportScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "export",
+            EnterpriseBottomNavigationSimple(
+                currentRoute = "enterprise_export",
                 isPremium = isPremium,
                 onNavigate = { route ->
                     when (route) {
-                        "home" -> onNavigateToHome()
-                        "calendar" -> onNavigateToCalendar()
-                        "vehicles" -> onNavigateToVehicles()
-                        "settings" -> onNavigateToSettings()
+                        "enterprise_home" -> onNavigateToHome()
+                        "enterprise_calendar" -> onNavigateToCalendar()
+                        "enterprise_vehicles" -> onNavigateToVehicles()
+                        "enterprise_settings" -> onNavigateToSettings()
                     }
                 },
                 onPremiumFeatureClick = {
@@ -244,7 +243,7 @@ fun ExportScreen(
                             colors = CardDefaults.cardColors(
                                 containerColor = surfaceColor
                             ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 // Calendar header

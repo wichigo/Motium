@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+package com.application.motium.presentation.enterprise.vehicles
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -29,7 +29,7 @@ import com.application.motium.presentation.theme.MockupGreen
 // A separate composable for the details, to keep VehiclesScreen cleaner
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VehicleDetailsScreen(
+fun EnterpriseVehicleDetailsScreen(
     vehicleId: String,
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
@@ -38,7 +38,7 @@ fun VehicleDetailsScreen(
     onNavigateToSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val viewModel: VehicleViewModel = viewModel { VehicleViewModel(context) }
+    val viewModel: EnterpriseVehicleViewModel = viewModel { EnterpriseVehicleViewModel(context) }
     val vehicles by viewModel.vehicles.collectAsState()
 
     val vehicle = remember(vehicles, vehicleId) {
@@ -168,7 +168,7 @@ fun VehicleDetailsScreen(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(
@@ -198,7 +198,7 @@ fun VehicleDetailsScreen(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(

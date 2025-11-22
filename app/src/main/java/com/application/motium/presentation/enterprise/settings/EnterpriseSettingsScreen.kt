@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.settings
+package com.application.motium.presentation.enterprise.settings
 
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -24,10 +24,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
-import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.*
-import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.utils.ThemeManager
 import com.application.motium.utils.LogcatCapture
 import com.application.motium.service.ActivityRecognitionService
@@ -41,7 +40,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+fun EnterpriseSettingsScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onNavigateToCalendar: () -> Unit = {},
@@ -97,15 +96,15 @@ fun SettingsScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "settings",
+            EnterpriseBottomNavigationSimple(
+                currentRoute = "enterprise_settings",
                 isPremium = isPremium,
                 onNavigate = { route ->
                     when (route) {
-                        "home" -> onNavigateToHome()
-                        "calendar" -> onNavigateToCalendar()
-                        "vehicles" -> onNavigateToVehicles()
-                        "export" -> onNavigateToExport()
+                        "enterprise_home" -> onNavigateToHome()
+                        "enterprise_calendar" -> onNavigateToCalendar()
+                        "enterprise_vehicles" -> onNavigateToVehicles()
+                        "enterprise_export" -> onNavigateToExport()
                     }
                 },
                 onPremiumFeatureClick = {

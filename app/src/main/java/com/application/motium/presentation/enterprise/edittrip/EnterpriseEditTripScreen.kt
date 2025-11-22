@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.edittrip
+package com.application.motium.presentation.enterprise.edittrip
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -50,7 +50,7 @@ data class ExpenseItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditTripScreen(
+fun EnterpriseEditTripScreen(
     tripId: String,
     onNavigateBack: () -> Unit,
     onTripUpdated: () -> Unit

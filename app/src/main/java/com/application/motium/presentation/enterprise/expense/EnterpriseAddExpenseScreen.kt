@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.expense
+package com.application.motium.presentation.enterprise.expense
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,7 +25,6 @@ import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.presentation.theme.MockupGreen
-import java.text.SimpleDateFormat
 import com.application.motium.service.ReceiptAnalysisService
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
@@ -33,14 +32,15 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddExpenseScreen(
-    date: String,  // MODIFIÉ: date au format YYYY-MM-DD au lieu de tripId
+fun EnterpriseAddExpenseScreen(
+    date: String,
     onNavigateBack: () -> Unit,
     onExpenseSaved: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
+    val tripRepository = remember { TripRepository.getInstance(context) }
     val receiptAnalysisService = remember { ReceiptAnalysisService.getInstance(context) }
     val storageService = remember { com.application.motium.service.SupabaseStorageService.getInstance(context) }
 
@@ -56,8 +56,8 @@ fun AddExpenseScreen(
     // Format date for display
     val formattedDate = remember(date) {
         try {
-            val inputFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val outputFormat = SimpleDateFormat("EEEE, MMMM dd, yyyy", Locale.getDefault())
+            val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val outputFormat = java.text.SimpleDateFormat("EEEE, MMMM dd, yyyy", Locale.getDefault())
             val parsedDate = inputFormat.parse(date)
             parsedDate?.let { outputFormat.format(it) } ?: date
         } catch (e: Exception) {
@@ -153,8 +153,8 @@ fun AddExpenseScreen(
 
                                 val expense = Expense(
                                     id = UUID.randomUUID().toString(),
-                                    date = date,  // MODIFIÉ: date au lieu de tripId
-                                    tripId = null,  // Maintenant optionnel
+                                    date = date,
+                                    tripId = null,
                                     type = selectedType,
                                     amount = amountTTCValue,
                                     amountHT = amountHTValue,
@@ -200,12 +200,12 @@ fun AddExpenseScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
-            // Date info (MODIFIÉ: affiche la date au lieu du trip)
+            // Trip info
             item {
                 ReadOnlyField(
-                    label = "Date",
+                    label = "Trip",
                     value = formattedDate,
-                    icon = Icons.Default.CalendarToday
+                    icon = Icons.Default.Route
                 )
             }
 
@@ -262,7 +262,7 @@ fun AddExpenseScreen(
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 3,
                         maxLines = 5,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(16.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                         )
@@ -283,7 +283,7 @@ fun AddExpenseScreen(
                     OutlinedButton(
                         onClick = { imagePickerLauncher.launch("image/*") },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(16.dp),
                         enabled = !isAnalyzingReceipt
                     ) {
                         if (isAnalyzingReceipt) {
@@ -341,7 +341,7 @@ fun ReadOnlyField(
                 )
             },
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                 disabledBorderColor = Color.Transparent,
@@ -402,7 +402,7 @@ fun ExpenseTypeField(
                 modifier = Modifier
                     .fillMaxWidth()
                     .menuAnchor(),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                 )
@@ -478,7 +478,7 @@ fun AmountField(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("0.00") },
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 unfocusedBorderColor = if (isAutoDetected)
                     MockupGreen.copy(alpha = 0.5f)

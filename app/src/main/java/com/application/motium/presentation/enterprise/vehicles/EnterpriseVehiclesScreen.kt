@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+package com.application.motium.presentation.enterprise.vehicles
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,13 +30,13 @@ import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.model.VehiclePower
 import com.application.motium.domain.model.VehicleType
 import com.application.motium.domain.model.isPremium
-import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MockupGreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VehiclesScreen(
+fun EnterpriseVehiclesScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onNavigateToCalendar: () -> Unit = {},
@@ -45,7 +45,7 @@ fun VehiclesScreen(
     authViewModel: com.application.motium.presentation.auth.AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    val viewModel: VehicleViewModel = viewModel { VehicleViewModel(context) }
+    val viewModel: EnterpriseVehicleViewModel = viewModel { EnterpriseVehicleViewModel(context) }
 
     // Utiliser authState de authViewModel au lieu de créer une nouvelle instance
     val authState by authViewModel.authState.collectAsState()
@@ -138,7 +138,7 @@ fun VehiclesScreen(
 
     // Show add vehicle screen
     if (showAddVehicleScreen) {
-        AddVehicleScreen(
+        EnterpriseAddVehicleScreen(
             onNavigateBack = { showAddVehicleScreen = false },
             onAddVehicle = { name, type, licensePlate, power, fuelType, mileageRate, isDefault ->
                 viewModel.addVehicle(name, type, licensePlate, power, fuelType, mileageRate, isDefault)
@@ -149,7 +149,7 @@ fun VehiclesScreen(
 
     // Show vehicle details if a vehicle is selected
     if (selectedVehicleId != null) {
-        VehicleDetailsScreen(
+        EnterpriseVehicleDetailsScreen(
             vehicleId = selectedVehicleId!!,
             onNavigateBack = { selectedVehicleId = null },
             onNavigateToHome = onNavigateToHome,
@@ -198,15 +198,15 @@ fun VehiclesScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "vehicles",
+            EnterpriseBottomNavigationSimple(
+                currentRoute = "enterprise_vehicles",
                 isPremium = isPremium,
                 onNavigate = { route ->
                     when (route) {
-                        "home" -> onNavigateToHome()
-                        "calendar" -> onNavigateToCalendar()
-                        "export" -> onNavigateToExport()
-                        "settings" -> onNavigateToSettings()
+                        "enterprise_home" -> onNavigateToHome()
+                        "enterprise_calendar" -> onNavigateToCalendar()
+                        "enterprise_export" -> onNavigateToExport()
+                        "enterprise_settings" -> onNavigateToSettings()
                     }
                 },
                 onPremiumFeatureClick = {
@@ -255,7 +255,7 @@ fun VehiclesScreen(
                         colors = CardDefaults.cardColors(
                             containerColor = Color(0xFFFFF3CD)
                         ),
-                        shape = RoundedCornerShape(16.dp)
+                        shape = RoundedCornerShape(8.dp)
                     ) {
                         Column(
                             modifier = Modifier
@@ -465,7 +465,7 @@ fun ModernVehicleCard(
                 Box(
                     modifier = Modifier
                         .size(56.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFFD1FAE5)),
                     contentAlignment = Alignment.Center
                 ) {

@@ -41,7 +41,8 @@ data class Trip(
     val createdAt: Long = System.currentTimeMillis(),  // Timestamp de création
     val updatedAt: Long = System.currentTimeMillis(),   // Timestamp de mise à jour
     val lastSyncedAt: Long? = null,  // SYNC OPTIMIZATION: Timestamp de dernière synchronisation vers Supabase
-    val needsSync: Boolean = true  // SYNC OPTIMIZATION: Flag indiquant si le trip doit être synchronisé
+    val needsSync: Boolean = true,  // SYNC OPTIMIZATION: Flag indiquant si le trip doit être synchronisé
+    val userId: String? = null  // SECURITY: User ID pour isolation des données
 ) {
     fun getFormattedDistance(): String = String.format("%.1f km", totalDistance / 1000)
 
@@ -80,6 +81,7 @@ class TripRepository private constructor(context: Context) {
         private const val PREFS_NAME = "motium_trips"
         private const val KEY_TRIPS = "trips_json"
         private const val KEY_AUTO_TRACKING = "auto_tracking_enabled"
+        private const val KEY_LAST_USER_ID = "last_user_id"  // Pour charger les trips avant l'auth complète
 
         @Volatile
         private var instance: TripRepository? = null
@@ -99,15 +101,23 @@ class TripRepository private constructor(context: Context) {
 
     suspend fun saveTrip(trip: Trip) = withContext(Dispatchers.IO) {
         try {
+            // SECURITY: S'assurer que le trip a un userId
+            val currentUser = authRepository.getCurrentAuthUser()
+            val tripWithUserId = if (trip.userId == null && currentUser != null) {
+                trip.copy(userId = currentUser.id)
+            } else {
+                trip
+            }
+
             // Sauvegarder localement
             val trips = getAllTrips().toMutableList()
 
             // Remplacer si existe déjà, sinon ajouter
-            val existingIndex = trips.indexOfFirst { it.id == trip.id }
+            val existingIndex = trips.indexOfFirst { it.id == tripWithUserId.id }
             if (existingIndex >= 0) {
-                trips[existingIndex] = trip
+                trips[existingIndex] = tripWithUserId
             } else {
-                trips.add(trip)
+                trips.add(tripWithUserId)
             }
 
             // Garder seulement les 100 derniers trajets pour éviter de surcharger
@@ -116,28 +126,27 @@ class TripRepository private constructor(context: Context) {
             val tripsJson = json.encodeToString(recentTrips)
             prefs.edit().putString(KEY_TRIPS, tripsJson).apply()
 
-            MotiumApplication.logger.i("Trip saved locally: ${trip.id}, ${trip.getFormattedDistance()}", "TripRepository")
+            MotiumApplication.logger.i("Trip saved locally: ${tripWithUserId.id}, ${tripWithUserId.getFormattedDistance()}, userId=${tripWithUserId.userId}", "TripRepository")
 
             // SYNC OPTIMIZATION: Sync immédiat après création de trip
             // Synchroniser ce trip spécifique immédiatement (pas besoin d'attendre 15 minutes)
             try {
-                val currentUser = authRepository.getCurrentAuthUser()
                 if (currentUser != null) {
-                    val supabaseResult = supabaseTripRepository.saveTrip(trip.toDomainTrip(currentUser.id), currentUser.id)
+                    val supabaseResult = supabaseTripRepository.saveTrip(tripWithUserId.toDomainTrip(currentUser.id), currentUser.id)
                     if (supabaseResult.isSuccess) {
-                        MotiumApplication.logger.i("Trip synced immediately to Supabase: ${trip.id}", "TripRepository")
+                        MotiumApplication.logger.i("Trip synced immediately to Supabase: ${tripWithUserId.id}", "TripRepository")
 
                         // SYNC OPTIMIZATION: Marquer comme synchronisé après succès
-                        markTripsAsSynced(listOf(trip.id))
+                        markTripsAsSynced(listOf(tripWithUserId.id))
 
                         // SYNC OPTIMIZATION: Trigger sync rapide pour autres trips dirty (si présents)
                         // Notification au SyncManager qu'un trip vient d'être créé
                         com.application.motium.data.sync.SupabaseSyncManager.getInstance(appContext).forceSyncNow()
                     } else {
-                        MotiumApplication.logger.w("Failed to sync trip to Supabase: ${trip.id}", "TripRepository")
+                        MotiumApplication.logger.w("Failed to sync trip to Supabase: ${tripWithUserId.id}", "TripRepository")
                     }
                 } else {
-                    MotiumApplication.logger.i("User not authenticated, trip saved locally only: ${trip.id}", "TripRepository")
+                    MotiumApplication.logger.i("User not authenticated, trip saved locally only: ${tripWithUserId.id}", "TripRepository")
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error syncing trip to Supabase: ${e.message}", "TripRepository", e)
@@ -151,8 +160,32 @@ class TripRepository private constructor(context: Context) {
 
     suspend fun getAllTrips(): List<Trip> = withContext(Dispatchers.IO) {
         try {
+            // SECURITY: Obtenir l'utilisateur actuel pour filtrer les trips
+            val currentUser = authRepository.getCurrentAuthUser()
+
+            // FIX: Utiliser le dernier userId connu si l'auth n'est pas encore restaurée
+            val userId = currentUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
+
+            if (userId == null) {
+                MotiumApplication.logger.w("getAllTrips called but no user authenticated and no last userId - returning empty list", "TripRepository")
+                return@withContext emptyList()
+            }
+
+            // Sauvegarder le userId pour les prochains chargements
+            if (currentUser != null && prefs.getString(KEY_LAST_USER_ID, null) != userId) {
+                prefs.edit().putString(KEY_LAST_USER_ID, userId).apply()
+            }
+
             val tripsJson = prefs.getString(KEY_TRIPS, null) ?: return@withContext emptyList()
-            return@withContext json.decodeFromString<List<Trip>>(tripsJson)
+            val allTrips = json.decodeFromString<List<Trip>>(tripsJson)
+
+            // SECURITY: Filtrer uniquement les trips de l'utilisateur actuel (ou dernier connu)
+            val userTrips = allTrips.filter { trip ->
+                trip.userId == userId || trip.userId == null // null pour legacy trips, seront migrés au prochain save
+            }
+
+            MotiumApplication.logger.d("Loaded ${userTrips.size} trips for user $userId (${allTrips.size} total in storage)", "TripRepository")
+            return@withContext userTrips
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading trips: ${e.message}", "TripRepository", e)
             return@withContext emptyList()
@@ -165,6 +198,30 @@ class TripRepository private constructor(context: Context) {
 
     suspend fun getRecentTrips(limit: Int = 20): List<Trip> = withContext(Dispatchers.IO) {
         getAllTrips().sortedByDescending { it.startTime }.take(limit)
+    }
+
+    /**
+     * PAGINATION: Récupère les trips avec pagination (limit + offset)
+     * Utilisé pour le lazy loading dans HomeScreen
+     */
+    suspend fun getTripsPaginated(limit: Int = 10, offset: Int = 0): List<Trip> = withContext(Dispatchers.IO) {
+        try {
+            val allUserTrips = getAllTrips().sortedByDescending { it.startTime }
+            val paginatedTrips = allUserTrips.drop(offset).take(limit)
+
+            MotiumApplication.logger.d("Loaded ${paginatedTrips.size} trips (offset=$offset, limit=$limit, total=${allUserTrips.size})", "TripRepository")
+            return@withContext paginatedTrips
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error loading paginated trips: ${e.message}", "TripRepository", e)
+            return@withContext emptyList()
+        }
+    }
+
+    /**
+     * PAGINATION: Compte le nombre total de trips de l'utilisateur
+     */
+    suspend fun getTotalTripsCount(): Int = withContext(Dispatchers.IO) {
+        getAllTrips().size
     }
 
     suspend fun deleteTrip(tripId: String) = withContext(Dispatchers.IO) {
@@ -303,27 +360,38 @@ class TripRepository private constructor(context: Context) {
                     MotiumApplication.logger.i("Fetched ${supabaseTrips.size} trips from Supabase", "TripRepository")
 
                     if (supabaseTrips.isNotEmpty()) {
-                        // Convert domain trips to data trips
-                        val dataTrips = supabaseTrips.map { it.toDataTrip() }
+                        // SECURITY: Convert domain trips to data trips WITH userId
+                        val dataTrips = supabaseTrips.map { it.toDataTrip().copy(userId = currentUser.id) }
 
-                        // Get existing local trips
-                        val localTrips = getAllTrips()
+                        // SECURITY: Lire TOUS les trips (pas filtré par user) pour ne pas perdre les données des autres utilisateurs
+                        val tripsJson = prefs.getString(KEY_TRIPS, null)
+                        val allStoredTrips = if (tripsJson != null) {
+                            try {
+                                json.decodeFromString<List<Trip>>(tripsJson).toMutableList()
+                            } catch (e: Exception) {
+                                MotiumApplication.logger.e("Error parsing stored trips: ${e.message}", "TripRepository", e)
+                                mutableListOf()
+                            }
+                        } else {
+                            mutableListOf()
+                        }
 
-                        // Merge: keep trips from Supabase + local trips not in Supabase
-                        val localTripIds = localTrips.map { it.id }.toSet()
+                        // SECURITY: Séparer les trips de l'utilisateur actuel et des autres utilisateurs
+                        val otherUsersTrips = allStoredTrips.filter { it.userId != null && it.userId != currentUser.id }
+                        val currentUserLocalTrips = allStoredTrips.filter { it.userId == currentUser.id || it.userId == null }
+
+                        // Merge: trips Supabase + trips locaux uniquement de l'utilisateur actuel non présents dans Supabase
                         val supabaseTripIds = dataTrips.map { it.id }.toSet()
+                        val localOnlyTrips = currentUserLocalTrips.filter { it.id !in supabaseTripIds }
 
-                        // Local trips that are not in Supabase (new local trips)
-                        val localOnlyTrips = localTrips.filter { it.id !in supabaseTripIds }
-
-                        // Combine all trips
-                        val allTrips = dataTrips + localOnlyTrips
+                        // SECURITY: Combiner les trips de l'utilisateur actuel + les trips des autres utilisateurs (pour ne pas les perdre)
+                        val allTrips = dataTrips + localOnlyTrips + otherUsersTrips
 
                         // Save merged trips locally
-                        val tripsJson = json.encodeToString(allTrips.sortedByDescending { it.startTime }.take(100))
-                        prefs.edit().putString(KEY_TRIPS, tripsJson).apply()
+                        val tripsJsonToSave = json.encodeToString(allTrips.sortedByDescending { it.startTime }.take(300)) // Augmenté à 300 pour gérer plusieurs users
+                        prefs.edit().putString(KEY_TRIPS, tripsJsonToSave).apply()
 
-                        MotiumApplication.logger.i("Synced ${dataTrips.size} trips from Supabase, kept ${localOnlyTrips.size} local-only trips", "TripRepository")
+                        MotiumApplication.logger.i("Synced ${dataTrips.size} trips from Supabase, kept ${localOnlyTrips.size} local-only trips for user ${currentUser.id}, preserved ${otherUsersTrips.size} trips from other users", "TripRepository")
                     }
                 } else {
                     MotiumApplication.logger.e("Failed to fetch trips from Supabase", "TripRepository")

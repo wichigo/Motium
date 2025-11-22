@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.calendar
+package com.application.motium.presentation.enterprise.calendar
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,28 +34,24 @@ import com.application.motium.data.TripRepository
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
-import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
-import androidx.compose.material.icons.filled.Receipt
-import androidx.compose.material.icons.filled.Visibility
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CalendarScreen(
+fun EnterpriseCalendarScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onNavigateToVehicles: () -> Unit = {},
     onNavigateToExport: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
     onNavigateToTripDetails: (String) -> Unit = {},
-    onNavigateToAddExpense: (String) -> Unit = {},
-    onNavigateToExpenseDetails: (String, List<String>) -> Unit = { _, _ -> },
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -133,15 +129,15 @@ fun CalendarScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "calendar",
+            EnterpriseBottomNavigationSimple(
+                currentRoute = "enterprise_calendar",
                 isPremium = isPremium,
                 onNavigate = { route ->
                     when (route) {
-                        "home" -> onNavigateToHome()
-                        "vehicles" -> onNavigateToVehicles()
-                        "export" -> onNavigateToExport()
-                        "settings" -> onNavigateToSettings()
+                        "enterprise_home" -> onNavigateToHome()
+                        "enterprise_vehicles" -> onNavigateToVehicles()
+                        "enterprise_export" -> onNavigateToExport()
+                        "enterprise_settings" -> onNavigateToSettings()
                     }
                 },
                 onPremiumFeatureClick = {
@@ -272,57 +268,14 @@ fun CalendarScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                // Daily summary header with expense buttons
+                // Daily summary header
                 item {
-                    val dateForExpenses = remember(day) {
-                        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(day.time)
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).format(day.time),
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontWeight = FontWeight.Bold
-                            ),
-                            modifier = Modifier.weight(1f)
+                    Text(
+                        text = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).format(day.time),
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold
                         )
-
-                        // Expense buttons (linked to day)
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            // View expenses button
-                            IconButton(
-                                onClick = {
-                                    val dateLabel = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).format(day.time)
-                                    onNavigateToExpenseDetails(dateLabel, listOf(dateForExpenses))
-                                },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Visibility,
-                                    contentDescription = "View Expenses",
-                                    tint = MockupGreen,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            // Add expense button
-                            IconButton(
-                                onClick = { onNavigateToAddExpense(dateForExpenses) },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Receipt,
-                                    contentDescription = "Add Expense",
-                                    tint = MockupGreen,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
+                    )
                 }
 
                 // Daily stats card
@@ -348,8 +301,8 @@ fun CalendarScreen(
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                            shape = RoundedCornerShape(16.dp)
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
                             Box(
                                 modifier = Modifier
@@ -424,7 +377,7 @@ fun DailySummaryCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(
@@ -457,8 +410,8 @@ fun TripCardClickable(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(16.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(8.dp)
     ) {
         Row(
             modifier = Modifier
@@ -636,7 +589,7 @@ fun SelectedDaySummary(day: Calendar, dayTrips: List<Trip>) {
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(
@@ -684,7 +637,7 @@ fun SelectedDaySummary(day: Calendar, dayTrips: List<Trip>) {
 fun NoDayDataSummary() {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         shape = RoundedCornerShape(16.dp)
     ) {
         Box(
@@ -985,7 +938,7 @@ fun AutoTrackingCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1036,7 +989,7 @@ fun DayScheduleCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier

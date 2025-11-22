@@ -292,7 +292,33 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             // CRITIQUE: Supprimer TOUTES les données locales de la base de données Room
             MotiumDatabase.clearAllData(context)
-            MotiumApplication.logger.i("🗑️ Toutes les données locales supprimées", "SupabaseAuth")
+            MotiumApplication.logger.i("🗑️ Toutes les données locales supprimées (Room)", "SupabaseAuth")
+
+            // SECURITY: Nettoyer TOUTES les SharedPreferences contenant des données utilisateur
+            try {
+                // Liste de toutes les SharedPreferences à nettoyer
+                val prefsToClean = listOf(
+                    "motium_trips",              // Trips data (+ last_user_id)
+                    "pending_sync_queue",        // File de synchronisation
+                    "ActivityRecognitionPrefs",  // Service de reconnaissance d'activité
+                    "supabase_session_fallback", // Session Supabase fallback (si utilisé)
+                    "theme_prefs"                // Theme preferences (couleurs favorites)
+                )
+
+                var clearedCount = 0
+                prefsToClean.forEach { prefsName ->
+                    try {
+                        context.getSharedPreferences(prefsName, Context.MODE_PRIVATE).edit().clear().apply()
+                        clearedCount++
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("⚠️ Failed to clear $prefsName: ${e.message}", "SupabaseAuth")
+                    }
+                }
+
+                MotiumApplication.logger.i("🗑️ Cleared $clearedCount SharedPreferences files", "SupabaseAuth")
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("⚠️ Failed to clear SharedPreferences: ${e.message}", "SupabaseAuth", e)
+            }
 
             // Annuler la synchronisation en arrière-plan
             SyncScheduler.cancelSyncWork(context)

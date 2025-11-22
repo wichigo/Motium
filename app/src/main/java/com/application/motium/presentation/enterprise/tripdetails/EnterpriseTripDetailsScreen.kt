@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.tripdetails
+package com.application.motium.presentation.enterprise.tripdetails
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,7 +39,7 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TripDetailsScreen(
+fun EnterpriseTripDetailsScreen(
     tripId: String,
     onNavigateBack: () -> Unit = {},
     onNavigateToEdit: (String) -> Unit = {},
@@ -57,6 +57,7 @@ fun TripDetailsScreen(
 
     var trip by remember { mutableStateOf<Trip?>(null) }
     var vehicle by remember { mutableStateOf<Vehicle?>(null) }
+    var expenses by remember { mutableStateOf<List<Expense>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var selectedPhotoUri by remember { mutableStateOf<String?>(null) }
@@ -80,7 +81,13 @@ fun TripDetailsScreen(
                 }
             }
 
-            // MODIFIÉ: Dépenses retirées - maintenant liées aux journées, pas aux trips
+            // Load expenses for this trip
+            expenseRepository.getExpensesForTrip(tripId).onSuccess { expenseList ->
+                expenses = expenseList
+                MotiumApplication.logger.i("Loaded ${expenseList.size} expenses for trip $tripId", "TripDetailsScreen")
+            }.onFailure { error ->
+                MotiumApplication.logger.e("Failed to load expenses: ${error.message}", "TripDetailsScreen", error)
+            }
 
             isLoading = false
         }
@@ -347,7 +354,18 @@ fun TripDetailsScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // MODIFIÉ: Section dépenses retirée (maintenant liées aux journées)
+                // Expense Notes Section
+                if (expenses.isNotEmpty()) {
+                    ExpenseNotesSection(
+                        expenses = expenses,
+                        onPhotoClick = { photoUri ->
+                            selectedPhotoUri = photoUri
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
                 // Bouton Validate/Unvalidate
                 Button(

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.addtrip
+package com.application.motium.presentation.enterprise.addtrip
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -48,7 +48,7 @@ data class ExpenseItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddTripScreen(
+fun EnterpriseAddTripScreen(
     onNavigateBack: () -> Unit,
     onTripSaved: (Trip) -> Unit
 ) {

@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigation
-import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.utils.ThemeManager
 import java.text.SimpleDateFormat
 import java.util.*
@@ -105,7 +105,7 @@ fun EmployeeFacturationScreen(
                         FacturationSummaryCard(
                             title = "Payé",
                             amount = "€0,00",
-                            color = MotiumPrimary,
+                            color = MockupGreen,
                             icon = "✅",
                             modifier = Modifier.weight(1f),
                             isDarkMode = isDarkMode,
@@ -130,7 +130,7 @@ fun EmployeeFacturationScreen(
                         date = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Calendar.getInstance().time),
                         amount = "€${String.format("%.2f", (100 + index * 50).toDouble())}",
                         status = if (index == 0) "Payée" else "En attente",
-                        statusColor = if (index == 0) MotiumPrimary else Color(0xFFF59E0B),
+                        statusColor = if (index == 0) MockupGreen else Color(0xFFF59E0B),
                         isDarkMode = isDarkMode,
                         surfaceColor = surfaceColor
                     )
@@ -143,9 +143,9 @@ fun EmployeeFacturationScreen(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MotiumPrimary
+                            containerColor = MockupGreen
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.FilePresent,
@@ -195,7 +195,7 @@ fun FacturationSummaryCard(
 ) {
     Card(
         modifier = modifier.height(100.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = surfaceColor
         )
@@ -247,7 +247,7 @@ fun FacturationCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(80.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = surfaceColor
         )
