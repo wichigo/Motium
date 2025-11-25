@@ -7,6 +7,7 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
+import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -104,8 +105,12 @@ class WorkScheduleViewModel(
                     _trackingMode.value = settings.trackingMode
                     MotiumApplication.logger.i("Auto-tracking mode loaded: ${settings.trackingMode}", "WorkScheduleViewModel")
 
-                    // Synchroniser avec TripRepository pour compatibilité
-                    syncWithTripRepository(settings.trackingMode)
+                    // Démarrer le Worker si le mode est WORK_HOURS_ONLY (au démarrage de l'app)
+                    if (settings.trackingMode == TrackingMode.WORK_HOURS_ONLY) {
+                        AutoTrackingScheduleWorker.schedule(context)
+                        AutoTrackingScheduleWorker.runNow(context)
+                        MotiumApplication.logger.i("Auto-tracking Worker started (mode was already WORK_HOURS_ONLY)", "WorkScheduleViewModel")
+                    }
                 } else {
                     // Pas de settings, créer des settings par défaut
                     MotiumApplication.logger.i("No auto-tracking settings found, creating default", "WorkScheduleViewModel")
@@ -221,6 +226,9 @@ class WorkScheduleViewModel(
                     // Recharger les créneaux
                     loadWorkSchedules(userId)
                     MotiumApplication.logger.i("✅ Work schedule deleted successfully", "WorkScheduleViewModel")
+
+                    // Vérifier si tous les horaires ont été supprimés
+                    checkAndDisableWorkHoursMode(userId)
                 } else {
                     _error.value = "Failed to delete work schedule"
                     MotiumApplication.logger.e("❌ Failed to delete work schedule", "WorkScheduleViewModel")
@@ -230,6 +238,24 @@ class WorkScheduleViewModel(
                 _error.value = "Error deleting work schedule: ${e.message}"
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Vérifie s'il reste des horaires et désactive WORK_HOURS_ONLY si nécessaire
+     */
+    private fun checkAndDisableWorkHoursMode(userId: String) {
+        viewModelScope.launch {
+            try {
+                val hasSchedules = _schedules.value.values.any { it.isNotEmpty() }
+
+                if (!hasSchedules && _trackingMode.value == TrackingMode.WORK_HOURS_ONLY) {
+                    MotiumApplication.logger.w("⚠️ No schedules remaining, disabling WORK_HOURS_ONLY mode", "WorkScheduleViewModel")
+                    updateTrackingMode(userId, TrackingMode.DISABLED)
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error checking work hours mode: ${e.message}", "WorkScheduleViewModel", e)
             }
         }
     }
@@ -245,13 +271,27 @@ class WorkScheduleViewModel(
 
                 MotiumApplication.logger.i("Updating tracking mode to: $newMode", "WorkScheduleViewModel")
 
+                // Vérification : si mode WORK_HOURS_ONLY, il faut au moins un horaire défini
+                if (newMode == TrackingMode.WORK_HOURS_ONLY) {
+                    val hasSchedules = _schedules.value.values.any { it.isNotEmpty() }
+                    if (!hasSchedules) {
+                        _error.value = "Cannot enable work hours tracking: no work schedules defined"
+                        MotiumApplication.logger.w("⚠️ Cannot enable WORK_HOURS_ONLY mode without schedules", "WorkScheduleViewModel")
+                        _isLoading.value = false
+                        return@launch
+                    }
+                }
+
+                // Charger les settings existants pour réutiliser l'ID s'il existe
+                val existingSettings = workScheduleRepository.getAutoTrackingSettings(userId)
+
                 val settings = AutoTrackingSettings(
-                    id = UUID.randomUUID().toString(),
+                    id = existingSettings?.id ?: UUID.randomUUID().toString(),
                     userId = userId,
                     trackingMode = newMode,
-                    minTripDistanceMeters = 100,
-                    minTripDurationSeconds = 60,
-                    createdAt = Instant.fromEpochMilliseconds(System.currentTimeMillis()),
+                    minTripDistanceMeters = existingSettings?.minTripDistanceMeters ?: 100,
+                    minTripDurationSeconds = existingSettings?.minTripDurationSeconds ?: 60,
+                    createdAt = existingSettings?.createdAt ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
                     updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis())
                 )
 
@@ -278,14 +318,32 @@ class WorkScheduleViewModel(
     }
 
     /**
-     * Synchronise avec TripRepository pour compatibilité avec le bouton de la Home Page
+     * Synchronise avec TripRepository et déclenche la vérification des horaires si nécessaire
      */
     private fun syncWithTripRepository(mode: TrackingMode) {
-        // Convertir TrackingMode en boolean pour TripRepository
-        val enabled = mode != TrackingMode.DISABLED
-        tripRepository.setAutoTrackingEnabled(enabled)
+        when (mode) {
+            TrackingMode.WORK_HOURS_ONLY -> {
+                // Mode automatique: démarrer le worker qui vérifie périodiquement les horaires
+                AutoTrackingScheduleWorker.schedule(context)
 
-        MotiumApplication.logger.d("Synced tracking mode with TripRepository: enabled=$enabled", "WorkScheduleViewModel")
+                // Vérifier immédiatement si on est dans les horaires
+                AutoTrackingScheduleWorker.runNow(context)
+
+                MotiumApplication.logger.i(
+                    "✅ WORK_HOURS_ONLY mode activated: Auto-tracking will be managed automatically based on work hours",
+                    "WorkScheduleViewModel"
+                )
+            }
+            TrackingMode.DISABLED -> {
+                // Mode désactivé: arrêter le worker et laisser l'utilisateur contrôler manuellement
+                AutoTrackingScheduleWorker.cancel(context)
+
+                MotiumApplication.logger.i(
+                    "✅ DISABLED mode activated: User has manual control via Home page button",
+                    "WorkScheduleViewModel"
+                )
+            }
+        }
     }
 
     /**

@@ -1032,23 +1032,21 @@ fun AutoTrackingCard(
                 )
                 Text(
                     text = when (trackingMode) {
-                        TrackingMode.WORK_HOURS_ONLY -> "Only during professional hours"
-                        TrackingMode.ALWAYS -> "Always active"
-                        TrackingMode.DISABLED -> "Disabled"
+                        TrackingMode.WORK_HOURS_ONLY -> "Automatic during professional hours"
+                        TrackingMode.DISABLED -> "Manual control"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
 
-            // 3-state button
+            // 2-state toggle button
             IconButton(
                 onClick = {
                     if (isEnabled) {
                         val nextMode = when (trackingMode) {
                             TrackingMode.DISABLED -> TrackingMode.WORK_HOURS_ONLY
-                            TrackingMode.WORK_HOURS_ONLY -> TrackingMode.ALWAYS
-                            TrackingMode.ALWAYS -> TrackingMode.DISABLED
+                            TrackingMode.WORK_HOURS_ONLY -> TrackingMode.DISABLED
                         }
                         onModeChanged(nextMode)
                     }
@@ -1059,13 +1057,11 @@ fun AutoTrackingCard(
                     imageVector = when (trackingMode) {
                         TrackingMode.DISABLED -> Icons.Default.Cancel
                         TrackingMode.WORK_HOURS_ONLY -> Icons.Default.Schedule
-                        TrackingMode.ALWAYS -> Icons.Default.CheckCircle
                     },
-                    contentDescription = "Change tracking mode",
+                    contentDescription = "Toggle tracking mode",
                     tint = when (trackingMode) {
                         TrackingMode.DISABLED -> Color.Gray
                         TrackingMode.WORK_HOURS_ONLY -> MockupGreen
-                        TrackingMode.ALWAYS -> Color.Blue
                     },
                     modifier = Modifier.size(32.dp)
                 )

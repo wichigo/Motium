@@ -23,9 +23,8 @@ data class WorkSchedule(
  * Modes d'auto-tracking disponibles
  */
 enum class TrackingMode {
-    ALWAYS,            // Toujours actif
-    WORK_HOURS_ONLY,   // Actif uniquement pendant les horaires pro
-    DISABLED           // Désactivé
+    WORK_HOURS_ONLY,   // Actif automatiquement pendant les horaires pro
+    DISABLED           // Désactivé (contrôle manuel par l'utilisateur)
 }
 
 /**

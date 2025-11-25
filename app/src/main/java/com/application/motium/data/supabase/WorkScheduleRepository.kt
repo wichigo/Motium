@@ -215,9 +215,10 @@ class WorkScheduleRepository private constructor(private val context: Context) {
      */
     suspend fun saveAutoTrackingSettings(settings: AutoTrackingSettings): Boolean = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("Saving auto-tracking settings: ${settings.trackingMode}", "WorkScheduleRepository")
+            MotiumApplication.logger.i("Saving auto-tracking settings: ${settings.trackingMode} for user ${settings.userId}", "WorkScheduleRepository")
 
             val dto = AutoTrackingSettingsDto(
+                id = settings.id,
                 user_id = settings.userId,
                 tracking_mode = settings.trackingMode.name,
                 min_trip_distance_meters = settings.minTripDistanceMeters,
@@ -225,7 +226,10 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             )
 
             postgres.from("auto_tracking_settings")
-                .upsert(dto)
+                .upsert(dto) {
+                    // Utiliser user_id comme clé de conflit (contrainte UNIQUE)
+                    onConflict = "user_id"
+                }
 
             MotiumApplication.logger.i("✅ Auto-tracking settings saved successfully", "WorkScheduleRepository")
             true
