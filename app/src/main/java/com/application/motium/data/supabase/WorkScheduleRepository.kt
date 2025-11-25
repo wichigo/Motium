@@ -245,7 +245,9 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     suspend fun isInWorkHours(userId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             // Appeler la fonction PostgreSQL is_in_work_hours
-            val result = postgres.rpc("is_in_work_hours", RpcUserIdParam(userId)).decodeSingle<Boolean>()
+            // La fonction retourne un booléen simple, pas un array
+            val response = postgres.rpc("is_in_work_hours", RpcUserIdParam(userId))
+            val result = response.data.toString().toBoolean()
             MotiumApplication.logger.d("Is in work hours: $result", "WorkScheduleRepository")
             result
         } catch (e: Exception) {
@@ -260,7 +262,9 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     suspend fun shouldAutotrack(userId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             // Appeler la fonction PostgreSQL should_autotrack
-            val result = postgres.rpc("should_autotrack", RpcUserIdParam(userId)).decodeSingle<Boolean>()
+            // La fonction retourne un booléen simple, pas un array
+            val response = postgres.rpc("should_autotrack", RpcUserIdParam(userId))
+            val result = response.data.toString().toBoolean()
             MotiumApplication.logger.d("Should autotrack: $result", "WorkScheduleRepository")
             result
         } catch (e: Exception) {
