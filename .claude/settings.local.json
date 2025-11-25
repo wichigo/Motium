@@ -65,9 +65,11 @@
       "Bash(git check-ignore:*)",
       "Bash(npm i:*)",
       "Bash(git restore:*)",
-      "Bash(del appsrcmainjavacomapplicationmotiumutilsFileUtils.kt)"
+      "Bash(del appsrcmainjavacomapplicationmotiumutilsFileUtils.kt)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" assembleDebug --no-daemon)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "outputStyle": "default"
 }

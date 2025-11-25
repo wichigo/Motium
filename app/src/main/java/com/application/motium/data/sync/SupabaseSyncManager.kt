@@ -33,6 +33,7 @@ class SupabaseSyncManager private constructor(private val context: Context) {
     private val syncScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val pendingQueue = PendingSyncQueue.getInstance(context)
     private val tripRepository = TripRepository.getInstance(context)
+    private val vehicleRepository = com.application.motium.data.VehicleRepository.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
     private val networkManager = NetworkConnectionManager.getInstance(context)
 
@@ -152,7 +153,27 @@ class SupabaseSyncManager private constructor(private val context: Context) {
                 success = false
             }
 
-            // 3. DÉSACTIVÉ: Import de Supabase vers local
+            // 3. Synchroniser les véhicules (bidirectionnel pour mode offline)
+            try {
+                MotiumApplication.logger.i("Syncing vehicles with Supabase...", "SyncManager")
+
+                // 3a. Export des véhicules locaux vers Supabase
+                vehicleRepository.syncVehiclesToSupabase()
+
+                // 3b. Import des véhicules depuis Supabase pour accès offline
+                vehicleRepository.syncVehiclesFromSupabase()
+
+                MotiumApplication.logger.i("✅ Vehicle sync completed", "SyncManager")
+            } catch (e: Exception) {
+                MotiumApplication.logger.e(
+                    "Failed to sync vehicles: ${e.message}",
+                    "SyncManager",
+                    e
+                )
+                success = false
+            }
+
+            // 4. DÉSACTIVÉ: Import de trips Supabase vers local
             // L'utilisateur veut SEULEMENT exporter les trajets locaux vers Supabase,
             // et ne PAS importer les trajets de Supabase vers le stockage local
             // Cette logique bidirectionnelle a été désactivée pour éviter les doublons
@@ -295,8 +316,32 @@ class SupabaseSyncManager private constructor(private val context: Context) {
      * Traite une opération de type Vehicle
      */
     private suspend fun processVehicleOperation(operation: PendingSyncQueue.PendingOperation): Boolean {
-        // TODO: Implémenter la synchronisation des véhicules
-        return true
+        return try {
+            // La synchronisation est gérée par VehicleRepository.syncVehiclesToSupabase()
+            // Cette fonction sert surtout pour les opérations DELETE
+            when (operation.type) {
+                PendingSyncQueue.OperationType.DELETE -> {
+                    val currentUser = authRepository.getCurrentAuthUser()
+                    if (currentUser != null) {
+                        // Suppression gérée dans VehicleRepository
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> {
+                    // CREATE et UPDATE sont gérés par syncVehiclesToSupabase()
+                    true
+                }
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Error processing vehicle operation: ${e.message}",
+                "SyncManager",
+                e
+            )
+            false
+        }
     }
 
     /**

@@ -3,11 +3,10 @@ package com.application.motium.presentation.individual.vehicles
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.application.motium.data.VehicleRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
 import com.application.motium.domain.model.*
 import com.application.motium.domain.repository.AuthRepository
-import com.application.motium.domain.repository.VehicleRepository
 import com.application.motium.MotiumApplication
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -16,7 +15,7 @@ import java.util.UUID
 
 class VehicleViewModel(
     private val context: Context,
-    private val vehicleRepository: VehicleRepository = SupabaseVehicleRepository.getInstance(context),
+    private val vehicleRepository: VehicleRepository = VehicleRepository.getInstance(context),
     private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context)
 ) : ViewModel() {
 
@@ -58,10 +57,25 @@ class VehicleViewModel(
         viewModelScope.launch {
             try {
                 _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-                val vehicleList = (vehicleRepository as SupabaseVehicleRepository).getAllVehiclesForUser(userId)
+
+                // OFFLINE-FIRST: Charger depuis Room Database (fonctionne en mode offline)
+                val vehicleList = vehicleRepository.getAllVehiclesForUser(userId)
                 _vehicles.value = vehicleList
                 MotiumApplication.logger.i("Loaded ${vehicleList.size} vehicles for user: $userId", "VehicleViewModel")
                 _uiState.value = _uiState.value.copy(isLoading = false)
+
+                // SYNC: Tenter de synchroniser avec Supabase en arrière-plan (non bloquant)
+                viewModelScope.launch {
+                    try {
+                        vehicleRepository.syncVehiclesFromSupabase()
+                        // Recharger après la sync pour afficher les données Supabase
+                        val updatedList = vehicleRepository.getAllVehiclesForUser(userId)
+                        _vehicles.value = updatedList
+                    } catch (e: Exception) {
+                        // Ne pas afficher d'erreur si la sync échoue (mode offline)
+                        MotiumApplication.logger.w("Background vehicle sync failed: ${e.message}", "VehicleViewModel")
+                    }
+                }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error loading vehicles: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(

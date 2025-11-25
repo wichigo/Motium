@@ -73,7 +73,15 @@ class SupabaseTripRepository(private val context: Context) {
 
     suspend fun saveTrip(trip: Trip, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("Saving trip to Supabase: ${trip.id}", "SupabaseTripRepository")
+            MotiumApplication.logger.i(
+                "📤 Saving trip to Supabase: ${trip.id}\n" +
+                "   User ID: $userId\n" +
+                "   Distance: ${trip.distanceKm} km\n" +
+                "   Start: ${trip.startTime}\n" +
+                "   End: ${trip.endTime}\n" +
+                "   Trace points: ${trip.tracePoints?.size ?: 0}",
+                "SupabaseTripRepository"
+            )
 
             val vehicleId = trip.vehicleId?.takeIf { it.isNotBlank() } ?: try {
                 SupabaseVehicleRepository.getInstance(context).getDefaultVehicle(userId)?.id
@@ -127,7 +135,7 @@ class SupabaseTripRepository(private val context: Context) {
                 end_address = trip.endAddress,
                 distance_km = trip.distanceKm,
                 duration_ms = trip.durationMs,
-                type = "PERSONAL", // This needs to be dynamic based on trip data
+                type = trip.type.name, // FIX: Use actual trip type instead of hardcoded PERSONAL
                 is_validated = trip.isValidated,
                 cost = 0.0,
                 trace_gps = traceGpsJson,
@@ -189,7 +197,7 @@ class SupabaseTripRepository(private val context: Context) {
                 end_address = trip.endAddress,
                 distance_km = trip.distanceKm,
                 duration_ms = trip.durationMs,
-                type = "PERSONAL",
+                type = trip.type.name, // FIX: Use actual trip type instead of hardcoded PERSONAL
                 is_validated = trip.isValidated,
                 vehicle_id = cleanVehicleId,  // Use cleaned vehicleId
                 cost = 0.0,

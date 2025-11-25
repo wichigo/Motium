@@ -21,8 +21,22 @@ class SecureSessionStorage(context: Context) {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
     } catch (e: Exception) {
-        MotiumApplication.logger.e("❌ Error creating EncryptedSharedPreferences, falling back to standard SharedPreferences", "SecureSession", e)
-        context.getSharedPreferences("supabase_session_fallback", Context.MODE_PRIVATE)
+        MotiumApplication.logger.e(
+            "❌ CRITICAL: Cannot create encrypted session storage - device may be compromised or corrupted",
+            "SecureSession",
+            e
+        )
+
+        // Nettoyer tout fallback existant (ne jamais l'utiliser)
+        try {
+            context.getSharedPreferences("supabase_session_fallback", Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        } catch (ignored: Exception) {}
+
+        throw IllegalStateException(
+            "Cannot initialize secure session storage. Please reinstall the app.",
+            e
+        )
     }
 
     companion object {
@@ -125,6 +139,10 @@ class SecureSessionStorage(context: Context) {
     fun getRefreshToken(): String? = encryptedPrefs.getString(KEY_REFRESH_TOKEN, null)
     fun getUserId(): String? = encryptedPrefs.getString(KEY_USER_ID, null)
     fun getUserEmail(): String? = encryptedPrefs.getString(KEY_USER_EMAIL, null)
+    fun getExpiresAt(): Long? {
+        val expiresAt = encryptedPrefs.getLong(KEY_EXPIRES_AT, 0)
+        return if (expiresAt > 0) expiresAt else null
+    }
     fun isTokenExpired(): Boolean = System.currentTimeMillis() >= encryptedPrefs.getLong(KEY_EXPIRES_AT, 0)
     fun hasSession(): Boolean = encryptedPrefs.getString(KEY_ACCESS_TOKEN, null) != null
     fun hasValidSession(): Boolean = hasSession() && !isTokenExpired()

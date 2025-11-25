@@ -25,6 +25,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import com.application.motium.MotiumApplication
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonObject
 
 class SupabaseAuthRepository(private val context: Context) : AuthRepository {
@@ -98,9 +100,22 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     isLoading = false
                 )
 
-                // ÉTAPE 2: Tenter de rafraîchir la session Supabase en arrière-plan
-                sessionScope.launch {
-                    refreshSessionInBackground()
+                // ÉTAPE 2: Rafraîchir la session DANS le mutex lock (pas dans un nouveau coroutine)
+                // SÉCURITÉ: Exécution synchrone avec timeout pour éviter race conditions
+                try {
+                    withTimeout(10_000L) { // Timeout 10 secondes
+                        refreshSessionSafe()
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    MotiumApplication.logger.w(
+                        "⏱️ Session refresh timeout - keeping local session (offline mode)",
+                        "SupabaseAuth"
+                    )
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w(
+                        "⚠️ Session refresh failed: ${e.message} - keeping local session (offline mode)",
+                        "SupabaseAuth"
+                    )
                 }
             } else {
                 // Pas d'utilisateur local - Vérifier l'ancienne méthode de stockage (migration)
@@ -109,14 +124,27 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 if (restoredSession != null) {
                     MotiumApplication.logger.i("⚠️ Ancienne session trouvée, migration en cours...", "SupabaseAuth")
                     // Essayer de restaurer depuis Supabase et migrer vers Room
-                    sessionScope.launch {
-                        tryMigrateOldSession(restoredSession)
-                    }
+                    tryMigrateOldSession(restoredSession)
                 } else {
                     MotiumApplication.logger.i("ℹ️ Aucun utilisateur local. Utilisateur déconnecté.", "SupabaseAuth")
                     _authState.value = AuthState(isLoading = false, isAuthenticated = false)
                 }
             }
+        }
+    }
+
+    /**
+     * SÉCURITÉ: Rafraîchit la session de manière sûre sans race condition.
+     * Cette fonction s'exécute dans le sessionMutex lock.
+     */
+    private suspend fun refreshSessionSafe() {
+        val refreshToken = secureSessionStorage.getRefreshToken()
+        if (refreshToken != null) {
+            MotiumApplication.logger.i("🔄 Refreshing session safely...", "SupabaseAuth")
+            auth.refreshSession(refreshToken)
+            saveCurrentSessionSecurely()
+            syncUserProfileFromSupabase()
+            MotiumApplication.logger.i("✅ Session refreshed successfully", "SupabaseAuth")
         }
     }
 
@@ -140,35 +168,28 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                         user = userProfileResult.data,
                         isLoading = false
                     )
+
+                    // CLEANUP: Nettoyer l'ancien stockage non chiffré après migration réussie
+                    try {
+                        context.getSharedPreferences("supabase_session_fallback", Context.MODE_PRIVATE)
+                            .edit().clear().apply()
+                        MotiumApplication.logger.i(
+                            "🗑️ Cleaned up old unencrypted session storage after successful migration",
+                            "SupabaseAuth"
+                        )
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w(
+                            "⚠️ Failed to clean up old storage: ${e.message}",
+                            "SupabaseAuth"
+                        )
+                    }
+
                     MotiumApplication.logger.i("✅ Migration réussie", "SupabaseAuth")
                 }
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Échec de la migration: ${e.message}", "SupabaseAuth", e)
             _authState.value = AuthState(isLoading = false, isAuthenticated = false)
-        }
-    }
-
-    /**
-     * Rafraîchit la session Supabase en arrière-plan sans forcer la déconnexion.
-     * L'utilisateur reste connecté avec les données locales même en cas d'erreur réseau.
-     */
-    private suspend fun refreshSessionInBackground() {
-        try {
-            val refreshToken = secureSessionStorage.getRefreshToken()
-            if (refreshToken != null) {
-                MotiumApplication.logger.i("🔄 Rafraîchissement de la session Supabase en arrière-plan...", "SupabaseAuth")
-                auth.refreshSession(refreshToken)
-                saveCurrentSessionSecurely()
-
-                // Synchroniser le profil utilisateur depuis Supabase
-                syncUserProfileFromSupabase()
-
-                MotiumApplication.logger.i("✅ Rafraîchissement en arrière-plan réussi", "SupabaseAuth")
-            }
-        } catch (e: Exception) {
-            MotiumApplication.logger.w("⚠️ Échec du rafraîchissement en arrière-plan: ${e.message}. Mode offline.", "SupabaseAuth")
-            // NE PAS déconnecter - l'utilisateur reste authentifié avec les données locales
         }
     }
 

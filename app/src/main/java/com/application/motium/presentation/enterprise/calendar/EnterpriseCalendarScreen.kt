@@ -33,12 +33,19 @@ import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
+import com.application.motium.domain.model.TimeSlot
+import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
+import com.application.motium.presentation.calendar.WorkScheduleViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
+import com.application.motium.utils.CalendarUtils
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.CheckCircle
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -166,7 +173,7 @@ fun EnterpriseCalendarScreen(
             if (selectedTab == 1) {
                 // Planning section
                 item {
-                    PlanningSection()
+                    PlanningSection(authViewModel = authViewModel)
                 }
             } else {
                 // Calendar section
@@ -844,8 +851,30 @@ fun TabSection(
 }
 
 @Composable
-fun PlanningSection() {
-    var autoTracking by remember { mutableStateOf(true) }
+fun PlanningSection(
+    authViewModel: AuthViewModel = viewModel()
+) {
+    val context = LocalContext.current
+    val viewModel: WorkScheduleViewModel = remember { WorkScheduleViewModel(context) }
+
+    // Get current user
+    val authState by authViewModel.authState.collectAsState()
+    val currentUser = authState.user
+    val userId = currentUser?.id
+
+    // Load data from Supabase when user is available
+    LaunchedEffect(userId) {
+        userId?.let {
+            viewModel.loadWorkSchedules(it)
+            viewModel.loadAutoTrackingSettings(it)
+        }
+    }
+
+    // Observe state from ViewModel
+    val schedules by viewModel.schedules.collectAsState()
+    val trackingMode by viewModel.trackingMode.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val error by viewModel.error.collectAsState()
 
     // Initialize schedules for each day
     val daysOfWeek = listOf(
@@ -858,36 +887,32 @@ fun PlanningSection() {
         "Sunday" to Calendar.SUNDAY
     )
 
-    val schedules = remember {
-        mutableStateOf<Map<Int, List<TimeSlot>>>(
-            mapOf(
-                Calendar.MONDAY to listOf(
-                    TimeSlot(startHour = 9, startMinute = 0, endHour = 12, endMinute = 0),
-                    TimeSlot(startHour = 13, startMinute = 0, endHour = 17, endMinute = 0)
-                ),
-                Calendar.TUESDAY to listOf(
-                    TimeSlot(startHour = 9, startMinute = 0, endHour = 17, endMinute = 0)
-                ),
-                Calendar.WEDNESDAY to emptyList(),
-                Calendar.THURSDAY to listOf(
-                    TimeSlot(startHour = 9, startMinute = 0, endHour = 17, endMinute = 0)
-                ),
-                Calendar.FRIDAY to listOf(
-                    TimeSlot(startHour = 9, startMinute = 0, endHour = 13, endMinute = 0)
-                ),
-                Calendar.SATURDAY to emptyList(),
-                Calendar.SUNDAY to emptyList()
-            )
-        )
-    }
-
     Column(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Error message
+        error?.let { errorMsg ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Text(
+                    text = errorMsg,
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+
         // Auto-tracking toggle card
         AutoTrackingCard(
-            autoTracking = autoTracking,
-            onToggle = { autoTracking = it }
+            trackingMode = trackingMode,
+            onModeChanged = { newMode ->
+                userId?.let { viewModel.updateTrackingMode(it, newMode) }
+            },
+            isEnabled = userId != null
         )
 
         // Professional Hours section
@@ -900,28 +925,31 @@ fun PlanningSection() {
 
         // Day schedule cards
         daysOfWeek.forEach { (dayName, dayOfWeek) ->
+            // Convert Android day to ISO day for Supabase
+            val isoDay = CalendarUtils.androidDayToIsoDay(dayOfWeek)
+            val daySchedules = schedules[isoDay] ?: emptyList()
+
             DayScheduleCard(
                 dayName = dayName,
-                timeSlots = schedules.value[dayOfWeek] ?: emptyList(),
+                timeSlots = daySchedules,
                 onAddTimeSlot = {
-                    val currentSlots = schedules.value[dayOfWeek] ?: emptyList()
-                    schedules.value = schedules.value + (dayOfWeek to currentSlots + TimeSlot(
-                        startHour = 9,
-                        startMinute = 0,
-                        endHour = 17,
-                        endMinute = 0
-                    ))
+                    userId?.let {
+                        viewModel.addWorkSchedule(it, isoDay, TimeSlot(
+                            id = java.util.UUID.randomUUID().toString(),
+                            startHour = 9,
+                            startMinute = 0,
+                            endHour = 17,
+                            endMinute = 0
+                        ))
+                    }
                 },
                 onDeleteTimeSlot = { slotId ->
-                    val currentSlots = schedules.value[dayOfWeek] ?: emptyList()
-                    schedules.value = schedules.value + (dayOfWeek to currentSlots.filter { it.id != slotId })
+                    userId?.let { viewModel.deleteWorkSchedule(slotId, it) }
                 },
                 onTimeSlotChanged = { updatedSlot ->
-                    val currentSlots = schedules.value[dayOfWeek] ?: emptyList()
-                    schedules.value = schedules.value + (dayOfWeek to currentSlots.map {
-                        if (it.id == updatedSlot.id) updatedSlot else it
-                    })
-                }
+                    userId?.let { viewModel.updateWorkSchedule(it, isoDay, updatedSlot) }
+                },
+                isEnabled = userId != null
             )
         }
     }
@@ -929,8 +957,9 @@ fun PlanningSection() {
 
 @Composable
 fun AutoTrackingCard(
-    autoTracking: Boolean,
-    onToggle: (Boolean) -> Unit
+    trackingMode: TrackingMode,
+    onModeChanged: (TrackingMode) -> Unit,
+    isEnabled: Boolean = true
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -955,22 +984,45 @@ fun AutoTrackingCard(
                     )
                 )
                 Text(
-                    text = if (autoTracking) "Only during professional hours" else "Always active",
+                    text = when (trackingMode) {
+                        TrackingMode.WORK_HOURS_ONLY -> "Only during professional hours"
+                        TrackingMode.ALWAYS -> "Always active"
+                        TrackingMode.DISABLED -> "Disabled"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
 
-            Switch(
-                checked = autoTracking,
-                onCheckedChange = onToggle,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = MockupGreen,
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+            // 3-state button
+            IconButton(
+                onClick = {
+                    if (isEnabled) {
+                        val nextMode = when (trackingMode) {
+                            TrackingMode.DISABLED -> TrackingMode.WORK_HOURS_ONLY
+                            TrackingMode.WORK_HOURS_ONLY -> TrackingMode.ALWAYS
+                            TrackingMode.ALWAYS -> TrackingMode.DISABLED
+                        }
+                        onModeChanged(nextMode)
+                    }
+                },
+                enabled = isEnabled
+            ) {
+                Icon(
+                    imageVector = when (trackingMode) {
+                        TrackingMode.DISABLED -> Icons.Default.Cancel
+                        TrackingMode.WORK_HOURS_ONLY -> Icons.Default.Schedule
+                        TrackingMode.ALWAYS -> Icons.Default.CheckCircle
+                    },
+                    contentDescription = "Change tracking mode",
+                    tint = when (trackingMode) {
+                        TrackingMode.DISABLED -> Color.Gray
+                        TrackingMode.WORK_HOURS_ONLY -> MockupGreen
+                        TrackingMode.ALWAYS -> Color.Blue
+                    },
+                    modifier = Modifier.size(32.dp)
                 )
-            )
+            }
         }
     }
 }
@@ -981,7 +1033,8 @@ fun DayScheduleCard(
     timeSlots: List<TimeSlot>,
     onAddTimeSlot: () -> Unit,
     onDeleteTimeSlot: (String) -> Unit,
-    onTimeSlotChanged: (TimeSlot) -> Unit
+    onTimeSlotChanged: (TimeSlot) -> Unit,
+    isEnabled: Boolean = true
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1141,22 +1194,6 @@ data class CalendarDayData(
     val year: Int = 0,
     val month: Int = 0
 )
-
-data class TimeSlot(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val startHour: Int,
-    val startMinute: Int,
-    val endHour: Int,
-    val endMinute: Int
-) {
-    fun getFormattedStartTime(): String {
-        return String.format("%02d:%02d", startHour, startMinute)
-    }
-
-    fun getFormattedEndTime(): String {
-        return String.format("%02d:%02d", endHour, endMinute)
-    }
-}
 
 data class DaySchedule(
     val dayOfWeek: Int, // Calendar.MONDAY, etc.

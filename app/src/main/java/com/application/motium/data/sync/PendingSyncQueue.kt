@@ -2,6 +2,8 @@ package com.application.motium.data.sync
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.application.motium.MotiumApplication
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -15,8 +17,10 @@ import java.util.concurrent.ConcurrentHashMap
 class PendingSyncQueue private constructor(context: Context) {
 
     companion object {
-        private const val PREFS_NAME = "pending_sync_queue"
+        private const val PREFS_NAME = "pending_sync_queue" // Ancien nom (non chiffré)
+        private const val PREFS_NAME_ENCRYPTED = "pending_sync_queue_encrypted" // Nouveau nom (chiffré)
         private const val KEY_PENDING_OPERATIONS = "pending_operations"
+        private const val KEY_MIGRATION_COMPLETE = "queue_migrated_to_encrypted" // Flag de migration
 
         @Volatile
         private var instance: PendingSyncQueue? = null
@@ -48,14 +52,97 @@ class PendingSyncQueue private constructor(context: Context) {
         TRIP, VEHICLE, USER_PROFILE
     }
 
-    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+
+    // SÉCURITÉ: Utiliser EncryptedSharedPreferences au lieu de SharedPreferences standard
+    private val masterKey = MasterKey.Builder(appContext)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    private val prefs: SharedPreferences = try {
+        EncryptedSharedPreferences.create(
+            appContext,
+            PREFS_NAME_ENCRYPTED,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    } catch (e: Exception) {
+        MotiumApplication.logger.e(
+            "❌ CRITICAL: Cannot create encrypted sync queue storage",
+            "PendingSyncQueue",
+            e
+        )
+        throw IllegalStateException(
+            "Cannot initialize encrypted sync queue storage. Please reinstall the app.",
+            e
+        )
+    }
+
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
-    // Cache en mémoire pour accès rapide
+    // Cache en mémoire pour accès rapide (thread-safe)
     private val operationsCache = ConcurrentHashMap<String, PendingOperation>()
 
     init {
+        migrateFromUnencryptedIfNeeded()
         loadOperationsFromDisk()
+    }
+
+    /**
+     * MIGRATION: Transfert des opérations depuis SharedPreferences non chiffré vers chiffré.
+     * Exécuté une seule fois au premier lancement après mise à jour.
+     */
+    private fun migrateFromUnencryptedIfNeeded() {
+        try {
+            // Vérifier si la migration a déjà été effectuée
+            if (prefs.getBoolean(KEY_MIGRATION_COMPLETE, false)) {
+                MotiumApplication.logger.d(
+                    "Sync queue migration already complete, skipping",
+                    "PendingSyncQueue"
+                )
+                return
+            }
+
+            // Charger les anciennes opérations depuis SharedPreferences non chiffré
+            val oldPrefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val oldOperationsJson = oldPrefs.getString(KEY_PENDING_OPERATIONS, null)
+
+            if (oldOperationsJson != null) {
+                MotiumApplication.logger.i(
+                    "🔄 Starting migration of sync queue to encrypted storage",
+                    "PendingSyncQueue"
+                )
+
+                // Copier les opérations vers le stockage chiffré
+                prefs.edit()
+                    .putString(KEY_PENDING_OPERATIONS, oldOperationsJson)
+                    .putBoolean(KEY_MIGRATION_COMPLETE, true)
+                    .apply()
+
+                // Supprimer l'ancien stockage non chiffré
+                oldPrefs.edit().clear().apply()
+
+                MotiumApplication.logger.i(
+                    "✅ Successfully migrated sync queue to encrypted storage",
+                    "PendingSyncQueue"
+                )
+            } else {
+                // Pas de données à migrer, marquer comme terminé
+                prefs.edit().putBoolean(KEY_MIGRATION_COMPLETE, true).apply()
+                MotiumApplication.logger.d(
+                    "No sync queue operations to migrate",
+                    "PendingSyncQueue"
+                )
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "❌ Sync queue migration failed: ${e.message}",
+                "PendingSyncQueue",
+                e
+            )
+            // Ne pas marquer comme terminé en cas d'erreur - retry au prochain lancement
+        }
     }
 
     /**

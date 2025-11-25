@@ -214,6 +214,7 @@ class LocationTrackingService : Service() {
         BUFFERING,      // Enregistrement GPS en buffer temporaire (activité détectée mais non confirmée)
         TRIP_ACTIVE,    // Trajet confirmé, enregistrement GPS actif
         PAUSED,         // Pause temporaire (activité non fiable), buffer conservé mais GPS arrêté
+        STOP_PENDING,   // Arrêt détecté, période de grâce de 2 min (debounce pour éviter faux positifs)
         FINALIZING      // Collecte des derniers points précis avant sauvegarde
     }
 
@@ -267,6 +268,12 @@ class LocationTrackingService : Service() {
     // Système de détection d'inactivité GPS (pour auto-stop des trips fantômes)
     private var lastSignificantMoveTime: Long = 0
     private var lastSignificantLocation: Location? = null
+
+    // Système de debounce pour arrêts (période de grâce de 2 minutes)
+    private val stopDebounceHandler = Handler(Looper.getMainLooper())
+    private var stopPendingStartTime: Long? = null
+    private val STOP_DEBOUNCE_DELAY_MS = 120000L // 2 minutes
+    private val STOP_RESUME_SPEED_THRESHOLD = 2.7f // 10 km/h en m/s
 
     data class TripData(
         val id: String = java.util.UUID.randomUUID().toString(),
@@ -342,6 +349,39 @@ class LocationTrackingService : Service() {
                         startTripHealthCheck()
 
                         MotiumApplication.logger.i("State transition: PAUSED → BUFFERING (resumed, GPS + health check started)", "TripStateMachine")
+                    }
+                    TripState.STOP_PENDING -> {
+                        // AUTO-RESUME: Véhicule détecté pendant la période de grâce
+                        MotiumApplication.logger.i(
+                            "🔄 AUTO-RESUME: Vehicle activity detected during stop grace period - Cancelling stop and resuming trip",
+                            "TripStateMachine"
+                        )
+
+                        // Annuler le timer de debounce
+                        stopDebounceHandler.removeCallbacksAndMessages(null)
+                        stopPendingStartTime = null
+
+                        // Repasser en TRIP_ACTIVE
+                        tripState = TripState.TRIP_ACTIVE
+
+                        MotiumApplication.logger.i("State transition: STOP_PENDING → TRIP_ACTIVE (auto-resume)", "TripStateMachine")
+                    }
+                    TripState.FINALIZING -> {
+                        // AUTO-RESUME: Véhicule détecté pendant la finalisation (résout le bug du "Trou noir")
+                        MotiumApplication.logger.i(
+                            "🔄 AUTO-RESUME: Vehicle activity detected during finalization - Cancelling finalization and resuming trip",
+                            "TripStateMachine"
+                        )
+
+                        // Annuler le timer de finalisation
+                        endPointHandler.removeCallbacksAndMessages(null)
+                        isCollectingEndPoints = false
+                        endPointCandidates.clear()
+
+                        // Repasser en TRIP_ACTIVE
+                        tripState = TripState.TRIP_ACTIVE
+
+                        MotiumApplication.logger.i("State transition: FINALIZING → TRIP_ACTIVE (auto-resume)", "TripStateMachine")
                     }
                     else -> {
                         MotiumApplication.logger.w("START_BUFFERING ignored in state $tripState", "TripStateMachine")
@@ -617,29 +657,70 @@ class LocationTrackingService : Service() {
                 tryStartForeground("Finalisation du trajet")
 
                 when (tripState) {
-                    TripState.TRIP_ACTIVE, TripState.BUFFERING -> {
-                        // Si on a un trajet actif, le finaliser
+                    TripState.TRIP_ACTIVE -> {
+                        // Si on a un trajet actif, passer en STOP_PENDING (debounce de 2 min)
                         if (currentTrip != null) {
-                            tripState = TripState.FINALIZING
+                            tripState = TripState.STOP_PENDING
+                            stopPendingStartTime = System.currentTimeMillis()
 
-                            // Commencer la collecte de points d'arrivée
-                            startEndPointCollection()
+                            MotiumApplication.logger.i(
+                                "State transition: TRIP_ACTIVE → STOP_PENDING (Grace period 2min) - GPS continues collecting",
+                                "TripStateMachine"
+                            )
 
-                            // Programmer la finalisation après 15s
-                            endPointHandler.postDelayed({
-                                MotiumApplication.logger.i("End point collection complete - finalizing trip", "LocationService")
-                                finishCurrentTrip()
-                            }, END_POINT_SAMPLING_DELAY_MS)
+                            // CRITIQUE: Ne PAS arrêter le GPS, continuer à collecter pour détecter auto-resume
+                            // Le GPS reste actif pour surveiller la vitesse et permettre auto-resume
 
-                            MotiumApplication.logger.i("State transition: $tripState → FINALIZING", "TripStateMachine")
+                            // Démarrer le timer de debounce (2 minutes)
+                            stopDebounceHandler.postDelayed({
+                                // Timer expiré = confirmation de l'arrêt
+                                MotiumApplication.logger.i(
+                                    "Grace period expired (2min) - confirming stop and entering finalization",
+                                    "TripStateMachine"
+                                )
+
+                                // Passer en FINALIZING
+                                tripState = TripState.FINALIZING
+
+                                // Commencer la collecte de points d'arrivée
+                                startEndPointCollection()
+
+                                // Programmer la finalisation après 15s
+                                endPointHandler.postDelayed({
+                                    MotiumApplication.logger.i("End point collection complete - finalizing trip", "LocationService")
+
+                                    // CRITIQUE: Utiliser le timestamp de début de STOP_PENDING pour la date de fin
+                                    stopPendingStartTime?.let { startTime ->
+                                        currentTrip?.endTime = startTime
+                                        MotiumApplication.logger.i(
+                                            "Trip end time adjusted to STOP_PENDING start (excluding 2min grace period)",
+                                            "TripStateMachine"
+                                        )
+                                    }
+
+                                    finishCurrentTrip()
+                                    stopPendingStartTime = null
+                                }, END_POINT_SAMPLING_DELAY_MS)
+
+                                MotiumApplication.logger.i("State transition: STOP_PENDING → FINALIZING", "TripStateMachine")
+                            }, STOP_DEBOUNCE_DELAY_MS)
+
                         } else {
                             // Pas de trajet actif, vider buffer et retour STANDBY
                             gpsBuffer.clear()
                             tripState = TripState.STANDBY
                             updateGPSFrequency(tripMode = false)
 
-                            MotiumApplication.logger.i("State transition: $tripState → STANDBY (no active trip)", "TripStateMachine")
+                            MotiumApplication.logger.i("State transition: TRIP_ACTIVE → STANDBY (no active trip)", "TripStateMachine")
                         }
+                    }
+                    TripState.BUFFERING -> {
+                        // Si on a un trajet en buffer mais non confirmé, vider et retour STANDBY
+                        gpsBuffer.clear()
+                        tripState = TripState.STANDBY
+                        updateGPSFrequency(tripMode = false)
+
+                        MotiumApplication.logger.i("State transition: BUFFERING → STANDBY (trip not confirmed)", "TripStateMachine")
                     }
                     TripState.PAUSED -> {
                         // Finaliser le trajet en pause
@@ -663,6 +744,13 @@ class LocationTrackingService : Service() {
 
                             MotiumApplication.logger.i("State transition: PAUSED → STANDBY (no active trip)", "TripStateMachine")
                         }
+                    }
+                    TripState.STOP_PENDING -> {
+                        // Déjà en STOP_PENDING, ne rien faire (éviter de redémarrer le timer)
+                        MotiumApplication.logger.w(
+                            "END_TRIP ignored in STOP_PENDING (already waiting for grace period to expire)",
+                            "TripStateMachine"
+                        )
                     }
                     else -> {
                         MotiumApplication.logger.w("END_TRIP ignored in state $tripState", "TripStateMachine")
@@ -702,6 +790,39 @@ class LocationTrackingService : Service() {
                             updateGPSFrequency(tripMode = false)
 
                             MotiumApplication.logger.i("State transition: $tripState → STANDBY (manual stop, no active trip)", "TripStateMachine")
+                        }
+                    }
+                    TripState.STOP_PENDING -> {
+                        // Annuler le debounce et forcer l'arrêt immédiat
+                        MotiumApplication.logger.i("Manual stop during STOP_PENDING - Cancelling debounce and forcing immediate stop", "TripStateMachine")
+
+                        // Annuler le timer de debounce
+                        stopDebounceHandler.removeCallbacksAndMessages(null)
+                        val endTime = stopPendingStartTime ?: System.currentTimeMillis()
+                        stopPendingStartTime = null
+
+                        if (currentTrip != null) {
+                            tripState = TripState.FINALIZING
+
+                            // Commencer la collecte de points d'arrivée
+                            startEndPointCollection()
+
+                            // Programmer la finalisation après 15s
+                            endPointHandler.postDelayed({
+                                MotiumApplication.logger.i("End point collection complete - finalizing trip (manual stop from STOP_PENDING)", "LocationService")
+
+                                // Utiliser le timestamp de début de STOP_PENDING
+                                currentTrip?.endTime = endTime
+                                finishCurrentTrip()
+                            }, END_POINT_SAMPLING_DELAY_MS)
+
+                            MotiumApplication.logger.i("State transition: STOP_PENDING → FINALIZING (manual stop)", "TripStateMachine")
+                        } else {
+                            // Pas de trajet, retour STANDBY
+                            gpsBuffer.clear()
+                            tripState = TripState.STANDBY
+
+                            MotiumApplication.logger.i("State transition: STOP_PENDING → STANDBY (manual stop, no active trip)", "TripStateMachine")
                         }
                     }
                     TripState.PAUSED -> {
@@ -777,7 +898,8 @@ class LocationTrackingService : Service() {
         // CRITICAL FIX: Remove all pending callbacks from handlers to prevent crashes
         endPointHandler.removeCallbacksAndMessages(null)
         tripHealthCheckHandler.removeCallbacksAndMessages(null)
-        MotiumApplication.logger.i("Cleared all handler callbacks", "LocationService")
+        stopDebounceHandler.removeCallbacksAndMessages(null)
+        MotiumApplication.logger.i("Cleared all handler callbacks (including stop debounce)", "LocationService")
 
         serviceScope.cancel()
 
@@ -874,7 +996,7 @@ class LocationTrackingService : Service() {
             .setDefaults(0) // Aucun défaut (pas de son, pas de vibration)
 
         // Ajouter bouton "Arrêter" si un trajet est en cours
-        if (tripState == TripState.TRIP_ACTIVE || tripState == TripState.BUFFERING) {
+        if (tripState == TripState.TRIP_ACTIVE || tripState == TripState.BUFFERING || tripState == TripState.STOP_PENDING) {
             val stopIntent = Intent(this, LocationTrackingService::class.java).apply {
                 action = ACTION_MANUAL_STOP_TRIP
             }
@@ -1011,6 +1133,24 @@ class LocationTrackingService : Service() {
             )
         }
 
+        // AUTO-RESUME PAR VITESSE: Si en STOP_PENDING et vitesse > 10 km/h, reprendre le trajet
+        if (tripState == TripState.STOP_PENDING && location.hasSpeed() && location.speed > STOP_RESUME_SPEED_THRESHOLD) {
+            MotiumApplication.logger.i(
+                "🔄 AUTO-RESUME: Speed detected > 10km/h (${String.format("%.1f", location.speed * 3.6)}km/h) during stop grace period - Resuming trip",
+                "TripStateMachine"
+            )
+
+            // Annuler le timer de debounce
+            stopDebounceHandler.removeCallbacksAndMessages(null)
+            stopPendingStartTime = null
+
+            // Repasser en TRIP_ACTIVE
+            tripState = TripState.TRIP_ACTIVE
+
+            MotiumApplication.logger.i("State transition: STOP_PENDING → TRIP_ACTIVE (auto-resume by speed)", "TripStateMachine")
+            updateNotificationStatus()
+        }
+
         // NOUVEAU: Détection d'inactivité GPS pour auto-stop des trips fantômes
         detectInactivityAndAutoStop(location)
 
@@ -1101,6 +1241,16 @@ class LocationTrackingService : Service() {
                 // Mode trajet actif: ajouter au trajet
                 currentTrip?.let { trip ->
                     addLocationToTrip(trip, location)
+                }
+            }
+            TripState.STOP_PENDING -> {
+                // Mode arrêt en attente: continuer à collecter pour détecter auto-resume
+                currentTrip?.let { trip ->
+                    addLocationToTrip(trip, location)
+                    MotiumApplication.logger.d(
+                        "Point collected during STOP_PENDING (monitoring for auto-resume)",
+                        "LocationService"
+                    )
                 }
             }
             TripState.FINALIZING -> {
@@ -1730,6 +1880,10 @@ class LocationTrackingService : Service() {
                 "Trajet en cours - ${String.format("%.2f", distance / 1000)} km"
             }
             TripState.PAUSED -> "Pause temporaire (activité non fiable)"
+            TripState.STOP_PENDING -> {
+                val distance = currentTrip?.totalDistance ?: 0.0
+                "Arrêt détecté - Vérification... ${String.format("%.2f", distance / 1000)} km"
+            }
             TripState.FINALIZING -> "Finalisation du trajet..."
         }
 

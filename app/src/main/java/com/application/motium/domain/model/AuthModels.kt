@@ -27,7 +27,8 @@ data class AuthState(
     val authUser: AuthUser? = null,
     val user: User? = null,
     val isLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val isCriticalError: Boolean = false  // SÉCURITÉ: Erreur non récupérable (échec du chiffrement, etc.)
 )
 
 sealed class AuthResult<out T> {
