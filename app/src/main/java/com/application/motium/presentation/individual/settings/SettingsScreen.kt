@@ -849,8 +849,8 @@ fun MileageRatesSection(
             MileageRateItemWithIcon(
                 icon = Icons.Default.DirectionsCar,
                 iconBackground = Color(0xFFD1FAE5),
-                title = "Car",
-                rate = "0.585 €/km",
+                title = "Voiture",
+                rate = "0.636 €/km",
                 surfaceColor = surfaceColor,
                 textColor = textColor,
                 textSecondaryColor = textSecondaryColor,
@@ -873,8 +873,8 @@ fun MileageRatesSection(
             MileageRateItemWithIcon(
                 icon = Icons.Default.TwoWheeler,
                 iconBackground = Color(0xFFD1FAE5),
-                title = "Motorcycle",
-                rate = "0.25 €/km",
+                title = "Moto",
+                rate = "0.395 €/km",
                 surfaceColor = surfaceColor,
                 textColor = textColor,
                 textSecondaryColor = textSecondaryColor,
@@ -897,8 +897,8 @@ fun MileageRatesSection(
             MileageRateItemWithIcon(
                 icon = Icons.Default.PedalBike,
                 iconBackground = Color(0xFFD1FAE5),
-                title = "Bicycle",
-                rate = "0.10 €/km",
+                title = "Vélo",
+                rate = "0.25 €/km",
                 surfaceColor = surfaceColor,
                 textColor = textColor,
                 textSecondaryColor = textSecondaryColor,
@@ -1162,13 +1162,13 @@ fun CarMileageDetails(
             )
         }
 
-        // Données
+        // Barème kilométrique 2025 - Source: bpifrance-creation.fr
         val rates = listOf(
-            listOf("≤ 3 CV", "0.537 €", "0.291 €", "0.213 €"),
-            listOf("4 CV", "0.603 €", "0.337 €", "0.245 €"),
-            listOf("5 CV", "0.631 €", "0.356 €", "0.260 €"),
-            listOf("6 CV", "0.661 €", "0.375 €", "0.273 €"),
-            listOf("≥ 7 CV", "0.685 €", "0.394 €", "0.286 €")
+            listOf("≤ 3 CV", "0.529 €", "0.316 €", "0.370 €"),
+            listOf("4 CV", "0.606 €", "0.340 €", "0.407 €"),
+            listOf("5 CV", "0.636 €", "0.357 €", "0.427 €"),
+            listOf("6 CV", "0.665 €", "0.374 €", "0.447 €"),
+            listOf("≥ 7 CV", "0.697 €", "0.394 €", "0.470 €")
         )
 
         rates.forEach { row ->
@@ -1245,10 +1245,11 @@ fun MotorcycleMileageDetails(
             )
         }
 
+        // Barème kilométrique 2025 - Deux-roues motorisés
         val motorcycleRates = listOf(
             listOf("< 50 cm³", "0.315 €/km"),
             listOf("50-125 cm³", "0.395 €/km"),
-            listOf("> 125 cm³", "0.468 €/km")
+            listOf("> 125 cm³", "0.395 €/km")
         )
 
         motorcycleRates.forEach { row ->

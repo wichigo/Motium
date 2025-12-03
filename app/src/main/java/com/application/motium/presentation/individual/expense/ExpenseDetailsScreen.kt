@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -26,9 +28,16 @@ import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.presentation.theme.*
+import com.application.motium.utils.ThemeManager
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+
+// Colors matching HomeScreen
+private val MockupGreen = Color(0xFF10B981)
+private val MockupTextBlack = Color(0xFF1F2937)
+private val MockupTextGray = Color(0xFF6B7280)
+private val MockupBackground = Color(0xFFF3F4F6)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +48,14 @@ fun ExpenseDetailsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
+
+    // Dynamic colors matching HomeScreen
+    val cardColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White
+    val textColor = if (isDarkMode) Color.White else MockupTextBlack
+    val subTextColor = if (isDarkMode) Color.Gray else MockupTextGray
+    val backgroundColor = if (isDarkMode) Color(0xFF121212) else MockupBackground
 
     var expenses by remember { mutableStateOf<List<Expense>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -180,83 +197,63 @@ fun ExpenseDetailsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = PaddingValues(vertical = 16.dp)
             ) {
-                // Summary card
+                // Summary card - HomeScreen style
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MotiumGreen.copy(alpha = 0.1f)
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = cardColor),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp)
-                        ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
                             Text(
-                                "Summary",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(bottom = 12.dp)
+                                "Daily Summary",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = textColor,
+                                modifier = Modifier.padding(bottom = 16.dp)
                             )
-
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Column {
-                                    Text(
-                                        "Total expenses",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                                    )
+                                // Expenses count
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(
                                         "${expenses.size}",
-                                        style = MaterialTheme.typography.headlineSmall.copy(
-                                            fontWeight = FontWeight.Bold
-                                        ),
-                                        color = MotiumGreen
+                                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MockupGreen
+                                    )
+                                    Text(
+                                        "Expenses",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = subTextColor
                                     )
                                 }
-
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        "Total TTC",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                                    )
+                                // Total TTC
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(
                                         String.format("%.2f €", totalTTC),
-                                        style = MaterialTheme.typography.headlineSmall.copy(
-                                            fontWeight = FontWeight.Bold
-                                        ),
-                                        color = MotiumGreen
+                                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MockupGreen
+                                    )
+                                    Text(
+                                        "Total TTC",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = subTextColor
                                     )
                                 }
-                            }
-
-                            if (totalHT > 0) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    Column(horizontalAlignment = Alignment.End) {
-                                        Text(
-                                            "Total HT",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                        )
-                                        Text(
-                                            String.format("%.2f €", totalHT),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                                        )
-                                    }
+                                // Total HT
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        String.format("%.2f €", totalHT),
+                                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MockupGreen
+                                    )
+                                    Text(
+                                        "Total HT",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = subTextColor
+                                    )
                                 }
                             }
                         }
@@ -268,10 +265,9 @@ fun ExpenseDetailsScreen(
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                            )
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = cardColor),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                         ) {
                             Box(
                                 modifier = Modifier
@@ -284,13 +280,13 @@ fun ExpenseDetailsScreen(
                                         Icons.Default.Receipt,
                                         contentDescription = null,
                                         modifier = Modifier.size(48.dp),
-                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                        tint = subTextColor.copy(alpha = 0.5f)
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
                                         "No expenses for this day",
                                         style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                        color = subTextColor
                                     )
                                 }
                             }
@@ -302,7 +298,10 @@ fun ExpenseDetailsScreen(
                             expense = expense,
                             onPhotoClick = { photoUri ->
                                 selectedPhotoUri = photoUri
-                            }
+                            },
+                            cardColor = cardColor,
+                            textColor = textColor,
+                            subTextColor = subTextColor
                         )
                     }
                 }
@@ -314,108 +313,159 @@ fun ExpenseDetailsScreen(
 @Composable
 fun ExpenseCard(
     expense: Expense,
-    onPhotoClick: (String) -> Unit = {}
+    onPhotoClick: (String) -> Unit = {},
+    cardColor: Color = Color.White,
+    textColor: Color = MockupTextBlack,
+    subTextColor: Color = MockupTextGray
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(16.dp),
+            verticalAlignment = Alignment.Top
         ) {
-            // Header with type and icon
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Icon with colored background (similar to MiniMap in trips)
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MockupGreen.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Receipt,
-                        contentDescription = null,
-                        tint = MotiumGreen,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    imageVector = when (expense.type.name) {
+                        "FUEL" -> Icons.Default.LocalGasStation
+                        "PARKING" -> Icons.Default.LocalParking
+                        "TOLL" -> Icons.Default.Toll
+                        "MAINTENANCE" -> Icons.Default.Build
+                        "INSURANCE" -> Icons.Default.Security
+                        "OTHER" -> Icons.Default.MoreHoriz
+                        else -> Icons.Default.Receipt
+                    },
+                    contentDescription = null,
+                    tint = MockupGreen,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Content
+            Column(modifier = Modifier.weight(1f)) {
+                // Header row with type and badge
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
                         expense.getExpenseTypeLabel(),
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = textColor
                     )
-                }
 
-                if (expense.photoUri != null) {
-                    IconButton(
-                        onClick = { onPhotoClick(expense.photoUri) },
-                        modifier = Modifier.size(36.dp)
+                    // Type badge
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MockupGreen.copy(alpha = 0.15f)
                     ) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            contentDescription = "View photo",
-                            tint = MotiumGreen,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Receipt,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = MockupGreen
+                            )
+                            Text(
+                                "Expense",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                fontSize = 11.sp,
+                                color = MockupGreen
+                            )
+                        }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-            // Amounts
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom
-            ) {
-                Column {
+                // Note if available
+                if (expense.note.isNotBlank()) {
                     Text(
-                        "Amount TTC",
+                        expense.note,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = subTextColor,
+                        maxLines = 2
                     )
-                    Text(
-                        expense.getFormattedAmount(),
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = MotiumGreen
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                expense.amountHT?.let { ht ->
+                // Amount row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // HT amount if available
+                    expense.amountHT?.let { ht ->
+                        Column {
+                            Text(
+                                "HT",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = subTextColor
+                            )
+                            Text(
+                                expense.getFormattedAmountHT() ?: "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = textColor
+                            )
+                        }
+                    }
+
+                    // TTC amount (main)
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            "Amount HT",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            expense.getFormattedAmount(),
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MockupGreen
                         )
-                        Text(
-                            expense.getFormattedAmountHT() ?: "",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                        )
+                        if (expense.photoUri != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Surface(
+                                modifier = Modifier.clickable { onPhotoClick(expense.photoUri!!) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MockupGreen.copy(alpha = 0.1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.CameraAlt,
+                                        contentDescription = "View photo",
+                                        tint = MockupGreen,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        "Photo",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MockupGreen
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-            }
-
-            // Note
-            if (expense.note.isNotBlank()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    expense.note,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
             }
         }
     }

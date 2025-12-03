@@ -4,9 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,6 +36,11 @@ import com.application.motium.domain.model.Vehicle
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.theme.*
+import com.application.motium.utils.ThemeManager
+import com.application.motium.utils.MileageAllowanceCalculator
+import com.application.motium.data.geocoding.NominatimService
+import com.application.motium.domain.model.TripType
+import com.application.motium.domain.model.VehicleType
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -50,16 +58,24 @@ fun TripDetailsScreen(
     val tripRepository = remember { TripRepository.getInstance(context) }
     val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
     val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
+    val themeManager = remember { ThemeManager.getInstance(context) }
 
     // Utiliser authState de authViewModel
     val authState by authViewModel.authState.collectAsState()
     val currentUser = authState.user
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     var trip by remember { mutableStateOf<Trip?>(null) }
     var vehicle by remember { mutableStateOf<Vehicle?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var selectedPhotoUri by remember { mutableStateOf<String?>(null) }
+    var showTripTypeDialog by remember { mutableStateOf(false) }
+
+    // Map matching: tracé "snap to road" pour affichage précis
+    var matchedRouteCoordinates by remember { mutableStateOf<List<List<Double>>?>(null) }
+    var isMapMatching by remember { mutableStateOf(false) }
+    val nominatimService = remember { NominatimService.getInstance() }
 
     // Charger le trip et les expenses au démarrage
     LaunchedEffect(tripId) {
@@ -80,28 +96,64 @@ fun TripDetailsScreen(
                 }
             }
 
-            // MODIFIÉ: Dépenses retirées - maintenant liées aux journées, pas aux trips
+            // Map Matching: "Snap to Road" pour un tracé qui suit les vraies routes
+            trip?.let { currentTrip ->
+                if (currentTrip.locations.size >= 2) {
+                    isMapMatching = true
+                    try {
+                        val gpsPoints = currentTrip.locations.map { loc ->
+                            Pair(loc.latitude, loc.longitude)
+                        }
+                        val matched = nominatimService.matchRoute(gpsPoints)
+                        if (matched != null && matched.isNotEmpty()) {
+                            matchedRouteCoordinates = matched
+                            MotiumApplication.logger.i(
+                                "✅ Map matching: ${currentTrip.locations.size} GPS → ${matched.size} road points",
+                                "TripDetailsScreen"
+                            )
+                        } else {
+                            MotiumApplication.logger.w(
+                                "Map matching returned null, using raw GPS",
+                                "TripDetailsScreen"
+                            )
+                        }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w(
+                            "Map matching error: ${e.message}, using raw GPS",
+                            "TripDetailsScreen"
+                        )
+                    } finally {
+                        isMapMatching = false
+                    }
+                }
+            }
 
             isLoading = false
         }
     }
+
+    // Couleurs dynamiques
+    val backgroundColor = if (isDarkMode) Color(0xFF121212) else Color(0xFFF3F4F6)
+    val cardColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White
+    val textColor = if (isDarkMode) Color.White else Color(0xFF1F2937)
+    val subTextColor = if (isDarkMode) Color.Gray else Color(0xFF6B7280)
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        "Trip Details",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        fontSize = 18.sp
+                        "Détails du trajet",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = textColor
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
-                            Icons.Default.ArrowBack,
+                            Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Retour",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            tint = textColor
                         )
                     }
                 },
@@ -110,22 +162,23 @@ fun TripDetailsScreen(
                         Icon(
                             Icons.Default.Edit,
                             contentDescription = "Modifier",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MockupGreen
                         )
                     }
                     IconButton(onClick = { showDeleteDialog = true }) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = "Supprimer",
-                            tint = ErrorRed
+                            tint = Color(0xFFEF4444)
                         )
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = backgroundColor
                 )
             )
-        }
+        },
+        containerColor = backgroundColor
     ) { paddingValues ->
         if (isLoading) {
             Box(
@@ -134,7 +187,7 @@ fun TripDetailsScreen(
                     .padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = MockupGreen)
             }
         } else if (trip == null) {
             Box(
@@ -158,20 +211,20 @@ fun TripDetailsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
-                    .background(MaterialTheme.colorScheme.background)
+                    .background(backgroundColor)
                     .verticalScroll(rememberScrollState())
             ) {
                 // Minimap en haut
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(250.dp)
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .height(220.dp),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = cardColor
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -181,10 +234,12 @@ fun TripDetailsScreen(
                             val firstLocation = currentTrip.locations.first()
                             val lastLocation = currentTrip.locations.last()
 
-                            // Convertir les locations en format [longitude, latitude] pour MiniMap
-                            val routeCoordinates = currentTrip.locations.map { location ->
-                                listOf(location.longitude, location.latitude)
-                            }
+                            // Utiliser les coordonnées "map matched" si disponibles,
+                            // sinon fallback vers les points GPS bruts
+                            val routeCoordinates = matchedRouteCoordinates
+                                ?: currentTrip.locations.map { location ->
+                                    listOf(location.longitude, location.latitude)
+                                }
 
                             MiniMap(
                                 startLatitude = firstLocation.latitude,
@@ -194,6 +249,18 @@ fun TripDetailsScreen(
                                 routeCoordinates = routeCoordinates,
                                 modifier = Modifier.fillMaxSize()
                             )
+
+                            // Indicateur de chargement du map matching
+                            if (isMapMatching) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MockupGreen
+                                )
+                            }
                         } else {
                             Text(
                                 "No route data",
@@ -203,6 +270,8 @@ fun TripDetailsScreen(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+
                 // Trip Summary Card
                 Card(
                     modifier = Modifier
@@ -210,71 +279,139 @@ fun TripDetailsScreen(
                         .padding(horizontal = 16.dp),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = cardColor
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            "Trip Summary",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            fontSize = 18.sp
-                        )
+                        // Header avec titre et badge type
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Résumé du trajet",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                fontSize = 20.sp,
+                                color = textColor
+                            )
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                            // Badge Type de trajet (Pro/Perso)
+                            Surface(
+                                modifier = Modifier.clickable { showTripTypeDialog = true },
+                                shape = RoundedCornerShape(12.dp),
+                                color = when (currentTrip.tripType) {
+                                    "PROFESSIONAL" -> MockupGreen.copy(alpha = 0.15f)
+                                    "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
+                                    else -> Color.Gray.copy(alpha = 0.15f)
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = when (currentTrip.tripType) {
+                                            "PROFESSIONAL" -> Icons.Default.Work
+                                            "PERSONAL" -> Icons.Default.Person
+                                            else -> Icons.Default.QuestionMark
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = when (currentTrip.tripType) {
+                                            "PROFESSIONAL" -> MockupGreen
+                                            "PERSONAL" -> Color(0xFF3B82F6)
+                                            else -> Color.Gray
+                                        }
+                                    )
+                                    Text(
+                                        when (currentTrip.tripType) {
+                                            "PROFESSIONAL" -> "Pro"
+                                            "PERSONAL" -> "Perso"
+                                            else -> "Non défini"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        fontSize = 13.sp,
+                                        color = when (currentTrip.tripType) {
+                                            "PROFESSIONAL" -> MockupGreen
+                                            "PERSONAL" -> Color(0xFF3B82F6)
+                                            else -> Color.Gray
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
                         // Date et heure
                         DetailRow(
                             label = "Date",
                             value = SimpleDateFormat("EEEE, MMMM dd, yyyy", Locale.getDefault())
-                                .format(Date(currentTrip.startTime))
+                                .format(Date(currentTrip.startTime)),
+                            textColor = textColor,
+                            subTextColor = subTextColor
                         )
 
                         DetailRow(
-                            label = "Time",
+                            label = "Heure",
                             value = "${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(currentTrip.startTime))} - " +
-                                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(currentTrip.endTime ?: System.currentTimeMillis()))
+                                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(currentTrip.endTime ?: System.currentTimeMillis())),
+                            textColor = textColor,
+                            subTextColor = subTextColor
                         )
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
                         // Adresses
                         DetailRow(
-                            label = "Start",
-                            value = currentTrip.startAddress ?: "Unknown location"
+                            label = "Départ",
+                            value = currentTrip.startAddress ?: "Adresse inconnue",
+                            textColor = textColor,
+                            subTextColor = subTextColor
                         )
 
                         DetailRow(
-                            label = "End",
-                            value = currentTrip.endAddress ?: "Unknown location"
+                            label = "Arrivée",
+                            value = currentTrip.endAddress ?: "Adresse inconnue",
+                            textColor = textColor,
+                            subTextColor = subTextColor
                         )
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
                         // Vehicle
                         if (vehicle != null) {
                             DetailRow(
-                                label = "Vehicle",
-                                value = "${vehicle?.name} (${vehicle?.type?.displayName})"
+                                label = "Véhicule",
+                                value = "${vehicle?.name} (${vehicle?.type?.displayName})",
+                                textColor = textColor,
+                                subTextColor = subTextColor
                             )
                         } else if (currentTrip.vehicleId != null) {
                             DetailRow(
-                                label = "Vehicle",
-                                value = "Loading..."
+                                label = "Véhicule",
+                                value = "Chargement...",
+                                textColor = textColor,
+                                subTextColor = subTextColor
                             )
                         } else {
                             DetailRow(
-                                label = "Vehicle",
-                                value = "Not assigned"
+                                label = "Véhicule",
+                                value = "Non assigné",
+                                textColor = textColor,
+                                subTextColor = subTextColor
                             )
                         }
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
                         // Distance et durée
                         Row(
@@ -283,38 +420,115 @@ fun TripDetailsScreen(
                         ) {
                             StatItem(
                                 label = "Distance",
-                                value = currentTrip.getFormattedDistance()
+                                value = currentTrip.getFormattedDistance(),
+                                subTextColor = subTextColor
                             )
                             StatItem(
-                                label = "Duration",
-                                value = "$minutes min"
+                                label = "Durée",
+                                value = "$minutes min",
+                                subTextColor = subTextColor
                             )
                             StatItem(
-                                label = "Avg Speed",
+                                label = "Vitesse moy.",
                                 value = String.format("%.0f km/h",
                                     if (duration > 0) (currentTrip.totalDistance / (duration / 1000.0)) * 3.6 else 0.0
-                                )
+                                ),
+                                subTextColor = subTextColor
                             )
                         }
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
-                        // Indemnités
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        // Indemnités kilométriques - Calcul avec barème progressif
+                        val tripType = when (currentTrip.tripType) {
+                            "PROFESSIONAL" -> TripType.PROFESSIONAL
+                            "PERSONAL" -> TripType.PERSONAL
+                            else -> TripType.PERSONAL
+                        }
+
+                        // Kilométrage annuel précédent pour ce véhicule/type
+                        val previousAnnualKm = when (tripType) {
+                            TripType.PROFESSIONAL -> vehicle?.totalMileagePro ?: 0.0
+                            TripType.PERSONAL -> vehicle?.totalMileagePerso ?: 0.0
+                        }
+
+                        // Calcul avec le barème progressif
+                        val tripDistanceKm = currentTrip.totalDistance / 1000.0
+                        val mileageCost = if (vehicle != null) {
+                            MileageAllowanceCalculator.calculateTripCost(
+                                vehicleType = vehicle!!.type,
+                                power = vehicle!!.power,
+                                previousAnnualKm = previousAnnualKm,
+                                tripDistanceKm = tripDistanceKm,
+                                fuelType = vehicle!!.fuelType  // Pour majoration électrique +20%
+                            )
+                        } else {
+                            // Fallback si pas de véhicule : taux moyen 5CV
+                            tripDistanceKm * 0.636
+                        }
+
+                        // Info sur la tranche actuelle
+                        val bracketInfo = vehicle?.let {
+                            MileageAllowanceCalculator.getCurrentBracketInfo(it.type, it.power, previousAnnualKm)
+                        }
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                "Indemnities",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium)
-                            )
-                            Text(
-                                "€${String.format("%.2f", currentTrip.totalDistance * 0.20 / 1000)}",
-                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 20.sp
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        "Indemnités kilométriques",
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                                        color = textColor
+                                    )
+                                    if (bracketInfo != null && vehicle != null) {
+                                        val isElectric = vehicle!!.fuelType == com.application.motium.domain.model.FuelType.ELECTRIC
+                                        Text(
+                                            buildString {
+                                                append(vehicle!!.power?.displayName ?: "5 CV")
+                                                append(" • ")
+                                                append(bracketInfo.bracketName)
+                                                if (isElectric) append(" • +20% électrique")
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (isElectric) Color(0xFF10B981) else subTextColor,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "€${String.format("%.2f", mileageCost)}",
+                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFF10B981),
+                                    fontSize = 22.sp
+                                )
+                            }
+
+                            // Afficher le taux effectif (avec majoration électrique si applicable)
+                            if (bracketInfo != null && vehicle != null) {
+                                val isElectric = vehicle!!.fuelType == com.application.motium.domain.model.FuelType.ELECTRIC
+                                val effectiveRate = if (isElectric) bracketInfo.currentRate * 1.20 else bracketInfo.currentRate
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        if (isElectric) "Taux majoré (+20%)" else "Taux appliqué",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = subTextColor
+                                    )
+                                    Text(
+                                        "${String.format("%.3f", effectiveRate)} €/km",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                        color = if (isElectric) Color(0xFF10B981) else textColor
+                                    )
+                                }
+                            }
                         }
 
                         // Status
@@ -324,22 +538,35 @@ fun TripDetailsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "Status",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium)
+                                "Statut",
+                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                                color = textColor
                             )
 
-                            val statusColor = if (currentTrip.isValidated) ValidatedGreen else PendingOrange
+                            val statusColor = if (currentTrip.isValidated) Color(0xFF10B981) else Color(0xFFF59E0B)
 
                             Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = statusColor.copy(alpha = 0.1f)
+                                shape = RoundedCornerShape(20.dp),
+                                color = statusColor.copy(alpha = 0.15f)
                             ) {
-                                Text(
-                                    if (currentTrip.isValidated) "Validated" else "Pending",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                    color = statusColor,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (currentTrip.isValidated) Icons.Default.CheckCircle else Icons.Default.AccessTime,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = statusColor
+                                    )
+                                    Text(
+                                        if (currentTrip.isValidated) "Validé" else "En attente",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        fontSize = 13.sp,
+                                        color = statusColor
+                                    )
+                                }
                             }
                         }
                     }
@@ -361,19 +588,31 @@ fun TripDetailsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (currentTrip.isValidated)
-                            MaterialTheme.colorScheme.surfaceVariant
+                            subTextColor.copy(alpha = 0.2f)
                         else
-                            MaterialTheme.colorScheme.primary
-                    )
+                            MockupGreen
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
-                    Text(
-                        if (currentTrip.isValidated) "Mark as Pending" else "Validate Trip",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (currentTrip.isValidated) Icons.AutoMirrored.Filled.Undo else Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = if (currentTrip.isValidated) subTextColor else Color.White
+                        )
+                        Text(
+                            if (currentTrip.isValidated) "Marquer en attente" else "Valider le trajet",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = if (currentTrip.isValidated) subTextColor else Color.White
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(32.dp))
@@ -381,12 +620,144 @@ fun TripDetailsScreen(
         }
     }
 
+    // Dialog pour changer le type de trajet
+    if (showTripTypeDialog) {
+        AlertDialog(
+            onDismissRequest = { showTripTypeDialog = false },
+            title = {
+                Text(
+                    "Type de trajet",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Sélectionnez le type de trajet :",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Option Professionnel
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                coroutineScope.launch {
+                                    trip?.let { currentTrip ->
+                                        val updatedTrip = currentTrip.copy(tripType = "PROFESSIONAL")
+                                        tripRepository.saveTrip(updatedTrip)
+                                        trip = updatedTrip
+                                    }
+                                    showTripTypeDialog = false
+                                }
+                            },
+                        shape = RoundedCornerShape(16.dp),
+                        color = MockupGreen.copy(alpha = 0.1f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            2.dp,
+                            if (trip?.tripType == "PROFESSIONAL") MockupGreen else Color.Transparent
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Work,
+                                contentDescription = null,
+                                tint = MockupGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    "Professionnel",
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MockupGreen
+                                )
+                                Text(
+                                    "Trajet dans le cadre du travail",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // Option Personnel
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                coroutineScope.launch {
+                                    trip?.let { currentTrip ->
+                                        val updatedTrip = currentTrip.copy(tripType = "PERSONAL")
+                                        tripRepository.saveTrip(updatedTrip)
+                                        trip = updatedTrip
+                                    }
+                                    showTripTypeDialog = false
+                                }
+                            },
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF3B82F6).copy(alpha = 0.1f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            2.dp,
+                            if (trip?.tripType == "PERSONAL") Color(0xFF3B82F6) else Color.Transparent
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = Color(0xFF3B82F6),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    "Personnel",
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = Color(0xFF3B82F6)
+                                )
+                                Text(
+                                    "Trajet personnel ou privé",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showTripTypeDialog = false }) {
+                    Text("Annuler")
+                }
+            }
+        )
+    }
+
     // Dialog de confirmation de suppression
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete Trip") },
-            text = { Text("Are you sure you want to delete this trip? This action cannot be undone.") },
+            title = {
+                Text(
+                    "Supprimer le trajet",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text(
+                    "Êtes-vous sûr de vouloir supprimer ce trajet ? Cette action est irréversible.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -398,12 +769,12 @@ fun TripDetailsScreen(
                         }
                     }
                 ) {
-                    Text("Delete", color = ErrorRed)
+                    Text("Supprimer", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Cancel")
+                    Text("Annuler")
                 }
             }
         )
@@ -430,40 +801,40 @@ fun TripDetailsScreen(
 }
 
 @Composable
-fun DetailRow(label: String, value: String) {
+fun DetailRow(label: String, value: String, textColor: Color = Color.Unspecified, subTextColor: Color = Color.Gray) {
     Column(
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 12.sp
+            color = subTextColor,
+            fontSize = 13.sp
         )
         Text(
             value,
-            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium)
+            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+            color = textColor,
+            fontSize = 16.sp
         )
     }
 }
 
 @Composable
-fun StatItem(label: String, value: String) {
+fun StatItem(label: String, value: String, subTextColor: Color = Color.Gray) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             value,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.primary,
-            fontSize = 18.sp
+            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            color = MockupGreen
         )
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 12.sp
+            color = subTextColor
         )
     }
 }

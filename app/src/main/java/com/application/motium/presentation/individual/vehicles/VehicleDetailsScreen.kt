@@ -218,8 +218,8 @@ fun VehicleDetailsScreen(
                         // Professional Section
                         val proRate = calculateCurrentMileageRate(vehicle, isProfessional = true)
                         VehicleInfoRow(
-                            "Professional Mileage",
-                            "${"%.1f".format(vehicle.totalMileagePro / 1000)} km"
+                            "Kilométrage Pro",
+                            "${"%.1f".format(vehicle.totalMileagePro)} km"
                         )
                         VehicleInfoRow(
                             "Current Pro Rate",
@@ -237,8 +237,8 @@ fun VehicleDetailsScreen(
                         // Personal Section
                         val persoRate = calculateCurrentMileageRate(vehicle, isProfessional = false)
                         VehicleInfoRow(
-                            "Personal Mileage",
-                            "${"%.1f".format(vehicle.totalMileagePerso / 1000)} km"
+                            "Kilométrage Perso",
+                            "${"%.1f".format(vehicle.totalMileagePerso)} km"
                         )
                         VehicleInfoRow(
                             "Current Personal Rate",
@@ -303,54 +303,50 @@ fun VehicleInfoRow(label: String, value: String) {
     }
 }
 
-// Recalculate the rate based on the correct mileage (pro or perso)
+// Calcul du taux actuel basé sur le kilométrage (pro ou perso) - Barème 2025
 private fun calculateCurrentMileageRate(vehicle: Vehicle, isProfessional: Boolean): String {
-    // For personal trips, you might have a fixed rate or different logic.
-    // Here, we'll assume it's the same scale for demonstration, but it could be different.
-    val mileage = if (isProfessional) vehicle.totalMileagePro else vehicle.totalMileagePerso
+    val mileageKm = if (isProfessional) vehicle.totalMileagePro else vehicle.totalMileagePerso
 
-    // For bikes, the rate is fixed
+    // Pour les vélos, taux fixe
     if (vehicle.type == VehicleType.BIKE) {
         return "0.25"
     }
 
-    // For motorcycles and scooters
+    // Pour les motos et scooters
     if (vehicle.type == VehicleType.MOTORCYCLE || vehicle.type == VehicleType.SCOOTER) {
-        // A more detailed implementation could check engine size
         return "0.395"
     }
 
-    // For cars, use the official tiered rates
-    val power = vehicle.power ?: return "N/A" // Default if power is not set
+    // Pour les voitures, utiliser le barème officiel 2025
+    val power = vehicle.power ?: return "N/A"
 
-    val mileageKm = mileage / 1000 // Convert meters to km
-
+    // Barème kilométrique 2025 - valeurs directement en km (pas de conversion)
     return when {
         mileageKm <= 5000 -> {
             when (power) {
-                VehiclePower.CV_3 -> "0.537"
-                VehiclePower.CV_4 -> "0.603"
-                VehiclePower.CV_5 -> "0.631"
-                VehiclePower.CV_6 -> "0.661"
-                VehiclePower.CV_7_PLUS -> "0.685"
+                VehiclePower.CV_3 -> "0.529"
+                VehiclePower.CV_4 -> "0.606"
+                VehiclePower.CV_5 -> "0.636"
+                VehiclePower.CV_6 -> "0.665"
+                VehiclePower.CV_7_PLUS -> "0.697"
             }
         }
         mileageKm <= 20000 -> {
             when (power) {
-                VehiclePower.CV_3 -> "0.291"
-                VehiclePower.CV_4 -> "0.337"
-                VehiclePower.CV_5 -> "0.356"
-                VehiclePower.CV_6 -> "0.375"
+                VehiclePower.CV_3 -> "0.316"
+                VehiclePower.CV_4 -> "0.340"
+                VehiclePower.CV_5 -> "0.357"
+                VehiclePower.CV_6 -> "0.374"
                 VehiclePower.CV_7_PLUS -> "0.394"
             }
         }
-        else -> { // Over 20000 km
+        else -> { // > 20000 km
             when (power) {
-                VehiclePower.CV_3 -> "0.213"
-                VehiclePower.CV_4 -> "0.245"
-                VehiclePower.CV_5 -> "0.260"
-                VehiclePower.CV_6 -> "0.273"
-                VehiclePower.CV_7_PLUS -> "0.286"
+                VehiclePower.CV_3 -> "0.370"
+                VehiclePower.CV_4 -> "0.407"
+                VehiclePower.CV_5 -> "0.427"
+                VehiclePower.CV_6 -> "0.447"
+                VehiclePower.CV_7_PLUS -> "0.470"
             }
         }
     }

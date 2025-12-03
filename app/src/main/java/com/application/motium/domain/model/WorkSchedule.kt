@@ -14,6 +14,7 @@ data class WorkSchedule(
     val startMinute: Int,
     val endHour: Int,
     val endMinute: Int,
+    val isOvernight: Boolean = false, // Indique si le créneau traverse minuit (ex: 22:00->02:00)
     val isActive: Boolean = true,
     val createdAt: Instant,
     val updatedAt: Instant
@@ -23,8 +24,9 @@ data class WorkSchedule(
  * Modes d'auto-tracking disponibles
  */
 enum class TrackingMode {
-    WORK_HOURS_ONLY,   // Actif automatiquement pendant les horaires pro
-    DISABLED           // Désactivé (contrôle manuel par l'utilisateur)
+    ALWAYS,            // Toujours actif - suivi permanent de tous les trajets
+    WORK_HOURS_ONLY,   // Pro - Actif uniquement pendant les horaires professionnels
+    DISABLED           // Jamais - Désactivé (contrôle manuel par l'utilisateur)
 }
 
 /**
@@ -48,7 +50,8 @@ data class TimeSlot(
     val startHour: Int,
     val startMinute: Int,
     val endHour: Int,
-    val endMinute: Int
+    val endMinute: Int,
+    val isOvernight: Boolean = false
 )
 
 /**
@@ -60,6 +63,7 @@ fun WorkSchedule.toTimeSlot(): TimeSlot {
         startHour = startHour,
         startMinute = startMinute,
         endHour = endHour,
-        endMinute = endMinute
+        endMinute = endMinute,
+        isOvernight = isOvernight
     )
 }

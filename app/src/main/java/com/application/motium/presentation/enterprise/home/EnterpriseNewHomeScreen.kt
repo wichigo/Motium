@@ -28,7 +28,9 @@ import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
 import com.application.motium.data.TripRepository
 import com.application.motium.data.geocoding.NominatimService
+import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.domain.model.isPremium
+import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.AddressAutocomplete
 import com.application.motium.presentation.components.MiniMap
@@ -41,6 +43,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+
+val MockupGreen = Color(0xFF10B981)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,6 +62,7 @@ fun EnterpriseNewHomeScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
+    val workScheduleRepository = remember { WorkScheduleRepository.getInstance(context) }
     val themeManager = remember { ThemeManager.getInstance(context) }
 
     // Utiliser authState de authViewModel
@@ -67,6 +72,8 @@ fun EnterpriseNewHomeScreen(
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var autoTrackingEnabled by remember { mutableStateOf(false) }
+    var trackingMode by remember { mutableStateOf<TrackingMode?>(null) }
+    var showAutoTrackingBlockedDialog by remember { mutableStateOf(false) }
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     // Pagination state
@@ -167,6 +174,12 @@ fun EnterpriseNewHomeScreen(
             }
 
             autoTrackingEnabled = tripRepository.isAutoTrackingEnabled()
+
+            // Load tracking mode from Supabase
+            currentUser?.id?.let { userId ->
+                val settings = workScheduleRepository.getAutoTrackingSettings(userId)
+                trackingMode = settings?.trackingMode
+            }
 
             // Démarrer le service si l'auto-tracking est activé
             if (autoTrackingEnabled) {
@@ -274,14 +287,19 @@ fun EnterpriseNewHomeScreen(
                             Switch(
                                 checked = autoTrackingEnabled,
                                 onCheckedChange = {
-                                    autoTrackingEnabled = it
-                                    tripRepository.setAutoTrackingEnabled(it)
-                                    if (it) {
-                                        ActivityRecognitionService.startService(context)
+                                    // Block toggle if auto-tracking is managed automatically
+                                    if (trackingMode == TrackingMode.WORK_HOURS_ONLY) {
+                                        showAutoTrackingBlockedDialog = true
                                     } else {
-                                        ActivityRecognitionService.stopService(context)
+                                        autoTrackingEnabled = it
+                                        tripRepository.setAutoTrackingEnabled(it)
+                                        if (it) {
+                                            ActivityRecognitionService.startService(context)
+                                        } else {
+                                            ActivityRecognitionService.stopService(context)
+                                        }
+                                        MotiumApplication.logger.i("Auto tracking: $it", "EnterpriseHomeScreen")
                                     }
-                                    MotiumApplication.logger.i("Auto tracking: $it", "EnterpriseHomeScreen")
                                 },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
@@ -508,6 +526,34 @@ fun EnterpriseNewHomeScreen(
             )
         }
     }
+    }
+
+    // Dialog to inform user that auto-tracking is managed automatically
+    if (showAutoTrackingBlockedDialog) {
+        AlertDialog(
+            onDismissRequest = { showAutoTrackingBlockedDialog = false },
+            title = {
+                Text(
+                    text = "Automatic Mode Active",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text(
+                    text = "Auto-tracking is currently managed automatically based on your work schedule defined in the Planning page. To manually control auto-tracking, please disable the work hours mode in Planning first.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showAutoTrackingBlockedDialog = false }
+                ) {
+                    Text("OK", color = MockupGreen)
+                }
+            },
+            containerColor = Color.White,
+            tonalElevation = 24.dp
+        )
     }
 
 }

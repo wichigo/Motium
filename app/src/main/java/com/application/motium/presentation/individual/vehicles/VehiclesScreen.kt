@@ -543,8 +543,9 @@ fun ModernVehicleCard(
     }
 }
 
+// Calcul du taux actuel basé sur le kilométrage pro - Barème 2025
 fun calculateCurrentMileageRate(vehicle: Vehicle): String {
-    val proMileage = vehicle.totalMileagePro
+    val proMileageKm = vehicle.totalMileagePro
 
     // Pour les vélos, taux unique
     if (vehicle.type == VehicleType.BIKE) {
@@ -553,42 +554,41 @@ fun calculateCurrentMileageRate(vehicle: Vehicle): String {
 
     // Pour les motos et scooters
     if (vehicle.type == VehicleType.MOTORCYCLE || vehicle.type == VehicleType.SCOOTER) {
-        // Supposons moto > 125cc pour simplifier
         return "0.395"
     }
 
-    // Pour les voitures, utiliser le barème officiel avec tranches
-    val power = vehicle.power ?: return "0.585" // Valeur par défaut
+    // Pour les voitures, utiliser le barème officiel 2025 avec tranches
+    val power = vehicle.power ?: return "0.636" // 5CV par défaut
 
     return when {
-        proMileage <= 5000 -> {
+        proMileageKm <= 5000 -> {
             // Tranche 0-5000 km
             when (power) {
-                VehiclePower.CV_3 -> "0.537"
-                VehiclePower.CV_4 -> "0.603"
-                VehiclePower.CV_5 -> "0.631"
-                VehiclePower.CV_6 -> "0.661"
-                VehiclePower.CV_7_PLUS -> "0.685"
+                VehiclePower.CV_3 -> "0.529"
+                VehiclePower.CV_4 -> "0.606"
+                VehiclePower.CV_5 -> "0.636"
+                VehiclePower.CV_6 -> "0.665"
+                VehiclePower.CV_7_PLUS -> "0.697"
             }
         }
-        proMileage <= 20000 -> {
+        proMileageKm <= 20000 -> {
             // Tranche 5001-20000 km
             when (power) {
-                VehiclePower.CV_3 -> "0.291"
-                VehiclePower.CV_4 -> "0.337"
-                VehiclePower.CV_5 -> "0.356"
-                VehiclePower.CV_6 -> "0.375"
+                VehiclePower.CV_3 -> "0.316"
+                VehiclePower.CV_4 -> "0.340"
+                VehiclePower.CV_5 -> "0.357"
+                VehiclePower.CV_6 -> "0.374"
                 VehiclePower.CV_7_PLUS -> "0.394"
             }
         }
         else -> {
             // Tranche > 20000 km
             when (power) {
-                VehiclePower.CV_3 -> "0.213"
-                VehiclePower.CV_4 -> "0.245"
-                VehiclePower.CV_5 -> "0.260"
-                VehiclePower.CV_6 -> "0.273"
-                VehiclePower.CV_7_PLUS -> "0.286"
+                VehiclePower.CV_3 -> "0.370"
+                VehiclePower.CV_4 -> "0.407"
+                VehiclePower.CV_5 -> "0.427"
+                VehiclePower.CV_6 -> "0.447"
+                VehiclePower.CV_7_PLUS -> "0.470"
             }
         }
     }

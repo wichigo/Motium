@@ -31,16 +31,21 @@ object Constants {
     const val VEHICLE_TYPE_SCOOTER = "SCOOTER"
     const val VEHICLE_TYPE_BIKE = "BIKE"
 
-    // Mileage Rates (in EUR per km)
+    /**
+     * Mileage Rates (in EUR per km) - Barème kilométrique 2024
+     *
+     * Ces taux correspondent à la PREMIÈRE TRANCHE (0-5000 km pour voitures).
+     * Pour les calculs complets avec tranches progressives, utiliser MileageAllowanceCalculator.
+     */
     object MileageRates {
-        // Car rates by power (CV)
-        const val CAR_3CV_RATE = 0.537
-        const val CAR_4CV_RATE = 0.603
-        const val CAR_5CV_RATE = 0.631
-        const val CAR_6CV_RATE = 0.661
-        const val CAR_7CV_PLUS_RATE = 0.685
+        // Car rates by power (CV) - Tranche 1 (0-5000 km)
+        const val CAR_3CV_RATE = 0.529
+        const val CAR_4CV_RATE = 0.606
+        const val CAR_5CV_RATE = 0.636
+        const val CAR_6CV_RATE = 0.665
+        const val CAR_7CV_PLUS_RATE = 0.697
 
-        // Two-wheeler rates
+        // Two-wheeler rates - Tranche 1 (0-3000 km)
         const val MOTORCYCLE_RATE = 0.395
         const val SCOOTER_RATE = 0.315
         const val BIKE_RATE = 0.25

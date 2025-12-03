@@ -298,15 +298,15 @@ class ActivityRecognitionService : Service() {
 
     private fun startForegroundService() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Motium - Détection active")
-            .setContentText("En attente de déplacement")
+            .setContentTitle("Suivi de vos déplacements")
+            .setContentText("Détection automatique activée")
             .setSmallIcon(R.drawable.ic_location)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW) // LOW pour éviter vibrations
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setAutoCancel(false)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setDeleteIntent(null)
+            .setDeleteIntent(null) // Insupprimable
             .setShowWhen(false)
             .setLocalOnly(true)
             .setSound(null)
@@ -316,7 +316,7 @@ class ActivityRecognitionService : Service() {
             .setDefaults(0)
             .build()
 
-        // Appliquer des flags supplémentaires
+        // Appliquer des flags supplémentaires pour la rendre insupprimable
         notification.flags = notification.flags or
             Notification.FLAG_NO_CLEAR or
             Notification.FLAG_ONGOING_EVENT or
@@ -339,9 +339,16 @@ class ActivityRecognitionService : Service() {
     /**
      * Crée la liste des transitions d'activité à surveiller
      * Utilise la nouvelle ActivityTransition API recommandée par Google
+     *
+     * Best Practices SDK Activity Recognition:
+     * - Surveiller ENTER et EXIT pour les véhicules (démarrage et fin de trajet)
+     * - Surveiller WALKING et RUNNING ENTER pour détecter la fin de trajet
+     * - STILL ENTER confirme l'arrêt définitif
+     * - ON_FOOT inclut WALKING + RUNNING mais est moins précis
      */
     private fun createActivityTransitions(): List<ActivityTransition> {
         return listOf(
+            // === VÉHICULE ===
             // IN_VEHICLE ENTER - L'utilisateur monte dans un véhicule
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.IN_VEHICLE)
@@ -354,18 +361,33 @@ class ActivityRecognitionService : Service() {
                 .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_EXIT)
                 .build(),
 
+            // === MARCHE ET COURSE (fin de trajet) ===
             // WALKING ENTER - L'utilisateur commence à marcher (fin de trajet probable)
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.WALKING)
                 .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
                 .build(),
 
+            // RUNNING ENTER - L'utilisateur court (fin de trajet - souvent confondu avec marche rapide)
+            ActivityTransition.Builder()
+                .setActivityType(DetectedActivity.RUNNING)
+                .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
+                .build(),
+
+            // ON_FOOT ENTER - Générique à pied (fallback si WALKING/RUNNING pas détecté)
+            ActivityTransition.Builder()
+                .setActivityType(DetectedActivity.ON_FOOT)
+                .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
+                .build(),
+
+            // === IMMOBILE (confirmation fin de trajet) ===
             // STILL ENTER - L'utilisateur est immobile (confirmation de fin de trajet)
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.STILL)
                 .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
                 .build(),
 
+            // === VÉLO ===
             // ON_BICYCLE ENTER - Support pour les trajets à vélo
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.ON_BICYCLE)
@@ -630,7 +652,7 @@ class ActivityRecognitionService : Service() {
 
     private fun updateNotification(content: String) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Motium - Détection active")
+            .setContentTitle("Suivi de vos déplacements")
             .setContentText(content)
             .setSmallIcon(R.drawable.ic_location)
             .setOngoing(true)
@@ -638,7 +660,7 @@ class ActivityRecognitionService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setAutoCancel(false)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setDeleteIntent(null)
+            .setDeleteIntent(null) // Insupprimable
             .setShowWhen(false)
             .setLocalOnly(true)
             .setSound(null)

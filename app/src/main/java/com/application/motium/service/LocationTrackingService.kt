@@ -16,6 +16,9 @@ import com.application.motium.R
 import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
 import com.application.motium.data.TripRepository
+import com.application.motium.data.VehicleRepository
+import com.application.motium.data.supabase.WorkScheduleRepository
+import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.google.android.gms.location.*
 import kotlinx.coroutines.*
 
@@ -42,11 +45,13 @@ class LocationTrackingService : Service() {
         private const val MIN_AVERAGE_SPEED_MPS = 0.1 // 0.36 km/h = 0.1 m/s (très réduit pour tests)
         private const val MAX_GPS_ACCURACY_METERS = 100f // 100m précision GPS (assoupli pour conditions réelles)
 
-        // Critères de précision pour points de départ/arrivée
-        private const val START_POINT_ANCHORING_DELAY_MS = 5000L // 5 secondes d'ancrage avant de choisir le point de départ
-        private const val END_POINT_SAMPLING_DELAY_MS = 15000L // 15 secondes de collecte après détection WALKING
-        private const val HIGH_PRECISION_THRESHOLD = 20f // 20m de précision pour points de départ/arrivée
-        private const val START_POINT_CLUSTERING_WINDOW_MS = 60000L // 60 secondes pour clustering du point de départ
+        // Critères de précision pour points de départ/arrivée (OPTIMISÉS pour geocoding précis)
+        private const val START_POINT_ANCHORING_DELAY_MS = 8000L // 8 secondes d'ancrage (augmenté pour stabilisation GPS)
+        private const val END_POINT_SAMPLING_DELAY_MS = 20000L // 20 secondes de collecte après détection WALKING
+        private const val HIGH_PRECISION_THRESHOLD = 12f // 12m de précision pour geocoding fiable (réduit de 20m)
+        private const val MEDIUM_PRECISION_THRESHOLD = 25f // 25m seuil acceptable en fallback
+        private const val START_POINT_CLUSTERING_WINDOW_MS = 45000L // 45 secondes pour clustering (réduit pour éviter drift)
+        private const val OUTLIER_DISTANCE_THRESHOLD = 50f // Points à plus de 50m de la médiane = outliers
 
         // Critères de détection d'arrêt (stop detection)
         private const val STOP_DETECTION_RADIUS = 30f // 30 mètres - rayon réduit pour détecter les arrêts courts
@@ -83,7 +88,9 @@ class LocationTrackingService : Service() {
         fun startService(context: Context) {
             val intent = Intent(context, LocationTrackingService::class.java)
             intent.action = ACTION_START_TRACKING
-            context.startForegroundService(intent)
+            // Démarrer en service normal - pas de notification séparée
+            // ActivityRecognitionService gère déjà la notification foreground
+            context.startService(intent)
         }
 
         fun stopService(context: Context) {
@@ -222,8 +229,15 @@ class LocationTrackingService : Service() {
     private lateinit var locationCallback: LocationCallback
     private lateinit var locationRequest: LocationRequest
     private lateinit var tripRepository: TripRepository
+    private lateinit var vehicleRepository: VehicleRepository
+    private lateinit var workScheduleRepository: WorkScheduleRepository
+    private lateinit var authRepository: SupabaseAuthRepository
     private var isTracking = false
     private var currentTrip: TripData? = null
+
+    // Données pour l'assignation automatique du véhicule et du type de trajet
+    private var currentUserId: String? = null
+    private var defaultVehicleId: String? = null
 
     // CRASH FIX: Add exception handler to catch all uncaught exceptions in coroutines
     private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
@@ -289,6 +303,17 @@ class LocationTrackingService : Service() {
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         tripRepository = TripRepository.getInstance(this)
+        vehicleRepository = VehicleRepository.getInstance(this)
+        workScheduleRepository = WorkScheduleRepository.getInstance(this)
+        authRepository = SupabaseAuthRepository.getInstance(this)
+
+        // Charger l'utilisateur courant et le véhicule par défaut
+        loadUserAndDefaultVehicle()
+
+        // Annuler toute notification existante de ce service
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(NOTIFICATION_ID)
+        MotiumApplication.logger.i("Cancelled any existing notification from LocationTrackingService", "LocationService")
 
         createNotificationChannel()
         createLocationRequest()
@@ -937,29 +962,18 @@ class LocationTrackingService : Service() {
     private var isForeground = false
 
     private fun startForegroundService() {
-        tryStartForeground("En attente de trajet - Standby")
+        // Ne pas créer de notification séparée - utiliser celle d'ActivityRecognitionService
+        // LocationTrackingService fonctionne en arrière-plan, piggybacking sur la notification
+        // d'ActivityRecognitionService qui est le service foreground principal
+        MotiumApplication.logger.i("LocationTrackingService started (no separate notification)", "LocationService")
+        isForeground = false
     }
 
     private fun tryStartForeground(message: String) {
-        if (isForeground) return // Déjà en foreground
-
-        try {
-            val notification = createNotification(message)
-            startForeground(NOTIFICATION_ID, notification)
-            isForeground = true
-            MotiumApplication.logger.i("Service started in foreground mode", "LocationService")
-        } catch (e: SecurityException) {
-            // Android 14+ rejette startForeground si l'app n'est pas dans un état "eligible" (en arrière-plan)
-            // Ne pas tuer le service, juste continuer en arrière-plan sans foreground
-            // Le service passera en foreground plus tard quand ce sera possible
-            MotiumApplication.logger.w(
-                "Cannot start foreground service from background (Android 14+ restriction): ${e.message}. " +
-                "Service will continue in background mode.",
-                "LocationService"
-            )
-            isForeground = false
-            // Ne pas appeler stopSelf() - continuer en arrière-plan
-        }
+        // Désactivé - on n'affiche plus de notification séparée pour LocationTrackingService
+        // La notification "Suivi de vos déplacements" d'ActivityRecognitionService suffit
+        MotiumApplication.logger.d("tryStartForeground called but disabled (using ActivityRecognitionService notification)", "LocationService")
+        isForeground = false
     }
 
     private fun createNotification(content: String): Notification {
@@ -1404,7 +1418,10 @@ class LocationTrackingService : Service() {
 
     /**
      * Sélectionne le meilleur point de départ parmi les candidats
-     * Utilise l'anchoring delay et privilégie les points avec haute précision
+     * Algorithme optimisé pour geocoding précis:
+     * 1. Attend la stabilisation GPS (anchoring delay)
+     * 2. Filtre les outliers (IQR)
+     * 3. Moyenne pondérée par précision des meilleurs points
      */
     private fun selectBestStartPoint(): TripLocation? {
         if (startPointCandidates.isEmpty()) {
@@ -1417,64 +1434,153 @@ class LocationTrackingService : Service() {
             "StartPointPrecision"
         )
 
-        // Stratégie 1: Attendre 5 secondes et trouver le premier point avec précision < 20m
+        // Stratégie 1: Points après stabilisation GPS avec haute précision
         val anchoringDeadline = startPointCandidates.first().timestamp + START_POINT_ANCHORING_DELAY_MS
         val afterAnchoringDelay = startPointCandidates.filter { it.timestamp >= anchoringDeadline }
 
-        val highPrecisionPoint = afterAnchoringDelay.firstOrNull { it.accuracy < HIGH_PRECISION_THRESHOLD }
-        if (highPrecisionPoint != null) {
-            MotiumApplication.logger.i(
-                "Selected high-precision start point: accuracy=${highPrecisionPoint.accuracy}m (after ${START_POINT_ANCHORING_DELAY_MS/1000}s anchoring)",
-                "StartPointPrecision"
-            )
-            return highPrecisionPoint
-        }
-
-        // Stratégie 2: Clustering - trouver la position dominante (médiane) sur la première minute
-        val clusterCandidates = startPointCandidates.take(
-            minOf(startPointCandidates.size, 6) // ~60 secondes ÷ 10s interval = 6 points max
-        )
-
-        if (clusterCandidates.isNotEmpty()) {
-            // Calculer la médiane des positions (clustering simple)
-            val sortedLats = clusterCandidates.map { it.latitude }.sorted()
-            val sortedLngs = clusterCandidates.map { it.longitude }.sorted()
-            val medianLat = sortedLats[sortedLats.size / 2]
-            val medianLng = sortedLngs[sortedLngs.size / 2]
-
-            // Trouver le point le plus proche de la médiane avec la meilleure précision
-            val bestPoint = clusterCandidates.minByOrNull { candidate ->
-                val distanceToMedian = android.location.Location("").apply {
-                    latitude = medianLat
-                    longitude = medianLng
-                }.distanceTo(android.location.Location("").apply {
-                    latitude = candidate.latitude
-                    longitude = candidate.longitude
-                })
-                distanceToMedian + candidate.accuracy // Facteur combiné: distance à médiane + précision
-            }
-
-            if (bestPoint != null) {
+        // Chercher d'abord les points très précis (< 12m)
+        val highPrecisionPoints = afterAnchoringDelay.filter { it.accuracy < HIGH_PRECISION_THRESHOLD }
+        if (highPrecisionPoints.size >= 2) {
+            // Moyenne pondérée des points haute précision
+            val weightedPoint = calculateWeightedAveragePoint(highPrecisionPoints)
+            if (weightedPoint != null) {
                 MotiumApplication.logger.i(
-                    "Selected clustered start point: accuracy=${bestPoint.accuracy}m (median of ${clusterCandidates.size} points)",
+                    "✅ Start point: weighted average of ${highPrecisionPoints.size} high-precision points (avg accuracy: ${highPrecisionPoints.map { it.accuracy }.average().toInt()}m)",
                     "StartPointPrecision"
                 )
-                return bestPoint
+                return weightedPoint
+            }
+        } else if (highPrecisionPoints.size == 1) {
+            MotiumApplication.logger.i(
+                "✅ Start point: single high-precision point (${highPrecisionPoints[0].accuracy}m)",
+                "StartPointPrecision"
+            )
+            return highPrecisionPoints[0]
+        }
+
+        // Stratégie 2: Points avec précision moyenne (< 25m) après filtrage outliers
+        val mediumPrecisionPoints = afterAnchoringDelay.filter { it.accuracy < MEDIUM_PRECISION_THRESHOLD }
+        if (mediumPrecisionPoints.size >= 3) {
+            val filteredPoints = filterOutliers(mediumPrecisionPoints)
+            if (filteredPoints.isNotEmpty()) {
+                val weightedPoint = calculateWeightedAveragePoint(filteredPoints)
+                if (weightedPoint != null) {
+                    MotiumApplication.logger.i(
+                        "✅ Start point: weighted average of ${filteredPoints.size} medium-precision points (after outlier filter)",
+                        "StartPointPrecision"
+                    )
+                    return weightedPoint
+                }
             }
         }
 
-        // Stratégie 3 (fallback): Point le plus précis parmi tous les candidats
+        // Stratégie 3: Clustering IQR sur tous les points disponibles
+        val clusterCandidates = startPointCandidates.take(minOf(startPointCandidates.size, 8))
+        if (clusterCandidates.size >= 3) {
+            val filteredPoints = filterOutliers(clusterCandidates)
+            if (filteredPoints.isNotEmpty()) {
+                val bestPoint = filteredPoints.minByOrNull { it.accuracy }
+                if (bestPoint != null) {
+                    MotiumApplication.logger.i(
+                        "✅ Start point: best from ${filteredPoints.size} clustered points (${bestPoint.accuracy}m)",
+                        "StartPointPrecision"
+                    )
+                    return bestPoint
+                }
+            }
+        }
+
+        // Stratégie 4 (fallback): Point le plus précis
         val mostAccurate = startPointCandidates.minByOrNull { it.accuracy }
-        MotiumApplication.logger.i(
-            "Selected most accurate start point (fallback): accuracy=${mostAccurate?.accuracy}m",
+        MotiumApplication.logger.w(
+            "⚠️ Start point fallback: most accurate point (${mostAccurate?.accuracy}m) - may be less reliable",
             "StartPointPrecision"
         )
         return mostAccurate
     }
 
     /**
+     * Calcule un point moyen pondéré par la précision GPS
+     * Les points plus précis ont plus de poids
+     */
+    private fun calculateWeightedAveragePoint(points: List<TripLocation>): TripLocation? {
+        if (points.isEmpty()) return null
+        if (points.size == 1) return points[0]
+
+        // Poids = 1/accuracy (plus précis = plus de poids)
+        var totalWeight = 0.0
+        var weightedLat = 0.0
+        var weightedLng = 0.0
+        var minAccuracy = Float.MAX_VALUE
+
+        for (point in points) {
+            val weight = 1.0 / point.accuracy
+            totalWeight += weight
+            weightedLat += point.latitude * weight
+            weightedLng += point.longitude * weight
+            if (point.accuracy < minAccuracy) minAccuracy = point.accuracy
+        }
+
+        return TripLocation(
+            latitude = weightedLat / totalWeight,
+            longitude = weightedLng / totalWeight,
+            accuracy = minAccuracy, // Utiliser la meilleure précision pour représenter le point composite
+            timestamp = points.maxOf { it.timestamp }
+        )
+    }
+
+    /**
+     * Filtre les outliers en utilisant la méthode IQR (Interquartile Range)
+     * Élimine les points qui sont trop éloignés de la position médiane
+     */
+    private fun filterOutliers(points: List<TripLocation>): List<TripLocation> {
+        if (points.size < 3) return points
+
+        // Calculer la médiane des positions
+        val sortedLats = points.map { it.latitude }.sorted()
+        val sortedLngs = points.map { it.longitude }.sorted()
+        val medianLat = sortedLats[sortedLats.size / 2]
+        val medianLng = sortedLngs[sortedLngs.size / 2]
+
+        val medianLocation = android.location.Location("median").apply {
+            latitude = medianLat
+            longitude = medianLng
+        }
+
+        // Calculer les distances à la médiane
+        val distances = points.map { point ->
+            val loc = android.location.Location("point").apply {
+                latitude = point.latitude
+                longitude = point.longitude
+            }
+            point to medianLocation.distanceTo(loc)
+        }
+
+        // Filtrer les outliers (distance > seuil OU distance > 2x la médiane des distances)
+        val sortedDistances = distances.map { it.second }.sorted()
+        val medianDistance = sortedDistances[sortedDistances.size / 2]
+        val dynamicThreshold = maxOf(OUTLIER_DISTANCE_THRESHOLD, medianDistance * 2.5f)
+
+        val filtered = distances
+            .filter { (_, distance) -> distance <= dynamicThreshold }
+            .map { it.first }
+
+        if (filtered.size < points.size) {
+            MotiumApplication.logger.d(
+                "Filtered ${points.size - filtered.size} outlier(s) (threshold: ${dynamicThreshold.toInt()}m)",
+                "OutlierFilter"
+            )
+        }
+
+        return filtered
+    }
+
+    /**
      * Sélectionne le meilleur point d'arrivée parmi les candidats
-     * Utilise le clustering et filtre les outliers
+     * Algorithme optimisé similaire au point de départ:
+     * 1. Privilégie les points haute précision
+     * 2. Filtre les outliers
+     * 3. Moyenne pondérée par précision
      */
     private fun selectBestEndPoint(): TripLocation? {
         if (endPointCandidates.isEmpty()) {
@@ -1487,59 +1593,64 @@ class LocationTrackingService : Service() {
             "EndPointPrecision"
         )
 
-        // Stratégie 1: Filtrer les points avec haute précision (< 20m)
-        val highPrecisionCandidates = endPointCandidates.filter { it.accuracy < HIGH_PRECISION_THRESHOLD }
-
-        if (highPrecisionCandidates.isNotEmpty()) {
-            // Clustering - trouver la position dominante (médiane)
-            val sortedLats = highPrecisionCandidates.map { it.latitude }.sorted()
-            val sortedLngs = highPrecisionCandidates.map { it.longitude }.sorted()
-            val medianLat = sortedLats[sortedLats.size / 2]
-            val medianLng = sortedLngs[sortedLngs.size / 2]
-
-            // Trouver le point le plus proche de la médiane
-            val bestPoint = highPrecisionCandidates.minByOrNull { candidate ->
-                val distanceToMedian = android.location.Location("").apply {
-                    latitude = medianLat
-                    longitude = medianLng
-                }.distanceTo(android.location.Location("").apply {
-                    latitude = candidate.latitude
-                    longitude = candidate.longitude
-                })
-                distanceToMedian + candidate.accuracy // Facteur combiné
-            }
-
-            if (bestPoint != null) {
+        // Stratégie 1: Points très précis (< 12m)
+        val highPrecisionPoints = endPointCandidates.filter { it.accuracy < HIGH_PRECISION_THRESHOLD }
+        if (highPrecisionPoints.size >= 2) {
+            val filteredPoints = filterOutliers(highPrecisionPoints)
+            val weightedPoint = calculateWeightedAveragePoint(filteredPoints)
+            if (weightedPoint != null) {
                 MotiumApplication.logger.i(
-                    "Selected high-precision clustered end point: accuracy=${bestPoint.accuracy}m (median of ${highPrecisionCandidates.size} points)",
+                    "✅ End point: weighted average of ${filteredPoints.size} high-precision points",
                     "EndPointPrecision"
                 )
-                return bestPoint
+                return weightedPoint
+            }
+        } else if (highPrecisionPoints.size == 1) {
+            MotiumApplication.logger.i(
+                "✅ End point: single high-precision point (${highPrecisionPoints[0].accuracy}m)",
+                "EndPointPrecision"
+            )
+            return highPrecisionPoints[0]
+        }
+
+        // Stratégie 2: Points précision moyenne (< 25m) avec filtrage outliers
+        val mediumPrecisionPoints = endPointCandidates.filter { it.accuracy < MEDIUM_PRECISION_THRESHOLD }
+        if (mediumPrecisionPoints.size >= 2) {
+            val filteredPoints = filterOutliers(mediumPrecisionPoints)
+            if (filteredPoints.isNotEmpty()) {
+                val weightedPoint = calculateWeightedAveragePoint(filteredPoints)
+                if (weightedPoint != null) {
+                    MotiumApplication.logger.i(
+                        "✅ End point: weighted average of ${filteredPoints.size} medium-precision points",
+                        "EndPointPrecision"
+                    )
+                    return weightedPoint
+                }
             }
         }
 
-        // Stratégie 2: Clustering sur tous les candidats (si aucun point haute précision)
-        val sortedLats = endPointCandidates.map { it.latitude }.sorted()
-        val sortedLngs = endPointCandidates.map { it.longitude }.sorted()
-        val medianLat = sortedLats[sortedLats.size / 2]
-        val medianLng = sortedLngs[sortedLngs.size / 2]
-
-        val bestPoint = endPointCandidates.minByOrNull { candidate ->
-            val distanceToMedian = android.location.Location("").apply {
-                latitude = medianLat
-                longitude = medianLng
-            }.distanceTo(android.location.Location("").apply {
-                latitude = candidate.latitude
-                longitude = candidate.longitude
-            })
-            distanceToMedian + candidate.accuracy
+        // Stratégie 3: Tous les candidats avec filtrage outliers
+        if (endPointCandidates.size >= 3) {
+            val filteredPoints = filterOutliers(endPointCandidates)
+            if (filteredPoints.isNotEmpty()) {
+                val weightedPoint = calculateWeightedAveragePoint(filteredPoints)
+                if (weightedPoint != null) {
+                    MotiumApplication.logger.i(
+                        "✅ End point: weighted average of ${filteredPoints.size} filtered points",
+                        "EndPointPrecision"
+                    )
+                    return weightedPoint
+                }
+            }
         }
 
-        MotiumApplication.logger.i(
-            "Selected clustered end point (fallback): accuracy=${bestPoint?.accuracy}m (median of ${endPointCandidates.size} points)",
+        // Stratégie 4 (fallback): Point le plus précis
+        val mostAccurate = endPointCandidates.minByOrNull { it.accuracy }
+        MotiumApplication.logger.w(
+            "⚠️ End point fallback: most accurate point (${mostAccurate?.accuracy}m)",
             "EndPointPrecision"
         )
-        return bestPoint
+        return mostAccurate
     }
 
     private fun addLocationToTrip(trip: TripData, location: Location) {
@@ -1757,6 +1868,67 @@ class LocationTrackingService : Service() {
         return Pair(avgLat, avgLng)
     }
 
+    /**
+     * Charge l'utilisateur courant et son véhicule par défaut au démarrage du service.
+     * Ces données sont utilisées pour assigner automatiquement le véhicule et le type de trajet.
+     */
+    private fun loadUserAndDefaultVehicle() {
+        serviceScope.launch {
+            try {
+                // Récupérer l'utilisateur courant
+                val user = authRepository.getCurrentAuthUser()
+                if (user != null) {
+                    currentUserId = user.id
+                    MotiumApplication.logger.i("✅ User loaded for auto-tracking: ${user.id}", "AutoTracking")
+
+                    // Récupérer le véhicule par défaut
+                    val defaultVehicle = vehicleRepository.getDefaultVehicle(user.id)
+                    if (defaultVehicle != null) {
+                        defaultVehicleId = defaultVehicle.id
+                        MotiumApplication.logger.i(
+                            "✅ Default vehicle loaded: ${defaultVehicle.name} (${defaultVehicle.id})",
+                            "AutoTracking"
+                        )
+                    } else {
+                        MotiumApplication.logger.w(
+                            "⚠️ No default vehicle found for user ${user.id}",
+                            "AutoTracking"
+                        )
+                    }
+                } else {
+                    MotiumApplication.logger.w("⚠️ No user authenticated - trips won't have vehicle/type assigned", "AutoTracking")
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error loading user/vehicle: ${e.message}", "AutoTracking", e)
+            }
+        }
+    }
+
+    /**
+     * Détermine le type de trajet (PRO/PERSO) selon les horaires de travail.
+     * - Si l'utilisateur est dans ses horaires de travail → PROFESSIONAL
+     * - Sinon → PERSONAL
+     */
+    private suspend fun determineTripType(): String {
+        return try {
+            currentUserId?.let { userId ->
+                val isWorkHours = workScheduleRepository.isInWorkHours(userId)
+                val tripType = if (isWorkHours) "PROFESSIONAL" else "PERSONAL"
+                MotiumApplication.logger.i(
+                    "Trip type determined: $tripType (isWorkHours=$isWorkHours)",
+                    "AutoTracking"
+                )
+                tripType
+            } ?: run {
+                MotiumApplication.logger.w("No userId, defaulting to PERSONAL", "AutoTracking")
+                "PERSONAL"
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error determining trip type: ${e.message}, defaulting to PERSONAL", "AutoTracking", e)
+            "PERSONAL"
+        }
+    }
+
     private fun saveTripToDatabase(trip: TripData) {
         serviceScope.launch {
             try {
@@ -1836,6 +2008,9 @@ class LocationTrackingService : Service() {
                     }
                 }
 
+                // Déterminer le type de trajet (PRO/PERSO) selon les horaires de travail
+                val tripType = determineTripType()
+
                 val tripToSave = Trip(
                     id = trip.id,
                     startTime = trip.startTime,
@@ -1843,7 +2018,8 @@ class LocationTrackingService : Service() {
                     locations = trip.locations,
                     totalDistance = trip.totalDistance,
                     isValidated = false,
-                    vehicleId = null,
+                    vehicleId = defaultVehicleId,  // Véhicule par défaut de l'utilisateur
+                    tripType = tripType,            // PRO ou PERSO selon horaires de travail
                     startAddress = startAddress,
                     endAddress = endAddress
                 )
@@ -1851,8 +2027,10 @@ class LocationTrackingService : Service() {
                 tripRepository.saveTrip(tripToSave)
 
                 MotiumApplication.logger.i(
-                    "Trip saved successfully: ${trip.locations.size} points, " +
+                    "✅ Trip saved: ${trip.locations.size} points, " +
                     "${String.format("%.2f", trip.totalDistance / 1000)} km, " +
+                    "vehicleId=${defaultVehicleId ?: "none"}, " +
+                    "type=$tripType, " +
                     "start: ${startAddress ?: "unknown"}, " +
                     "end: ${endAddress ?: "unknown"}",
                     "DatabaseSave"
@@ -1872,66 +2050,14 @@ class LocationTrackingService : Service() {
      * (démarrage/fin de trajet) pour éviter les vibrations constantes
      */
     private fun updateNotificationStatus() {
-        val content = when (tripState) {
-            TripState.STANDBY -> "En attente de trajet - Standby"
-            TripState.BUFFERING -> "Activité détectée - Collecte GPS... (${gpsBuffer.size} pts)"
-            TripState.TRIP_ACTIVE -> {
-                val distance = currentTrip?.totalDistance ?: 0.0
-                "Trajet en cours - ${String.format("%.2f", distance / 1000)} km"
-            }
-            TripState.PAUSED -> "Pause temporaire (activité non fiable)"
-            TripState.STOP_PENDING -> {
-                val distance = currentTrip?.totalDistance ?: 0.0
-                "Arrêt détecté - Vérification... ${String.format("%.2f", distance / 1000)} km"
-            }
-            TripState.FINALIZING -> "Finalisation du trajet..."
-        }
-
-        val notification = createNotification(content)
-
-        if (isForeground) {
-            // Si on est en foreground, mettre à jour avec startForeground (requis pour Android)
-            try {
-                startForeground(NOTIFICATION_ID, notification)
-            } catch (e: Exception) {
-                // Fallback sur notify si startForeground échoue
-                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                notificationManager.notify(NOTIFICATION_ID, notification)
-            }
-        } else {
-            // Si pas en foreground, juste mettre à jour la notification
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.notify(NOTIFICATION_ID, notification)
-        }
+        // Ne plus créer/mettre à jour de notification séparée
+        // ActivityRecognitionService gère la notification unique "Suivi de vos déplacements"
+        MotiumApplication.logger.d("updateNotificationStatus called but disabled (no separate notification)", "LocationService")
     }
 
     private fun startNotificationWatch() {
-        notificationWatchRunnable = object : Runnable {
-            override fun run() {
-                try {
-                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    val activeNotifications = notificationManager.activeNotifications
-
-                    val hasOurNotification = activeNotifications?.any {
-                        it.id == NOTIFICATION_ID && it.packageName == packageName
-                    } ?: false
-
-                    if (!hasOurNotification) {
-                        MotiumApplication.logger.w("Notification was removed! Recreating immediately...", "LocationService")
-                        // Recréer immédiatement la notification silencieusement
-                        updateNotificationStatus()
-                    }
-                } catch (e: Exception) {
-                    MotiumApplication.logger.e("Error in notification watch: ${e.message}", "LocationService", e)
-                }
-
-                // BATTERY OPTIMIZATION: Surveiller toutes les 5 minutes (la notification ne disparaît pratiquement jamais)
-                notificationWatchHandler.postDelayed(this, 300000) // 5 minutes
-            }
-        }
-
-        notificationWatchHandler.post(notificationWatchRunnable!!)
-        MotiumApplication.logger.i("Notification watch started (checking every 5 minutes)", "LocationService")
+        // Ne plus surveiller la notification - on n'en affiche pas
+        MotiumApplication.logger.d("startNotificationWatch called but disabled (no notification to watch)", "LocationService")
     }
 
     private fun stopNotificationWatch() {

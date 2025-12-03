@@ -67,6 +67,7 @@ fun TripEntity.toDataModel(): com.application.motium.data.Trip {
         startAddress = startAddress,
         endAddress = endAddress,
         notes = notes,
+        tripType = tripType,
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastSyncedAt = lastSyncedAt,
@@ -90,7 +91,7 @@ fun com.application.motium.data.Trip.toEntity(userId: String): TripEntity {
         startAddress = startAddress,
         endAddress = endAddress,
         notes = notes,
-        tripType = null, // Legacy trips don't have type
+        tripType = tripType,
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastSyncedAt = lastSyncedAt,

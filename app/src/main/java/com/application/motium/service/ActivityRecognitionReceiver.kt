@@ -165,6 +165,26 @@ class ActivityRecognitionReceiver : BroadcastReceiver() {
                 LocationTrackingService.endTrip(context)
             }
 
+            // L'utilisateur ENTRE dans une activité de course → Fin de trajet (traité comme marche)
+            activityType == DetectedActivity.RUNNING &&
+            transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                MotiumApplication.logger.i(
+                    "🏃 RUNNING ENTER détecté → Utilisateur court, fin du trajet probable",
+                    "ActivityReceiver"
+                )
+                LocationTrackingService.endTrip(context)
+            }
+
+            // ON_FOOT générique (fallback si WALKING/RUNNING non détecté)
+            activityType == DetectedActivity.ON_FOOT &&
+            transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                MotiumApplication.logger.i(
+                    "🦶 ON_FOOT ENTER détecté → Utilisateur à pied, fin du trajet probable",
+                    "ActivityReceiver"
+                )
+                LocationTrackingService.endTrip(context)
+            }
+
             // L'utilisateur ENTRE dans un état immobile → Confirmation de fin de trajet
             activityType == DetectedActivity.STILL &&
             transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {

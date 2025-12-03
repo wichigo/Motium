@@ -2,10 +2,13 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.*
 import com.application.motium.domain.repository.VehicleRepository
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -18,6 +21,7 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
 
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
+    private val tokenRefreshCoordinator = TokenRefreshCoordinator.getInstance(context)
 
     @Serializable
     data class SupabaseVehicle(
@@ -59,6 +63,89 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         val distance_km: Double
     )
 
+    /**
+     * Exécute une requête Supabase avec gestion automatique du refresh token.
+     * Si le JWT est expiré (PGRST303), rafraîchit le token et réessaie.
+     */
+    private suspend fun <T> executeWithTokenRefresh(
+        operationName: String,
+        operation: suspend () -> T
+    ): T {
+        return try {
+            operation()
+        } catch (e: PostgrestRestException) {
+            // Vérifier si c'est une erreur JWT expired (code PGRST303)
+            if (e.message?.contains("JWT expired") == true || e.message?.contains("PGRST303") == true) {
+                MotiumApplication.logger.w(
+                    "🔄 JWT expired during $operationName - refreshing token and retrying",
+                    "SupabaseVehicleRepository"
+                )
+
+                // Rafraîchir le token via le client Auth directement
+                val refreshed = try {
+                    val auth = client.auth
+                    val currentSession = auth.currentSessionOrNull()
+                    val refreshToken = currentSession?.refreshToken
+
+                    if (refreshToken != null) {
+                        MotiumApplication.logger.d(
+                            "📤 Calling auth.refreshSession() with refresh token",
+                            "SupabaseVehicleRepository"
+                        )
+                        auth.refreshSession(refreshToken)
+
+                        // Vérifier que le nouveau token est valide
+                        val newSession = auth.currentSessionOrNull()
+                        if (newSession != null && newSession.expiresIn > 0) {
+                            MotiumApplication.logger.i(
+                                "✅ Token actually refreshed - new token expires in ${newSession.expiresIn}s",
+                                "SupabaseVehicleRepository"
+                            )
+                            true
+                        } else {
+                            MotiumApplication.logger.e(
+                                "❌ Token refresh returned but session is still invalid",
+                                "SupabaseVehicleRepository"
+                            )
+                            false
+                        }
+                    } else {
+                        MotiumApplication.logger.e(
+                            "❌ No refresh token available - user needs to re-login",
+                            "SupabaseVehicleRepository"
+                        )
+                        false
+                    }
+                } catch (refreshError: Exception) {
+                    MotiumApplication.logger.e(
+                        "❌ Token refresh threw exception: ${refreshError.message}",
+                        "SupabaseVehicleRepository",
+                        refreshError
+                    )
+                    false
+                }
+
+                if (refreshed) {
+                    MotiumApplication.logger.i(
+                        "🔁 Retrying $operationName with new token",
+                        "SupabaseVehicleRepository"
+                    )
+                    // Petit délai pour laisser le token se propager
+                    kotlinx.coroutines.delay(100)
+                    // Réessayer l'opération
+                    operation()
+                } else {
+                    MotiumApplication.logger.e(
+                        "❌ Token refresh failed - cannot retry $operationName. User may need to re-login.",
+                        "SupabaseVehicleRepository"
+                    )
+                    throw e
+                }
+            } else {
+                throw e
+            }
+        }
+    }
 
     private suspend fun getAnnualMileageForVehicle(vehicleId: String, tripType: String): Double {
         return try {
@@ -71,17 +158,19 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
                 timeZone = TimeZone.getTimeZone("UTC")
             }.format(calendar.time)
 
-            val trips = postgres.from("trips").select {
-                filter {
-                    eq("vehicle_id", vehicleId)
-                    eq("is_validated", true)
-                    eq("type", tripType)
-                    gte("start_time", startOfYear)
-                }
-            }.decodeList<TripDistance>()
+            val trips = executeWithTokenRefresh("getAnnualMileageForVehicle") {
+                postgres.from("trips").select {
+                    filter {
+                        eq("vehicle_id", vehicleId)
+                        eq("is_validated", true)
+                        eq("type", tripType)
+                        gte("start_time", startOfYear)
+                    }
+                }.decodeList<TripDistance>()
+            }
 
-            // Convert km to meters (distance_km * 1000) to match Vehicle model expectations
-            trips.sumOf { it.distance_km * 1000 }
+            // Retourne le kilométrage total en kilomètres (distance_km est déjà en km)
+            trips.sumOf { it.distance_km }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error calculating annual mileage for vehicle $vehicleId: ${e.message}", "SupabaseVehicleRepository", e)
             0.0
@@ -97,12 +186,14 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         try {
             MotiumApplication.logger.i("Getting vehicle by ID: $vehicleId", "SupabaseVehicleRepository")
 
-            val response = postgres.from("vehicles")
-                .select {
-                    filter {
-                        eq("id", vehicleId)
-                    }
-                }.decodeSingleOrNull<SupabaseVehicle>()
+            val response = executeWithTokenRefresh("getVehicleById") {
+                postgres.from("vehicles")
+                    .select {
+                        filter {
+                            eq("id", vehicleId)
+                        }
+                    }.decodeSingleOrNull<SupabaseVehicle>()
+            }
 
             response?.toDomainVehicle()
         } catch (e: Exception) {
@@ -115,13 +206,15 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         try {
             MotiumApplication.logger.i("Getting default vehicle for user: $userId", "SupabaseVehicleRepository")
 
-            val response = postgres.from("vehicles")
-                .select {
-                    filter {
-                        eq("user_id", userId)
-                        eq("is_default", true)
-                    }
-                }.decodeSingleOrNull<SupabaseVehicle>()
+            val response = executeWithTokenRefresh("getDefaultVehicle") {
+                postgres.from("vehicles")
+                    .select {
+                        filter {
+                            eq("user_id", userId)
+                            eq("is_default", true)
+                        }
+                    }.decodeSingleOrNull<SupabaseVehicle>()
+            }
 
             response?.toDomainVehicle()
         } catch (e: Exception) {
@@ -134,12 +227,14 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         try {
             MotiumApplication.logger.i("Getting all vehicles for user: $userId", "SupabaseVehicleRepository")
 
-            val response = postgres.from("vehicles")
-                .select {
-                    filter {
-                        eq("user_id", userId)
-                    }
-                }.decodeList<SupabaseVehicle>()
+            val response = executeWithTokenRefresh("getAllVehiclesForUser") {
+                postgres.from("vehicles")
+                    .select {
+                        filter {
+                            eq("user_id", userId)
+                        }
+                    }.decodeList<SupabaseVehicle>()
+            }
 
             response.map { it.toDomainVehicle() }
         } catch (e: Exception) {

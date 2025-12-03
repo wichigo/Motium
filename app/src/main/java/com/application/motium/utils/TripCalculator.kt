@@ -33,18 +33,52 @@ object TripCalculator {
     }
 
     /**
-     * Calculate mileage cost based on distance and vehicle
+     * Calculate mileage cost based on distance and vehicle using PROGRESSIVE brackets.
+     * Uses the French barème kilométrique 2024 with proper bracket transitions.
+     *
+     * @param distanceKm Distance of the new trip
+     * @param vehicle Vehicle with annual mileage info
+     * @param tripType Type of trip (PRO or PERSO) to use correct annual counter
+     * @return Cost calculated using progressive bracket system
      */
-    fun calculateMileageCost(distanceKm: Double, vehicle: Vehicle): Double {
+    fun calculateMileageCost(
+        distanceKm: Double,
+        vehicle: Vehicle,
+        tripType: TripType = TripType.PROFESSIONAL
+    ): Double {
+        // Get the correct annual mileage based on trip type
+        val previousAnnualKm = when (tripType) {
+            TripType.PROFESSIONAL -> vehicle.totalMileagePro
+            TripType.PERSONAL -> vehicle.totalMileagePerso
+        }
+
+        return MileageAllowanceCalculator.calculateTripCost(
+            vehicleType = vehicle.type,
+            power = vehicle.power,
+            previousAnnualKm = previousAnnualKm,
+            tripDistanceKm = distanceKm
+        )
+    }
+
+    /**
+     * Legacy method - Calculate mileage cost using fixed rate (deprecated).
+     * Kept for backward compatibility.
+     */
+    @Deprecated("Use calculateMileageCost with tripType parameter for progressive brackets")
+    fun calculateMileageCostSimple(distanceKm: Double, vehicle: Vehicle): Double {
         return distanceKm * vehicle.mileageRate
     }
 
     /**
-     * Calculate mileage rate for a vehicle based on type and power
+     * Calculate mileage rate for a vehicle based on type and power.
+     * Returns the first bracket rate (0-5000 km for cars).
      */
     fun calculateMileageRate(vehicleType: VehicleType, power: VehiclePower?): Double {
         return when (vehicleType) {
-            VehicleType.CAR -> power?.rate ?: Constants.MileageRates.CAR_5CV_RATE
+            VehicleType.CAR -> {
+                val rates = MileageAllowanceCalculator.getRatesForPower(power ?: VehiclePower.CV_5)
+                rates.bracket1Rate
+            }
             VehicleType.MOTORCYCLE -> Constants.MileageRates.MOTORCYCLE_RATE
             VehicleType.SCOOTER -> Constants.MileageRates.SCOOTER_RATE
             VehicleType.BIKE -> Constants.MileageRates.BIKE_RATE
@@ -52,16 +86,48 @@ object TripCalculator {
     }
 
     /**
-     * Get mileage rate directly from vehicle power
+     * Get the current effective rate for a vehicle based on annual mileage.
+     * This rate changes depending on which bracket the vehicle is in.
+     *
+     * @param vehicle Vehicle with power and annual mileage info
+     * @param tripType Type of trip to determine which counter to use
+     * @return Current effective rate €/km
+     */
+    fun getCurrentEffectiveRate(vehicle: Vehicle, tripType: TripType): Double {
+        val annualKm = when (tripType) {
+            TripType.PROFESSIONAL -> vehicle.totalMileagePro
+            TripType.PERSONAL -> vehicle.totalMileagePerso
+        }
+        return MileageAllowanceCalculator.getEffectiveRate(vehicle.type, vehicle.power, annualKm)
+    }
+
+    /**
+     * Get bracket info for display purposes.
+     */
+    fun getBracketInfo(vehicle: Vehicle, tripType: TripType): BracketInfo {
+        val annualKm = when (tripType) {
+            TripType.PROFESSIONAL -> vehicle.totalMileagePro
+            TripType.PERSONAL -> vehicle.totalMileagePerso
+        }
+        return MileageAllowanceCalculator.getCurrentBracketInfo(vehicle.type, vehicle.power, annualKm)
+    }
+
+    /**
+     * Calculate total annual allowance for a vehicle.
+     */
+    fun calculateAnnualAllowance(vehicle: Vehicle, tripType: TripType): Double {
+        val annualKm = when (tripType) {
+            TripType.PROFESSIONAL -> vehicle.totalMileagePro
+            TripType.PERSONAL -> vehicle.totalMileagePerso
+        }
+        return MileageAllowanceCalculator.calculateAnnualAllowance(vehicle.type, vehicle.power, annualKm)
+    }
+
+    /**
+     * Get mileage rate directly from vehicle power (first bracket rate).
      */
     fun getMileageRateForPower(power: VehiclePower): Double {
-        return when (power) {
-            VehiclePower.CV_3 -> Constants.MileageRates.CAR_3CV_RATE
-            VehiclePower.CV_4 -> Constants.MileageRates.CAR_4CV_RATE
-            VehiclePower.CV_5 -> Constants.MileageRates.CAR_5CV_RATE
-            VehiclePower.CV_6 -> Constants.MileageRates.CAR_6CV_RATE
-            VehiclePower.CV_7_PLUS -> Constants.MileageRates.CAR_7CV_PLUS_RATE
-        }
+        return MileageAllowanceCalculator.getRatesForPower(power).bracket1Rate
     }
 
     /**

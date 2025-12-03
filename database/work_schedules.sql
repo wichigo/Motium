@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS work_schedules (
     end_hour INTEGER NOT NULL CHECK (end_hour >= 0 AND end_hour <= 23),
     end_minute INTEGER NOT NULL CHECK (end_minute >= 0 AND end_minute <= 59),
 
+    -- Indique si le créneau traverse minuit (ex: 22:00 -> 02:00)
+    is_overnight BOOLEAN DEFAULT FALSE,
+
     -- Actif ou non (permet de désactiver temporairement un créneau)
     is_active BOOLEAN DEFAULT TRUE,
 
@@ -29,8 +32,9 @@ CREATE TABLE IF NOT EXISTS work_schedules (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
-    -- Contrainte: l'heure de fin doit être après l'heure de début
+    -- Contrainte: l'heure de fin doit être après l'heure de début (sauf si overnight)
     CONSTRAINT valid_time_range CHECK (
+        is_overnight = TRUE OR
         (end_hour > start_hour) OR
         (end_hour = start_hour AND end_minute > start_minute)
     )
@@ -78,12 +82,16 @@ CREATE OR REPLACE FUNCTION is_in_work_hours(
 RETURNS BOOLEAN AS $$
 DECLARE
     v_day_of_week INTEGER;
+    v_previous_day INTEGER;
     v_hour INTEGER;
     v_minute INTEGER;
     v_in_work_hours BOOLEAN;
 BEGIN
     -- Extraire le jour de la semaine (1 = Lundi, 7 = Dimanche)
     v_day_of_week := EXTRACT(ISODOW FROM p_timestamp);
+
+    -- Calculer le jour précédent (avec wrap-around: si lundi (1), alors dimanche (7))
+    v_previous_day := CASE WHEN v_day_of_week = 1 THEN 7 ELSE v_day_of_week - 1 END;
 
     -- Extraire l'heure et les minutes
     v_hour := EXTRACT(HOUR FROM p_timestamp);
@@ -94,13 +102,29 @@ BEGIN
         SELECT 1
         FROM work_schedules
         WHERE user_id = p_user_id
-            AND day_of_week = v_day_of_week
             AND is_active = TRUE
             AND (
-                -- Le timestamp est dans le créneau
-                (v_hour > start_hour OR (v_hour = start_hour AND v_minute >= start_minute))
-                AND
-                (v_hour < end_hour OR (v_hour = end_hour AND v_minute <= end_minute))
+                -- Cas 1: Créneau normal du jour actuel (non-overnight)
+                (
+                    day_of_week = v_day_of_week
+                    AND is_overnight = FALSE
+                    AND (v_hour > start_hour OR (v_hour = start_hour AND v_minute >= start_minute))
+                    AND (v_hour < end_hour OR (v_hour = end_hour AND v_minute <= end_minute))
+                )
+                OR
+                -- Cas 2: Créneau overnight du jour actuel (après minuit jusqu'à l'heure de fin)
+                (
+                    day_of_week = v_day_of_week
+                    AND is_overnight = TRUE
+                    AND (v_hour > start_hour OR (v_hour = start_hour AND v_minute >= start_minute))
+                )
+                OR
+                -- Cas 3: Créneau overnight du jour précédent (avant minuit jusqu'à maintenant)
+                (
+                    day_of_week = v_previous_day
+                    AND is_overnight = TRUE
+                    AND (v_hour < end_hour OR (v_hour = end_hour AND v_minute <= end_minute))
+                )
             )
     ) INTO v_in_work_hours;
 
@@ -122,6 +146,7 @@ RETURNS TABLE (
     start_minute INTEGER,
     end_hour INTEGER,
     end_minute INTEGER,
+    is_overnight BOOLEAN,
     is_active BOOLEAN
 ) AS $$
 DECLARE
@@ -138,6 +163,7 @@ BEGIN
         ws.start_minute,
         ws.end_hour,
         ws.end_minute,
+        ws.is_overnight,
         ws.is_active
     FROM work_schedules ws
     WHERE ws.user_id = p_user_id

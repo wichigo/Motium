@@ -7,6 +7,7 @@ import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.domain.model.TrackingMode
+import com.application.motium.service.ActivityRecognitionService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -29,7 +30,7 @@ class AutoTrackingScheduleWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.d("AutoTrackingScheduleWorker: Checking work hours", "AutoTrackingScheduleWorker")
+            MotiumApplication.logger.d("AutoTrackingScheduleWorker: Checking tracking mode", "AutoTrackingScheduleWorker")
 
             // Récupérer l'utilisateur actuel
             val authState = authRepository.authState.first()
@@ -41,28 +42,64 @@ class AutoTrackingScheduleWorker(
 
             // Vérifier le mode d'auto-tracking
             val settings = workScheduleRepository.getAutoTrackingSettings(userId)
-            val trackingMode = settings?.trackingMode
-            if (trackingMode != TrackingMode.WORK_HOURS_ONLY) {
-                MotiumApplication.logger.d("Tracking mode is not WORK_HOURS_ONLY, skipping check", "AutoTrackingScheduleWorker")
-                return@withContext Result.success()
-            }
-
-            // Vérifier si on est dans les horaires professionnels
-            val inWorkHours = workScheduleRepository.isInWorkHours(userId)
-
-            // Mettre à jour l'état de l'auto-tracking
+            val trackingMode = settings?.trackingMode ?: TrackingMode.DISABLED
             val currentlyEnabled = tripRepository.isAutoTrackingEnabled()
-            if (currentlyEnabled != inWorkHours) {
-                tripRepository.setAutoTrackingEnabled(inWorkHours)
-                MotiumApplication.logger.i(
-                    "✅ Auto-tracking automatically ${if (inWorkHours) "enabled" else "disabled"} based on work hours",
-                    "AutoTrackingScheduleWorker"
-                )
-            } else {
-                MotiumApplication.logger.d(
-                    "Auto-tracking already ${if (inWorkHours) "enabled" else "disabled"}, no change needed",
-                    "AutoTrackingScheduleWorker"
-                )
+
+            when (trackingMode) {
+                TrackingMode.ALWAYS -> {
+                    // Mode toujours actif: s'assurer que le service tourne
+                    if (!currentlyEnabled) {
+                        tripRepository.setAutoTrackingEnabled(true)
+                        withContext(Dispatchers.Main) {
+                            ActivityRecognitionService.startService(applicationContext)
+                        }
+                        MotiumApplication.logger.i(
+                            "✅ ALWAYS mode: Auto-tracking re-enabled",
+                            "AutoTrackingScheduleWorker"
+                        )
+                    }
+                }
+                TrackingMode.WORK_HOURS_ONLY -> {
+                    // Mode horaires pro: vérifier si on est dans les horaires
+                    val inWorkHours = workScheduleRepository.isInWorkHours(userId)
+
+                    if (currentlyEnabled != inWorkHours) {
+                        tripRepository.setAutoTrackingEnabled(inWorkHours)
+                        withContext(Dispatchers.Main) {
+                            if (inWorkHours) {
+                                ActivityRecognitionService.startService(applicationContext)
+                                MotiumApplication.logger.i(
+                                    "✅ PRO mode: Auto-tracking enabled (in work hours)",
+                                    "AutoTrackingScheduleWorker"
+                                )
+                            } else {
+                                ActivityRecognitionService.stopService(applicationContext)
+                                MotiumApplication.logger.i(
+                                    "✅ PRO mode: Auto-tracking disabled (outside work hours)",
+                                    "AutoTrackingScheduleWorker"
+                                )
+                            }
+                        }
+                    } else {
+                        MotiumApplication.logger.d(
+                            "PRO mode: Already ${if (inWorkHours) "enabled" else "disabled"}, no change",
+                            "AutoTrackingScheduleWorker"
+                        )
+                    }
+                }
+                TrackingMode.DISABLED -> {
+                    // Mode désactivé: s'assurer que le service est arrêté
+                    if (currentlyEnabled) {
+                        tripRepository.setAutoTrackingEnabled(false)
+                        withContext(Dispatchers.Main) {
+                            ActivityRecognitionService.stopService(applicationContext)
+                        }
+                        MotiumApplication.logger.i(
+                            "✅ DISABLED mode: Auto-tracking stopped",
+                            "AutoTrackingScheduleWorker"
+                        )
+                    }
+                }
             }
 
             Result.success()

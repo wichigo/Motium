@@ -28,6 +28,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
         val start_minute: Int,
         val end_hour: Int,
         val end_minute: Int,
+        val is_overnight: Boolean = false,
         val is_active: Boolean = true,
         val created_at: String? = null,
         val updated_at: String? = null
@@ -117,6 +118,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                 start_minute = schedule.startMinute,
                 end_hour = schedule.endHour,
                 end_minute = schedule.endMinute,
+                is_overnight = schedule.isOvernight,
                 is_active = schedule.isActive
             )
 
@@ -143,6 +145,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                 start_minute = schedule.startMinute,
                 end_hour = schedule.endHour,
                 end_minute = schedule.endMinute,
+                is_overnight = schedule.isOvernight,
                 is_active = schedule.isActive
             )
 
@@ -245,9 +248,8 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     suspend fun isInWorkHours(userId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             // Appeler la fonction PostgreSQL is_in_work_hours
-            // La fonction retourne un booléen simple, pas un array
             val response = postgres.rpc("is_in_work_hours", RpcUserIdParam(userId))
-            val result = response.data.toString().toBoolean()
+            val result = parseRpcBooleanResponse(response.data)
             MotiumApplication.logger.d("Is in work hours: $result", "WorkScheduleRepository")
             result
         } catch (e: Exception) {
@@ -262,14 +264,45 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     suspend fun shouldAutotrack(userId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             // Appeler la fonction PostgreSQL should_autotrack
-            // La fonction retourne un booléen simple, pas un array
             val response = postgres.rpc("should_autotrack", RpcUserIdParam(userId))
-            val result = response.data.toString().toBoolean()
+            val result = parseRpcBooleanResponse(response.data)
             MotiumApplication.logger.d("Should autotrack: $result", "WorkScheduleRepository")
             result
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error checking should autotrack: ${e.message}", "WorkScheduleRepository", e)
             false
+        }
+    }
+
+    /**
+     * Parse robuste des réponses RPC booléennes
+     * Gère différents formats: true, "true", 1, "1", etc.
+     */
+    private fun parseRpcBooleanResponse(data: Any?): Boolean {
+        return when (data) {
+            is Boolean -> data
+            is Number -> data.toInt() != 0
+            is String -> {
+                val cleaned = data.trim().lowercase()
+                when (cleaned) {
+                    "true", "t", "yes", "y", "1" -> true
+                    "false", "f", "no", "n", "0" -> false
+                    else -> {
+                        // Essayer de parser comme JSON
+                        try {
+                            cleaned.toBoolean()
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.w("Unable to parse RPC response as boolean: $data, defaulting to false", "WorkScheduleRepository")
+                            false
+                        }
+                    }
+                }
+            }
+            null -> false
+            else -> {
+                MotiumApplication.logger.w("Unexpected RPC response type: ${data::class.simpleName}, defaulting to false", "WorkScheduleRepository")
+                false
+            }
         }
     }
 
@@ -283,6 +316,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             startMinute = start_minute,
             endHour = end_hour,
             endMinute = end_minute,
+            isOvernight = is_overnight,
             isActive = is_active,
             createdAt = created_at?.let { Instant.parse(it) } ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
             updatedAt = updated_at?.let { Instant.parse(it) } ?: Instant.fromEpochMilliseconds(System.currentTimeMillis())

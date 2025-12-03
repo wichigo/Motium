@@ -59,6 +59,21 @@ class NominatimService {
     private val client = OkHttpClient()
     private val json = Json { ignoreUnknownKeys = true }
 
+    companion object {
+        // Seuils de validation pour le geocoding
+        private const val MIN_GEOCODING_SCORE = 0.5 // Score minimum de confiance (0-1)
+        private const val MAX_GEOCODING_DISTANCE_METERS = 100f // Distance max entre GPS et adresse retournée
+
+        @Volatile
+        private var instance: NominatimService? = null
+
+        fun getInstance(): NominatimService {
+            return instance ?: synchronized(this) {
+                instance ?: NominatimService().also { instance = it }
+            }
+        }
+    }
+
     suspend fun searchAddress(query: String): List<NominatimResult> = withContext(Dispatchers.IO) {
         try {
             if (query.length < 3) return@withContext emptyList()
@@ -140,6 +155,86 @@ class NominatimService {
         }
     }
 
+    /**
+     * Map Matching: "Snap to Road" - Aligne les points GPS sur les routes réelles
+     * Utilise l'API OSRM Match pour créer un tracé qui suit les vraies routes
+     * au lieu de tracer des lignes droites entre les points GPS.
+     *
+     * @param gpsPoints Liste de paires [latitude, longitude]
+     * @return Liste de coordonnées snappées [longitude, latitude] pour affichage
+     */
+    suspend fun matchRoute(gpsPoints: List<Pair<Double, Double>>): List<List<Double>>? = withContext(Dispatchers.IO) {
+        if (gpsPoints.size < 2) {
+            Log.w("NominatimService", "Map matching requires at least 2 points")
+            return@withContext null
+        }
+
+        try {
+            // OSRM Match API - limite de 100 points par requête
+            // Si plus de points, on échantillonne
+            val sampledPoints = if (gpsPoints.size > 100) {
+                val step = gpsPoints.size / 100
+                gpsPoints.filterIndexed { index, _ -> index % step == 0 || index == gpsPoints.size - 1 }
+            } else {
+                gpsPoints
+            }
+
+            // Format OSRM: lon,lat;lon,lat;...
+            val coordinatesString = sampledPoints.joinToString(";") { (lat, lon) ->
+                "$lon,$lat"
+            }
+
+            val url = "https://router.project-osrm.org/match/v1/driving/$coordinatesString".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter("overview", "full")
+                .addQueryParameter("geometries", "geojson")
+                .addQueryParameter("radiuses", sampledPoints.joinToString(";") { "25" }) // 25m de tolérance
+                .build()
+
+            Log.d("NominatimService", "Map matching ${sampledPoints.size} points...")
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", "Motium/1.0")
+                .build()
+
+            val response = client.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string() ?: return@withContext null
+                val matchData = json.parseToJsonElement(responseBody).jsonObject
+
+                // Vérifier le code de réponse OSRM
+                val code = matchData["code"]?.jsonPrimitive?.content
+                if (code != "Ok") {
+                    Log.w("NominatimService", "OSRM match returned: $code")
+                    return@withContext null
+                }
+
+                // Extraire la géométrie du premier matching
+                val matchings = matchData["matchings"]?.jsonArray?.firstOrNull()?.jsonObject
+                val geometry = matchings?.get("geometry")?.jsonObject
+                val coordinates = geometry?.get("coordinates")?.jsonArray?.map { coord ->
+                    coord.jsonArray.map { it.jsonPrimitive.double }
+                }
+
+                if (coordinates != null && coordinates.isNotEmpty()) {
+                    Log.d("NominatimService", "✅ Map matching success: ${gpsPoints.size} GPS points → ${coordinates.size} road points")
+                    coordinates
+                } else {
+                    Log.w("NominatimService", "No matched geometry returned")
+                    null
+                }
+            } else {
+                Log.e("NominatimService", "Map matching error: ${response.code}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("NominatimService", "Map matching error: ${e.message}", e)
+            null
+        }
+    }
+
     suspend fun getRoute(
         startLat: Double,
         startLon: Double,
@@ -207,6 +302,7 @@ class NominatimService {
 
     /**
      * Reverse geocoding: convertit des coordonnées GPS en adresse lisible
+     * Avec validation de cohérence géographique pour éviter les adresses erronées
      */
     suspend fun reverseGeocode(latitude: Double, longitude: Double): String? = withContext(Dispatchers.IO) {
         try {
@@ -228,18 +324,58 @@ class NominatimService {
                 val responseBody = response.body?.string() ?: "{\"features\":[]}"
                 val frenchResponse = json.decodeFromString<FrenchAddressResponse>(responseBody)
 
-                // Retourner la première adresse trouvée
-                frenchResponse.features.firstOrNull()?.properties?.label
+                // Valider l'adresse retournée
+                val feature = frenchResponse.features.firstOrNull()
+                if (feature != null) {
+                    val address = feature.properties.label
+                    val score = feature.properties.score
+                    val returnedCoords = feature.geometry.coordinates
+
+                    // Validation 1: Vérifier le score de confiance (> 0.5)
+                    if (score < MIN_GEOCODING_SCORE) {
+                        Log.w("NominatimService", "Low confidence score: $score for ($latitude, $longitude)")
+                        // Essayer Nominatim en fallback
+                        return@withContext reverseGeocodeNominatim(latitude, longitude) ?: address
+                    }
+
+                    // Validation 2: Vérifier la distance entre GPS et adresse retournée
+                    if (returnedCoords.size >= 2) {
+                        val returnedLon = returnedCoords[0]
+                        val returnedLat = returnedCoords[1]
+                        val distance = calculateDistance(latitude, longitude, returnedLat, returnedLon)
+
+                        if (distance > MAX_GEOCODING_DISTANCE_METERS) {
+                            Log.w("NominatimService", "Address too far: ${distance.toInt()}m from GPS point for ($latitude, $longitude)")
+                            // Essayer Nominatim en fallback
+                            val nominatimResult = reverseGeocodeNominatim(latitude, longitude)
+                            return@withContext nominatimResult ?: address
+                        }
+
+                        Log.d("NominatimService", "✅ Geocoding validated: $address (score: $score, distance: ${distance.toInt()}m)")
+                    }
+
+                    address
+                } else {
+                    Log.w("NominatimService", "No address found for ($latitude, $longitude)")
+                    reverseGeocodeNominatim(latitude, longitude)
+                }
             } else {
                 Log.e("NominatimService", "French reverse API Error: ${response.code}")
-                // Fallback vers Nominatim
                 reverseGeocodeNominatim(latitude, longitude)
             }
         } catch (e: Exception) {
             Log.e("NominatimService", "French reverse geocoding error: ${e.message}", e)
-            // Fallback vers Nominatim
             reverseGeocodeNominatim(latitude, longitude)
         }
+    }
+
+    /**
+     * Calcule la distance en mètres entre deux points GPS
+     */
+    private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        return results[0]
     }
 
     private suspend fun reverseGeocodeNominatim(latitude: Double, longitude: Double): String? {
@@ -270,17 +406,6 @@ class NominatimService {
         } catch (e: Exception) {
             Log.e("NominatimService", "Nominatim reverse error: ${e.message}", e)
             return null
-        }
-    }
-
-    companion object {
-        @Volatile
-        private var instance: NominatimService? = null
-
-        fun getInstance(): NominatimService {
-            return instance ?: synchronized(this) {
-                instance ?: NominatimService().also { instance = it }
-            }
         }
     }
 }

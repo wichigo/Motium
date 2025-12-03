@@ -11,6 +11,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,10 +31,17 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
+import com.application.motium.data.VehicleRepository
+import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.domain.model.isPremium
+import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.TrackingModeDropdown
+import com.application.motium.data.sync.AutoTrackingScheduleWorker
+import com.application.motium.domain.model.AutoTrackingSettings
+import kotlinx.datetime.Instant
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.utils.ThemeManager
 import com.application.motium.presentation.theme.*
@@ -45,10 +56,11 @@ val MockupTextBlack = Color(0xFF1F2937)
 val MockupTextGray = Color(0xFF6B7280)
 val MockupBackground = Color(0xFFF3F4F6)
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
 @Composable
 fun NewHomeScreen(
     onNavigateToCalendar: () -> Unit = {},
+    onNavigateToCalendarPlanning: () -> Unit = {},
     onNavigateToVehicles: () -> Unit = {},
     onNavigateToExport: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -61,6 +73,8 @@ fun NewHomeScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }
+    val workScheduleRepository = remember { WorkScheduleRepository.getInstance(context) }
     val themeManager = remember { ThemeManager.getInstance(context) }
 
     val authState by authViewModel.authState.collectAsState()
@@ -68,6 +82,10 @@ fun NewHomeScreen(
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var autoTrackingEnabled by remember { mutableStateOf(false) }
+    var trackingMode by remember { mutableStateOf<TrackingMode?>(null) }
+    var hasWorkSchedules by remember { mutableStateOf(false) }
+    var showNoSchedulesDialog by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     // Pagination state
@@ -160,6 +178,18 @@ fun NewHomeScreen(
                     currentOffset = syncedTrips.size
                     hasMoreTrips = syncedTrips.size >= 10
                 }
+
+                // Charger le mode de tracking et les horaires depuis Supabase
+                currentUser?.let { user ->
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
+                        trackingMode = settings?.trackingMode ?: TrackingMode.DISABLED
+
+                        // Vérifier si l'utilisateur a des horaires définis
+                        val schedules = workScheduleRepository.getWorkSchedules(user.id)
+                        hasWorkSchedules = schedules.isNotEmpty()
+                    }
+                }
             }
 
             autoTrackingEnabled = tripRepository.isAutoTrackingEnabled()
@@ -201,13 +231,58 @@ fun NewHomeScreen(
             },
             containerColor = backgroundColor
         ) { paddingValues ->
-            LazyColumn(
+            // Pull-to-refresh state
+            val pullRefreshState = rememberPullRefreshState(
+                refreshing = isRefreshing,
+                onRefresh = {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        isRefreshing = true
+                        try {
+                            // Récupérer le userId depuis authState (plus fiable que authRepository)
+                            val userId = currentUser?.id
+
+                            // 1. Sync trips depuis Supabase
+                            tripRepository.syncTripsFromSupabase(userId)
+
+                            // 2. Sync véhicules (pour les kilométrages à jour)
+                            vehicleRepository.syncVehiclesFromSupabase()
+
+                            // 3. Sync horaires de travail
+                            currentUser?.let { user ->
+                                val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
+                                trackingMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                                val schedules = workScheduleRepository.getWorkSchedules(user.id)
+                                hasWorkSchedules = schedules.isNotEmpty()
+                            }
+
+                            // 4. Recharger les trips locaux
+                            currentOffset = 0
+                            val refreshedTrips = tripRepository.getTripsPaginated(limit = 10, offset = 0)
+                            trips = refreshedTrips
+                            currentOffset = refreshedTrips.size
+                            hasMoreTrips = refreshedTrips.size == 10
+
+                            MotiumApplication.logger.i("Pull-to-refresh completed: ${trips.size} trips loaded", "HomeScreen")
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Refresh failed: ${e.message}", "HomeScreen", e)
+                        } finally {
+                            isRefreshing = false
+                        }
+                    }
+                }
+            )
+
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(paddingValues)
+                    .pullRefresh(pullRefreshState)
             ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
                 // 1. GROS BOUTON VERT "ADD TRIP"
                 item {
                     Button(
@@ -230,7 +305,7 @@ fun NewHomeScreen(
                     }
                 }
 
-                // 2. AUTO TRACKING SWITCH
+                // 2. AUTO TRACKING DROPDOWN
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -238,32 +313,63 @@ fun NewHomeScreen(
                         colors = CardDefaults.cardColors(containerColor = cardColor),
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = 20.dp, vertical = 16.dp)
                         ) {
-                            Text(
-                                "Auto Tracking",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                                color = textColor
-                            )
-                            Switch(
-                                checked = autoTrackingEnabled,
-                                onCheckedChange = {
-                                    autoTrackingEnabled = it
-                                    tripRepository.setAutoTrackingEnabled(it)
-                                    if (it) ActivityRecognitionService.startService(context)
-                                    else ActivityRecognitionService.stopService(context)
+                            TrackingModeDropdown(
+                                selectedMode = trackingMode ?: TrackingMode.DISABLED,
+                                onModeSelected = { newMode ->
+                                    // Si Pro sélectionné sans horaires définis, rediriger vers Planning
+                                    if (newMode == TrackingMode.WORK_HOURS_ONLY && !hasWorkSchedules) {
+                                        showNoSchedulesDialog = true
+                                        return@TrackingModeDropdown
+                                    }
+
+                                    // Mettre à jour le mode de tracking
+                                    currentUser?.let { user ->
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            val settings = AutoTrackingSettings(
+                                                id = java.util.UUID.randomUUID().toString(),
+                                                userId = user.id,
+                                                trackingMode = newMode,
+                                                minTripDistanceMeters = 100,
+                                                minTripDurationSeconds = 60,
+                                                createdAt = Instant.fromEpochMilliseconds(System.currentTimeMillis()),
+                                                updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+                                            )
+                                            workScheduleRepository.saveAutoTrackingSettings(settings)
+                                            trackingMode = newMode
+
+                                            // Gérer le démarrage/arrêt des services selon le mode
+                                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                                when (newMode) {
+                                                    TrackingMode.ALWAYS -> {
+                                                        tripRepository.setAutoTrackingEnabled(true)
+                                                        autoTrackingEnabled = true
+                                                        ActivityRecognitionService.startService(context)
+                                                        AutoTrackingScheduleWorker.cancel(context)
+                                                        MotiumApplication.logger.i("ALWAYS mode: Auto-tracking permanently enabled", "HomeScreen")
+                                                    }
+                                                    TrackingMode.WORK_HOURS_ONLY -> {
+                                                        AutoTrackingScheduleWorker.schedule(context)
+                                                        AutoTrackingScheduleWorker.runNow(context)
+                                                        MotiumApplication.logger.i("PRO mode: Auto-tracking managed by work schedule", "HomeScreen")
+                                                    }
+                                                    TrackingMode.DISABLED -> {
+                                                        tripRepository.setAutoTrackingEnabled(false)
+                                                        autoTrackingEnabled = false
+                                                        ActivityRecognitionService.stopService(context)
+                                                        AutoTrackingScheduleWorker.cancel(context)
+                                                        MotiumApplication.logger.i("DISABLED mode: Auto-tracking stopped", "HomeScreen")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = MockupGreen,
-                                    uncheckedThumbColor = Color.White,
-                                    uncheckedTrackColor = Color(0xFFE5E7EB)
-                                )
+                                enabled = currentUser != null
                             )
                         }
                     }
@@ -430,6 +536,15 @@ fun NewHomeScreen(
                 }
 
                 item { Spacer(modifier = Modifier.height(80.dp)) }
+                }
+
+                // Pull-to-refresh indicator
+                PullRefreshIndicator(
+                    refreshing = isRefreshing,
+                    state = pullRefreshState,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    contentColor = MockupGreen
+                )
             }
         }
 
@@ -446,6 +561,44 @@ fun NewHomeScreen(
                 }
             )
         }
+    }
+
+    // Dialog pour rediriger vers Planning quand Pro est sélectionné sans horaires
+    if (showNoSchedulesDialog) {
+        AlertDialog(
+            onDismissRequest = { showNoSchedulesDialog = false },
+            title = {
+                Text(
+                    text = "Aucun horaire défini",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text(
+                    text = "Pour utiliser le mode Professionnel, vous devez d'abord définir vos horaires de travail dans la section Planning. Voulez-vous configurer vos horaires maintenant ?",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showNoSchedulesDialog = false
+                        onNavigateToCalendarPlanning()
+                    }
+                ) {
+                    Text("Configurer", color = MockupGreen)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showNoSchedulesDialog = false }
+                ) {
+                    Text("Annuler", color = Color.Gray)
+                }
+            },
+            containerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White,
+            tonalElevation = 24.dp
+        )
     }
 }
 
@@ -490,7 +643,7 @@ fun NewHomeTripCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.Top
         ) {
             // 1. MAP
@@ -553,11 +706,50 @@ fun NewHomeTripCard(
                             )
                         }
                     }
-                    Text(
-                        text = String.format("$%.2f", trip.totalDistance * 0.20 / 1000),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MockupGreen
-                    )
+                    // Badge Pro/Perso
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (trip.tripType) {
+                            "PROFESSIONAL" -> Color(0xFF10B981).copy(alpha = 0.15f)
+                            "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
+                            else -> Color.Gray.copy(alpha = 0.15f)
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = when (trip.tripType) {
+                                    "PROFESSIONAL" -> Icons.Default.Work
+                                    "PERSONAL" -> Icons.Default.Person
+                                    else -> Icons.Default.HelpOutline
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = when (trip.tripType) {
+                                    "PROFESSIONAL" -> Color(0xFF10B981)
+                                    "PERSONAL" -> Color(0xFF3B82F6)
+                                    else -> Color.Gray
+                                }
+                            )
+                            Text(
+                                when (trip.tripType) {
+                                    "PROFESSIONAL" -> "Pro"
+                                    "PERSONAL" -> "Perso"
+                                    else -> "?"
+                                },
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                fontSize = 11.sp,
+                                color = when (trip.tripType) {
+                                    "PROFESSIONAL" -> Color(0xFF10B981)
+                                    "PERSONAL" -> Color(0xFF3B82F6)
+                                    else -> Color.Gray
+                                }
+                            )
+                        }
+                    }
                 }
 
                 // --- Connecteur (Pointillés) ---
@@ -578,13 +770,17 @@ fun NewHomeTripCard(
                     }
                 }
 
-                // --- Ligne Arrivée ---
+                // --- Ligne Arrivée + Indemnités + Switch ---
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(modifier = Modifier.weight(1f)) {
+                    // Adresse d'arrivée
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.Top
+                    ) {
                         Box(
                             modifier = Modifier
                                 .padding(top = 6.dp)
@@ -606,9 +802,22 @@ fun NewHomeTripCard(
                             )
                         }
                     }
-                    // Toggle Switch ajusté
-                    Box(modifier = Modifier.height(24.dp)) {
-                         Switch(
+
+                    // Indemnités + Switch (colonne)
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
+                        // Indemnités
+                        Text(
+                            text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MockupGreen,
+                            fontSize = 14.sp
+                        )
+
+                        // Toggle Switch (compacté)
+                        Switch(
                             checked = trip.isValidated,
                             onCheckedChange = { onToggleValidation() },
                             colors = SwitchDefaults.colors(
@@ -618,7 +827,9 @@ fun NewHomeTripCard(
                                 uncheckedTrackColor = Color(0xFFE5E7EB),
                                 uncheckedBorderColor = Color.Transparent
                             ),
-                            modifier = Modifier.scale(0.8f)
+                            modifier = Modifier
+                                .scale(0.8f)
+                                .offset(y = (-4).dp)
                         )
                     }
                 }

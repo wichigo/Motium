@@ -9,6 +9,7 @@ import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.*
+import com.application.motium.service.ActivityRecognitionService
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
@@ -105,11 +106,24 @@ class WorkScheduleViewModel(
                     _trackingMode.value = settings.trackingMode
                     MotiumApplication.logger.i("Auto-tracking mode loaded: ${settings.trackingMode}", "WorkScheduleViewModel")
 
-                    // Démarrer le Worker si le mode est WORK_HOURS_ONLY (au démarrage de l'app)
-                    if (settings.trackingMode == TrackingMode.WORK_HOURS_ONLY) {
-                        AutoTrackingScheduleWorker.schedule(context)
-                        AutoTrackingScheduleWorker.runNow(context)
-                        MotiumApplication.logger.i("Auto-tracking Worker started (mode was already WORK_HOURS_ONLY)", "WorkScheduleViewModel")
+                    // Gérer le mode au démarrage de l'app
+                    when (settings.trackingMode) {
+                        TrackingMode.ALWAYS -> {
+                            // Mode toujours actif: s'assurer que le service tourne
+                            tripRepository.setAutoTrackingEnabled(true)
+                            ActivityRecognitionService.startService(context)
+                            MotiumApplication.logger.i("ALWAYS mode: Auto-tracking service started", "WorkScheduleViewModel")
+                        }
+                        TrackingMode.WORK_HOURS_ONLY -> {
+                            // Mode horaires pro: démarrer le worker
+                            AutoTrackingScheduleWorker.schedule(context)
+                            AutoTrackingScheduleWorker.runNow(context)
+                            MotiumApplication.logger.i("WORK_HOURS_ONLY mode: Worker started", "WorkScheduleViewModel")
+                        }
+                        TrackingMode.DISABLED -> {
+                            // Mode désactivé: ne rien faire
+                            MotiumApplication.logger.i("DISABLED mode: Manual control", "WorkScheduleViewModel")
+                        }
                     }
                 } else {
                     // Pas de settings, créer des settings par défaut
@@ -322,6 +336,17 @@ class WorkScheduleViewModel(
      */
     private fun syncWithTripRepository(mode: TrackingMode) {
         when (mode) {
+            TrackingMode.ALWAYS -> {
+                // Mode toujours actif: activer le tracking en permanence, arrêter le worker
+                AutoTrackingScheduleWorker.cancel(context)
+                tripRepository.setAutoTrackingEnabled(true)
+                ActivityRecognitionService.startService(context)
+
+                MotiumApplication.logger.i(
+                    "✅ ALWAYS mode activated: Auto-tracking permanently enabled",
+                    "WorkScheduleViewModel"
+                )
+            }
             TrackingMode.WORK_HOURS_ONLY -> {
                 // Mode automatique: démarrer le worker qui vérifie périodiquement les horaires
                 AutoTrackingScheduleWorker.schedule(context)
@@ -330,16 +355,18 @@ class WorkScheduleViewModel(
                 AutoTrackingScheduleWorker.runNow(context)
 
                 MotiumApplication.logger.i(
-                    "✅ WORK_HOURS_ONLY mode activated: Auto-tracking will be managed automatically based on work hours",
+                    "✅ WORK_HOURS_ONLY mode activated: Auto-tracking managed by work schedule",
                     "WorkScheduleViewModel"
                 )
             }
             TrackingMode.DISABLED -> {
-                // Mode désactivé: arrêter le worker et laisser l'utilisateur contrôler manuellement
+                // Mode désactivé: arrêter le worker, arrêter le service
                 AutoTrackingScheduleWorker.cancel(context)
+                tripRepository.setAutoTrackingEnabled(false)
+                ActivityRecognitionService.stopService(context)
 
                 MotiumApplication.logger.i(
-                    "✅ DISABLED mode activated: User has manual control via Home page button",
+                    "✅ DISABLED mode activated: User has manual control",
                     "WorkScheduleViewModel"
                 )
             }

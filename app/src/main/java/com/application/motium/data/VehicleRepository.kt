@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import java.util.Calendar
 
 /**
  * OFFLINE-FIRST: Repository pour gérer les véhicules avec stockage local Room Database
@@ -33,20 +34,67 @@ class VehicleRepository private constructor(context: Context) {
     }
 
     private val appContext: Context = context.applicationContext
-    private val vehicleDao = MotiumDatabase.getInstance(context).vehicleDao()
+    private val database = MotiumDatabase.getInstance(context)
+    private val vehicleDao = database.vehicleDao()
+    private val tripDao = database.tripDao()
     private val supabaseVehicleRepository = SupabaseVehicleRepository.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
 
     /**
+     * Get the start of the current year in milliseconds.
+     */
+    private fun getStartOfYearMillis(): Long {
+        val calendar = Calendar.getInstance()
+        calendar.set(Calendar.DAY_OF_YEAR, 1)
+        calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        return calendar.timeInMillis
+    }
+
+    /**
+     * Calculate annual mileage from local trips for a vehicle.
+     * Returns the total in kilometers.
+     */
+    private suspend fun calculateLocalMileage(vehicleId: String, tripType: String): Double {
+        return try {
+            val startOfYear = getStartOfYearMillis()
+            // tripDao returns meters, convert to km
+            val meters = tripDao.getAnnualMileageForVehicle(vehicleId, tripType, startOfYear)
+            meters / 1000.0
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error calculating local mileage: ${e.message}", "VehicleRepository", e)
+            0.0
+        }
+    }
+
+    /**
      * OFFLINE-FIRST: Récupère tous les véhicules de l'utilisateur depuis Room Database.
      * Fonctionne en mode offline.
+     * IMPORTANT: Mileage values are recalculated from local trips to ensure accuracy.
      */
     suspend fun getAllVehiclesForUser(userId: String): List<Vehicle> = withContext(Dispatchers.IO) {
         try {
             val vehicleEntities = vehicleDao.getVehiclesForUser(userId)
-            val vehicles = vehicleEntities.map { it.toDomainModel() }
 
-            MotiumApplication.logger.i("Loaded ${vehicles.size} vehicles from Room Database for user $userId", "VehicleRepository")
+            // Recalculate mileage from local trips for each vehicle
+            // This ensures we always have accurate values, not stale cached data
+            val vehicles = vehicleEntities.map { entity ->
+                val baseDomain = entity.toDomainModel()
+                val proMileage = calculateLocalMileage(entity.id, "PROFESSIONAL")
+                val persoMileage = calculateLocalMileage(entity.id, "PERSONAL")
+
+                baseDomain.copy(
+                    totalMileagePro = proMileage,
+                    totalMileagePerso = persoMileage
+                )
+            }
+
+            MotiumApplication.logger.i(
+                "Loaded ${vehicles.size} vehicles from Room Database for user $userId (mileage recalculated from local trips)",
+                "VehicleRepository"
+            )
             return@withContext vehicles
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading vehicles from Room: ${e.message}", "VehicleRepository", e)
@@ -56,10 +104,21 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * OFFLINE-FIRST: Récupère un véhicule par son ID depuis Room Database.
+     * Mileage values are recalculated from local trips.
      */
     suspend fun getVehicleById(vehicleId: String): Vehicle? = withContext(Dispatchers.IO) {
         try {
-            vehicleDao.getVehicleById(vehicleId)?.toDomainModel()
+            val entity = vehicleDao.getVehicleById(vehicleId) ?: return@withContext null
+            val baseDomain = entity.toDomainModel()
+
+            // Recalculate mileage from local trips
+            val proMileage = calculateLocalMileage(vehicleId, "PROFESSIONAL")
+            val persoMileage = calculateLocalMileage(vehicleId, "PERSONAL")
+
+            baseDomain.copy(
+                totalMileagePro = proMileage,
+                totalMileagePerso = persoMileage
+            )
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting vehicle by ID: ${e.message}", "VehicleRepository", e)
             null
@@ -68,10 +127,21 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * OFFLINE-FIRST: Récupère le véhicule par défaut de l'utilisateur depuis Room Database.
+     * Mileage values are recalculated from local trips.
      */
     suspend fun getDefaultVehicle(userId: String): Vehicle? = withContext(Dispatchers.IO) {
         try {
-            vehicleDao.getDefaultVehicle(userId)?.toDomainModel()
+            val entity = vehicleDao.getDefaultVehicle(userId) ?: return@withContext null
+            val baseDomain = entity.toDomainModel()
+
+            // Recalculate mileage from local trips
+            val proMileage = calculateLocalMileage(entity.id, "PROFESSIONAL")
+            val persoMileage = calculateLocalMileage(entity.id, "PERSONAL")
+
+            baseDomain.copy(
+                totalMileagePro = proMileage,
+                totalMileagePerso = persoMileage
+            )
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting default vehicle: ${e.message}", "VehicleRepository", e)
             null

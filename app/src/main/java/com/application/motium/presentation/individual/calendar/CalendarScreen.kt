@@ -1,5 +1,6 @@
 package com.application.motium.presentation.individual.calendar
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,16 +14,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -37,17 +38,14 @@ import com.application.motium.domain.model.TimeSlot
 import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.calendar.WorkScheduleViewModel
+import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.MotiumBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
 import com.application.motium.utils.CalendarUtils
-import androidx.compose.material.icons.filled.Receipt
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.CheckCircle
+import com.application.motium.utils.ThemeManager
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -63,25 +61,34 @@ fun CalendarScreen(
     onNavigateToTripDetails: (String) -> Unit = {},
     onNavigateToAddExpense: (String) -> Unit = {},
     onNavigateToExpenseDetails: (String, List<String>) -> Unit = { _, _ -> },
-    authViewModel: AuthViewModel = viewModel()
+    authViewModel: AuthViewModel = viewModel(),
+    initialTab: Int = 0  // 0 = Calendar, 1 = Planning
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
+    val themeManager = remember { ThemeManager.getInstance(context) }
 
     // Utiliser authState de authViewModel au lieu de créer une nouvelle instance
     val authState by authViewModel.authState.collectAsState()
     val currentUser = authState.user
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var currentCalendar by remember { mutableStateOf(Calendar.getInstance()) }
     var selectedDay by remember { mutableStateOf<Calendar?>(null) }
-    var selectedTab by remember { mutableStateOf(0) } // 0 = Calendar, 1 = Planning
+    var selectedTab by remember { mutableStateOf(initialTab) } // 0 = Calendar, 1 = Planning
 
     // User and premium state
     val isPremium = currentUser?.isPremium() ?: false
 
     // Premium dialog state
     var showPremiumDialog by remember { mutableStateOf(false) }
+
+    // Dynamic colors matching HomeScreen
+    val cardColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White
+    val textColor = if (isDarkMode) Color.White else Color(0xFF1F2937)
+    val subTextColor = if (isDarkMode) Color.Gray else Color(0xFF6B7280)
 
     // Load trips
     LaunchedEffect(Unit) {
@@ -332,23 +339,51 @@ fun CalendarScreen(
                     }
                 }
 
-                // Daily stats card
+                // Daily stats card - Same style as HomeScreen
                 item {
                     val totalDistance = selectedDayTrips.sumOf { it.totalDistance } / 1000.0
-                    val totalIndemnities = totalDistance * 0.585
-                    DailySummaryCard(
-                        distance = String.format("%.1f", totalDistance),
-                        tripCount = selectedDayTrips.size.toString(),
-                        indemnities = String.format("%.2f", totalIndemnities)
-                    )
+                    val totalIndemnities = selectedDayTrips.sumOf { it.totalDistance * 0.20 } / 1000.0
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = cardColor),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            Text(
+                                "Daily Summary",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = textColor,
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                CalendarStatItem(String.format("%.1f", totalDistance), "Kilometers", MockupGreen, textColor, subTextColor)
+                                CalendarStatItem(String.format("$%.2f", totalIndemnities), "Indemnities", MockupGreen, textColor, subTextColor)
+                                CalendarStatItem(selectedDayTrips.size.toString(), "Trips", MockupGreen, textColor, subTextColor)
+                            }
+                        }
+                    }
                 }
 
-                // List of trips for selected day
+                // List of trips for selected day - Same style as HomeScreen
                 if (selectedDayTrips.isNotEmpty()) {
                     items(selectedDayTrips) { trip ->
-                        TripCardClickable(
+                        CalendarTripCard(
                             trip = trip,
-                            onClick = { onNavigateToTripDetails(trip.id) }
+                            onClick = { onNavigateToTripDetails(trip.id) },
+                            onToggleValidation = {
+                                coroutineScope.launch {
+                                    val updated = trip.copy(isValidated = !trip.isValidated)
+                                    tripRepository.saveTrip(updated)
+                                    trips = tripRepository.getAllTrips()
+                                }
+                            },
+                            cardColor = cardColor,
+                            textColor = textColor,
+                            subTextColor = subTextColor
                         )
                     }
                 } else {
@@ -356,6 +391,7 @@ fun CalendarScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                            colors = CardDefaults.cardColors(containerColor = cardColor),
                             shape = RoundedCornerShape(16.dp)
                         ) {
                             Box(
@@ -365,9 +401,9 @@ fun CalendarScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "Aucun trajet ce jour",
+                                    text = "No trips this day",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    color = subTextColor
                                 )
                             }
                         }
@@ -423,88 +459,240 @@ fun CalendarScreen(
     }
 }
 
+// StatItem matching HomeScreen style
 @Composable
-fun DailySummaryCard(
-    distance: String = "0.0",
-    tripCount: String = "0",
-    indemnities: String = "0.00"
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "Résumé de la journée",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                SummaryColumn(distance, "Kilomètres")
-                SummaryColumn("${indemnities}€", "Indemnités")
-                SummaryColumn(tripCount, "Trajets")
-            }
-        }
+fun CalendarStatItem(value: String, label: String, highlightColor: Color, textColor: Color, subColor: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            value,
+            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            color = highlightColor
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = subColor
+        )
     }
 }
 
+// TripCard matching HomeScreen style
 @Composable
-fun TripCardClickable(
+fun CalendarTripCard(
     trip: Trip,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onToggleValidation: () -> Unit,
+    cardColor: Color,
+    textColor: Color,
+    subTextColor: Color
 ) {
+    val startLocation = trip.locations.firstOrNull()
+    val endLocation = trip.locations.lastOrNull()
+    val startTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.startTime))
+    val endTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.endTime ?: System.currentTimeMillis()))
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(16.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.Top
         ) {
-            Icon(
-                Icons.Default.LocationOn,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = trip.getFormattedStartTime(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = "${trip.getFormattedDistance()} • ${trip.getFormattedDuration()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-                Text(
-                    text = trip.getRouteDescription(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                )
-            }
-            // Validation indicator
+            // 1. MAP
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .background(
-                        color = if (trip.isValidated) ValidatedGreen else PendingOrange,
-                        shape = RoundedCornerShape(4.dp)
+                    .size(88.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFFE5E7EB))
+            ) {
+                if (startLocation != null && endLocation != null) {
+                    MiniMap(
+                        startLatitude = startLocation.latitude,
+                        startLongitude = startLocation.longitude,
+                        endLatitude = endLocation.latitude,
+                        endLongitude = endLocation.longitude,
+                        routeCoordinates = trip.locations.map { listOf(it.longitude, it.latitude) },
+                        modifier = Modifier.fillMaxSize()
                     )
-            )
+                } else {
+                    Icon(
+                        Icons.Default.Map,
+                        contentDescription = null,
+                        modifier = Modifier.align(Alignment.Center),
+                        tint = subTextColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // 2. DETAILS COLUMN
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                // --- Start Row ---
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Row(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .size(8.dp)
+                                .background(MockupGreen, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = trip.startAddress ?: "Unknown Start",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = textColor,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = startTimeStr,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = subTextColor
+                            )
+                        }
+                    }
+                    // Badge Pro/Perso
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (trip.tripType) {
+                            "PROFESSIONAL" -> Color(0xFF10B981).copy(alpha = 0.15f)
+                            "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
+                            else -> Color.Gray.copy(alpha = 0.15f)
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = when (trip.tripType) {
+                                    "PROFESSIONAL" -> Icons.Default.Work
+                                    "PERSONAL" -> Icons.Default.Person
+                                    else -> Icons.Default.HelpOutline
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = when (trip.tripType) {
+                                    "PROFESSIONAL" -> Color(0xFF10B981)
+                                    "PERSONAL" -> Color(0xFF3B82F6)
+                                    else -> Color.Gray
+                                }
+                            )
+                            Text(
+                                when (trip.tripType) {
+                                    "PROFESSIONAL" -> "Pro"
+                                    "PERSONAL" -> "Perso"
+                                    else -> "?"
+                                },
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                fontSize = 11.sp,
+                                color = when (trip.tripType) {
+                                    "PROFESSIONAL" -> Color(0xFF10B981)
+                                    "PERSONAL" -> Color(0xFF3B82F6)
+                                    else -> Color.Gray
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // --- Dotted connector ---
+                Row(modifier = Modifier.height(24.dp)) {
+                    Box(modifier = Modifier.width(4.dp))
+                    Canvas(modifier = Modifier
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .padding(vertical = 2.dp)
+                    ) {
+                        drawLine(
+                            color = Color.LightGray,
+                            start = Offset(0f, 0f),
+                            end = Offset(0f, size.height),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f),
+                            strokeWidth = 2.dp.toPx()
+                        )
+                    }
+                }
+
+                // --- End Row + Indemnities + Switch ---
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // End address
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .size(8.dp)
+                                .background(MockupGreen, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = trip.endAddress ?: "Unknown End",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = textColor,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = endTimeStr,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = subTextColor
+                            )
+                        }
+                    }
+
+                    // Indemnities + Switch
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
+                        // Indemnities
+                        Text(
+                            text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MockupGreen,
+                            fontSize = 14.sp
+                        )
+
+                        // Toggle Switch
+                        Switch(
+                            checked = trip.isValidated,
+                            onCheckedChange = { onToggleValidation() },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MockupGreen,
+                                uncheckedThumbColor = Color.White,
+                                uncheckedTrackColor = Color(0xFFE5E7EB),
+                                uncheckedBorderColor = Color.Transparent
+                            ),
+                            modifier = Modifier
+                                .graphicsLayer(scaleX = 0.8f, scaleY = 0.8f)
+                                .offset(y = (-4).dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -636,94 +824,6 @@ fun StatCard(
     }
 }
 
-@Composable
-fun SelectedDaySummary(day: Calendar, dayTrips: List<Trip>) {
-    val totalDistance = dayTrips.sumOf { it.totalDistance }
-    val totalIndemnities = totalDistance * 0.20 / 1000
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.getDefault()).format(day.time),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "Résumé de la journée",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                SummaryColumn(String.format("%.1f", totalDistance / 1000), "Kilomètres")
-                SummaryColumn(String.format("%.2f€", totalIndemnities), "Indemnités")
-                SummaryColumn(dayTrips.size.toString(), "Trajets")
-            }
-
-            if (dayTrips.isEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Aucun trajet ce jour",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun NoDayDataSummary() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(32.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Aucun trajet ce jour",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        }
-    }
-}
-
-@Composable
-fun SummaryColumn(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-        )
-    }
-}
 
 @Composable
 fun WeekView(onAutoTrackingSettingsClick: () -> Unit) {
@@ -953,16 +1053,8 @@ fun PlanningSection(
             }
         }
 
-        // Auto-tracking toggle card
-        AutoTrackingCard(
-            trackingMode = trackingMode,
-            onModeChanged = { newMode ->
-                userId?.let { viewModel.updateTrackingMode(it, newMode) }
-            },
-            isEnabled = userId != null
-        )
-
         // Professional Hours section
+        // Note: Auto-tracking mode is now controlled from the Home screen dropdown
         Text(
             text = "Professional Hours",
             style = MaterialTheme.typography.titleLarge.copy(
@@ -998,74 +1090,6 @@ fun PlanningSection(
                 },
                 isEnabled = userId != null
             )
-        }
-    }
-}
-
-@Composable
-fun AutoTrackingCard(
-    trackingMode: TrackingMode,
-    onModeChanged: (TrackingMode) -> Unit,
-    isEnabled: Boolean = true
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Auto-tracking",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                Text(
-                    text = when (trackingMode) {
-                        TrackingMode.WORK_HOURS_ONLY -> "Automatic during professional hours"
-                        TrackingMode.DISABLED -> "Manual control"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
-
-            // 2-state toggle button
-            IconButton(
-                onClick = {
-                    if (isEnabled) {
-                        val nextMode = when (trackingMode) {
-                            TrackingMode.DISABLED -> TrackingMode.WORK_HOURS_ONLY
-                            TrackingMode.WORK_HOURS_ONLY -> TrackingMode.DISABLED
-                        }
-                        onModeChanged(nextMode)
-                    }
-                },
-                enabled = isEnabled
-            ) {
-                Icon(
-                    imageVector = when (trackingMode) {
-                        TrackingMode.DISABLED -> Icons.Default.Cancel
-                        TrackingMode.WORK_HOURS_ONLY -> Icons.Default.Schedule
-                    },
-                    contentDescription = "Toggle tracking mode",
-                    tint = when (trackingMode) {
-                        TrackingMode.DISABLED -> Color.Gray
-                        TrackingMode.WORK_HOURS_ONLY -> MockupGreen
-                    },
-                    modifier = Modifier.size(32.dp)
-                )
-            }
         }
     }
 }
@@ -1167,6 +1191,8 @@ fun TimeSlotRow(
     onDelete: () -> Unit,
     onTimeChanged: (TimeSlot) -> Unit
 ) {
+    var showEditDialog by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1174,7 +1200,8 @@ fun TimeSlotRow(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.clickable { showEditDialog = true }
         ) {
             // Start time display
             Surface(
@@ -1217,6 +1244,13 @@ fun TimeSlotRow(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
+
+            Icon(
+                imageVector = Icons.Default.Edit,
+                contentDescription = "Edit time slot",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.size(16.dp)
+            )
         }
 
         IconButton(onClick = onDelete) {
@@ -1227,6 +1261,144 @@ fun TimeSlotRow(
             )
         }
     }
+
+    if (showEditDialog) {
+        TimeSlotEditDialog(
+            timeSlot = timeSlot,
+            onDismiss = { showEditDialog = false },
+            onConfirm = { updatedSlot ->
+                onTimeChanged(updatedSlot)
+                showEditDialog = false
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TimeSlotEditDialog(
+    timeSlot: TimeSlot,
+    onDismiss: () -> Unit,
+    onConfirm: (TimeSlot) -> Unit
+) {
+    var startHour by remember { mutableStateOf(timeSlot.startHour) }
+    var startMinute by remember { mutableStateOf(timeSlot.startMinute) }
+    var endHour by remember { mutableStateOf(timeSlot.endHour) }
+    var endMinute by remember { mutableStateOf(timeSlot.endMinute) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Edit Time Slot",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Start time
+                Text(
+                    text = "Start Time",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Hour
+                    OutlinedTextField(
+                        value = String.format("%02d", startHour),
+                        onValueChange = {
+                            val hour = it.toIntOrNull()
+                            if (hour != null && hour in 0..23) {
+                                startHour = hour
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Hour") },
+                        singleLine = true
+                    )
+                    Text(":", style = MaterialTheme.typography.titleLarge)
+                    // Minute
+                    OutlinedTextField(
+                        value = String.format("%02d", startMinute),
+                        onValueChange = {
+                            val minute = it.toIntOrNull()
+                            if (minute != null && minute in 0..59) {
+                                startMinute = minute
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Minute") },
+                        singleLine = true
+                    )
+                }
+
+                // End time
+                Text(
+                    text = "End Time",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Hour
+                    OutlinedTextField(
+                        value = String.format("%02d", endHour),
+                        onValueChange = {
+                            val hour = it.toIntOrNull()
+                            if (hour != null && hour in 0..23) {
+                                endHour = hour
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Hour") },
+                        singleLine = true
+                    )
+                    Text(":", style = MaterialTheme.typography.titleLarge)
+                    // Minute
+                    OutlinedTextField(
+                        value = String.format("%02d", endMinute),
+                        onValueChange = {
+                            val minute = it.toIntOrNull()
+                            if (minute != null && minute in 0..59) {
+                                endMinute = minute
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Minute") },
+                        singleLine = true
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val updatedSlot = timeSlot.copy(
+                        startHour = startHour,
+                        startMinute = startMinute,
+                        endHour = endHour,
+                        endMinute = endMinute
+                    )
+                    onConfirm(updatedSlot)
+                }
+            ) {
+                Text("Save", color = MockupGreen)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface
+    )
 }
 
 // Data classes

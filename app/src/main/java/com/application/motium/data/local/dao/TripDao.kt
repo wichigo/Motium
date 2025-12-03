@@ -101,4 +101,24 @@ interface TripDao {
      */
     @Query("SELECT COUNT(*) FROM trips WHERE userId = :userId")
     suspend fun getTripCount(userId: String): Int
+
+    /**
+     * Calculate annual mileage for a specific vehicle and trip type.
+     * Returns sum of totalDistance in METERS for validated trips from the start of the year.
+     * Note: totalDistance is stored in meters, so divide by 1000 to get kilometers.
+     *
+     * @param vehicleId The vehicle to calculate mileage for
+     * @param tripType The type of trip ("PROFESSIONAL" or "PERSONAL")
+     * @param startOfYearMillis Timestamp for the start of the current year
+     * @return Sum of totalDistance in meters (divide by 1000 for km)
+     */
+    @Query("""
+        SELECT COALESCE(SUM(totalDistance), 0.0)
+        FROM trips
+        WHERE vehicleId = :vehicleId
+        AND isValidated = 1
+        AND tripType = :tripType
+        AND startTime >= :startOfYearMillis
+    """)
+    suspend fun getAnnualMileageForVehicle(vehicleId: String, tripType: String, startOfYearMillis: Long): Double
 }

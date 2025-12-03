@@ -129,6 +129,7 @@ fun MotiumNavHost(
         composable("home") {
             NewHomeScreen(
                 onNavigateToCalendar = { navController.navigate("calendar") },
+                onNavigateToCalendarPlanning = { navController.navigate("calendar_planning") },
                 onNavigateToVehicles = { navController.navigate("vehicles") },
                 onNavigateToExport = { navController.navigate("export") },
                 onNavigateToSettings = { navController.navigate("settings") },
@@ -235,6 +236,22 @@ fun MotiumNavHost(
 
         composable("calendar") {
             CalendarScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToHome = { navController.navigate("home") },
+                onNavigateToVehicles = { navController.navigate("vehicles") },
+                onNavigateToExport = { navController.navigate("export") },
+                onNavigateToSettings = { navController.navigate("settings") },
+                onNavigateToTripDetails = { tripId ->
+                    navController.navigate("trip_details/$tripId")
+                },
+                authViewModel = authViewModel
+            )
+        }
+
+        // Route pour ouvrir directement l'onglet Planning du calendrier
+        composable("calendar_planning") {
+            CalendarScreen(
+                initialTab = 1, // Planning tab
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("home") },
                 onNavigateToVehicles = { navController.navigate("vehicles") },

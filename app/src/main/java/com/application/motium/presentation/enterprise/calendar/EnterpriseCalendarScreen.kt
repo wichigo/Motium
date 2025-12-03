@@ -43,6 +43,7 @@ import com.application.motium.presentation.theme.MockupGreen
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
 import com.application.motium.utils.CalendarUtils
+import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.CheckCircle
@@ -985,6 +986,7 @@ fun AutoTrackingCard(
                 )
                 Text(
                     text = when (trackingMode) {
+                        TrackingMode.ALWAYS -> "Always automatic"
                         TrackingMode.WORK_HOURS_ONLY -> "Automatic during professional hours"
                         TrackingMode.DISABLED -> "Manual control"
                     },
@@ -998,6 +1000,7 @@ fun AutoTrackingCard(
                 onClick = {
                     if (isEnabled) {
                         val nextMode = when (trackingMode) {
+                            TrackingMode.ALWAYS -> TrackingMode.DISABLED
                             TrackingMode.DISABLED -> TrackingMode.WORK_HOURS_ONLY
                             TrackingMode.WORK_HOURS_ONLY -> TrackingMode.DISABLED
                         }
@@ -1008,11 +1011,13 @@ fun AutoTrackingCard(
             ) {
                 Icon(
                     imageVector = when (trackingMode) {
+                        TrackingMode.ALWAYS -> Icons.Default.AllInclusive
                         TrackingMode.DISABLED -> Icons.Default.Cancel
                         TrackingMode.WORK_HOURS_ONLY -> Icons.Default.Schedule
                     },
                     contentDescription = "Toggle tracking mode",
                     tint = when (trackingMode) {
+                        TrackingMode.ALWAYS -> MockupGreen
                         TrackingMode.DISABLED -> Color.Gray
                         TrackingMode.WORK_HOURS_ONLY -> MockupGreen
                     },

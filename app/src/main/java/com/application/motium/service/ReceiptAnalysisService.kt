@@ -84,17 +84,31 @@ class ReceiptAnalysisService(private val context: Context) {
             // Patterns for TTC (Total, Montant TTC, Total TTC, etc.)
             val ttcPatterns = listOf(
                 Pattern.compile("(?i)(total|montant|à payer).*?ttc.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)ttc[:\\s]*([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)([0-9]+[.,][0-9]{2})\\s*€?\\s*ttc", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("(?i)total.*?([0-9]+[.,][0-9]{2})\\s*€?\\s*$", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("(?i)à payer.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("(?i)net à payer.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("(?i)total ttc.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE)
             )
 
-            // Patterns for HT (Montant HT, Total HT, Sous-total HT, etc.)
+            // Patterns for HT (Montant HT, Total HT, Sous-total HT, Base HT, etc.)
             val htPatterns = listOf(
-                Pattern.compile("(?i)(total|montant|sous.?total).*?ht.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
-                Pattern.compile("(?i)total ht.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)(total|montant|sous.?total|base).*?h\\.?t\\.?.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)h\\.?t\\.?[:\\s]*([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)([0-9]+[.,][0-9]{2})\\s*€?\\s*h\\.?t\\.?", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)total h\\.?t\\.?.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)montant h\\.?t\\.?.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)base h\\.?t\\.?.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("(?i)sous.?total.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE)
+            )
+
+            // Patterns for TVA amount (to calculate HT = TTC - TVA)
+            val tvaPatterns = listOf(
+                Pattern.compile("(?i)tva[:\\s]*([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)t\\.?v\\.?a\\.?[:\\s]*([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)dont tva.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?i)montant tva.*?([0-9]+[.,][0-9]{2})", Pattern.CASE_INSENSITIVE)
             )
 
             // Try to find TTC amount
@@ -127,6 +141,33 @@ class ReceiptAnalysisService(private val context: Context) {
                     }
                 }
                 if (amountHT != null) break
+            }
+
+            // If HT not found but we have TTC, try to find TVA and calculate HT = TTC - TVA
+            if (amountHT == null && amountTTC != null) {
+                var tvaAmount: Double? = null
+                for (pattern in tvaPatterns) {
+                    for (line in lines) {
+                        val matcher = pattern.matcher(line)
+                        if (matcher.find()) {
+                            val amountStr = matcher.group(matcher.groupCount()).replace(",", ".")
+                            tvaAmount = amountStr.toDoubleOrNull()
+                            if (tvaAmount != null) {
+                                MotiumApplication.logger.d("Found TVA: $tvaAmount from line: $line", "ReceiptAnalysis")
+                                break
+                            }
+                        }
+                    }
+                    if (tvaAmount != null) break
+                }
+
+                // Calculate HT from TTC - TVA
+                if (tvaAmount != null && tvaAmount < amountTTC!!) {
+                    amountHT = amountTTC!! - tvaAmount
+                    // Round to 2 decimal places
+                    amountHT = Math.round(amountHT!! * 100.0) / 100.0
+                    MotiumApplication.logger.d("Calculated HT from TTC - TVA: $amountHT", "ReceiptAnalysis")
+                }
             }
 
             // If we didn't find TTC but found HT, try to find the largest amount as TTC

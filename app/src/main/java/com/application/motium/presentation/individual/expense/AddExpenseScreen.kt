@@ -1,34 +1,47 @@
 package com.application.motium.presentation.individual.expense
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.presentation.theme.MockupGreen
-import java.text.SimpleDateFormat
 import com.application.motium.service.ReceiptAnalysisService
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
+import java.io.File
+import java.text.SimpleDateFormat
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,9 +62,13 @@ fun AddExpenseScreen(
     var amountTTC by remember { mutableStateOf("") }
     var amountHT by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
-    var photoUri by remember { mutableStateOf<Uri?>(null) }
+    var photoUri by remember { mutableStateOf<Uri?>(null) }  // URL finale (Supabase)
+    var localPreviewUri by remember { mutableStateOf<Uri?>(null) }  // Preview locale immédiate
     var isAnalyzingReceipt by remember { mutableStateOf(false) }
     var isAutoFilled by remember { mutableStateOf(false) }
+
+    // Camera capture state
+    var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     // Format date for display
     val formattedDate = remember(date) {
@@ -65,57 +82,98 @@ fun AddExpenseScreen(
         }
     }
 
+    // Helper function to create temp file URI for camera
+    fun createTempPhotoUri(): Uri {
+        val photoFile = File.createTempFile("receipt_", ".jpg", context.cacheDir)
+        return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+    }
+
+    // Shared function to analyze and upload photo
+    fun analyzeAndUploadPhoto(uri: Uri) {
+        // Afficher immédiatement la preview locale
+        localPreviewUri = uri
+        isAnalyzingReceipt = true
+
+        coroutineScope.launch {
+            // First, analyze the receipt for amounts
+            receiptAnalysisService.analyzeReceipt(uri).onSuccess { result ->
+                result.amountTTC?.let { ttc ->
+                    amountTTC = String.format("%.2f", ttc)
+                    isAutoFilled = true
+                    MotiumApplication.logger.i("Auto-filled TTC: $ttc", "AddExpenseScreen")
+                }
+                result.amountHT?.let { ht ->
+                    amountHT = String.format("%.2f", ht)
+                    isAutoFilled = true
+                    MotiumApplication.logger.i("Auto-filled HT: $ht", "AddExpenseScreen")
+                }
+
+                val detected = mutableListOf<String>()
+                if (result.amountTTC != null) detected.add("TTC")
+                if (result.amountHT != null) detected.add("HT")
+
+                if (detected.isNotEmpty()) {
+                    Toast.makeText(context, "${detected.joinToString(" & ")} detected automatically", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "No amounts detected, enter manually", Toast.LENGTH_SHORT).show()
+                }
+            }.onFailure { error ->
+                MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "AddExpenseScreen", error)
+                Toast.makeText(context, "OCR failed, enter amounts manually", Toast.LENGTH_SHORT).show()
+            }
+
+            // Then upload the photo to Supabase Storage
+            storageService.uploadReceiptPhoto(uri).onSuccess { publicUrl ->
+                photoUri = Uri.parse(publicUrl)
+                MotiumApplication.logger.i("Receipt photo uploaded: $publicUrl", "AddExpenseScreen")
+            }.onFailure { error ->
+                MotiumApplication.logger.e("Failed to upload receipt photo: ${error.message}", "AddExpenseScreen", error)
+                Toast.makeText(context, "Photo upload failed: ${error.message}", Toast.LENGTH_LONG).show()
+                // Garder la preview locale même si l'upload échoue
+            }
+
+            isAnalyzingReceipt = false
+        }
+    }
+
+    // Gallery picker launcher
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        // Automatically analyze and upload receipt when photo is selected
-        if (uri != null) {
-            isAnalyzingReceipt = true
-            coroutineScope.launch {
-                // First, analyze the receipt for amounts (using original URI for better quality)
-                receiptAnalysisService.analyzeReceipt(uri).onSuccess { result ->
-                    // Auto-fill amounts if found
-                    result.amountTTC?.let { ttc ->
-                        amountTTC = String.format("%.2f", ttc)
-                        isAutoFilled = true
-                    }
-                    result.amountHT?.let { ht ->
-                        amountHT = String.format("%.2f", ht)
-                        isAutoFilled = true
-                    }
+        uri?.let { analyzeAndUploadPhoto(it) }
+    }
 
-                    if (result.amountTTC != null || result.amountHT != null) {
-                        Toast.makeText(
-                            context,
-                            "Amounts detected automatically ✓",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }.onFailure { error ->
-                    MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "AddExpenseScreen", error)
-                }
+    // Camera capture launcher
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        if (success && tempCameraUri != null) {
+            analyzeAndUploadPhoto(tempCameraUri!!)
+        }
+    }
 
-                // Then upload the photo to Supabase Storage
-                storageService.uploadReceiptPhoto(uri).onSuccess { publicUrl ->
-                    photoUri = Uri.parse(publicUrl)
-                    MotiumApplication.logger.i("Receipt photo uploaded: $publicUrl", "AddExpenseScreen")
-                    if (amountTTC.isBlank() && amountHT.isBlank()) {
-                        Toast.makeText(
-                            context,
-                            "Photo uploaded, please enter amounts manually",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }.onFailure { error ->
-                    MotiumApplication.logger.e("Failed to upload receipt photo: ${error.message}", "AddExpenseScreen", error)
-                    Toast.makeText(
-                        context,
-                        "Failed to upload photo: ${error.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+    // Camera permission launcher
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission granted, launch camera
+            tempCameraUri = createTempPhotoUri()
+            takePictureLauncher.launch(tempCameraUri!!)
+        } else {
+            Toast.makeText(context, "Camera permission required", Toast.LENGTH_SHORT).show()
+        }
+    }
 
-                isAnalyzingReceipt = false
+    // Function to launch camera with permission check
+    fun launchCamera() {
+        when {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED -> {
+                tempCameraUri = createTempPhotoUri()
+                takePictureLauncher.launch(tempCameraUri!!)
+            }
+            else -> {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
             }
         }
     }
@@ -200,12 +258,23 @@ fun AddExpenseScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
-            // Date info (MODIFIÉ: affiche la date au lieu du trip)
+            // Date info
             item {
                 ReadOnlyField(
                     label = "Date",
                     value = formattedDate,
                     icon = Icons.Default.CalendarToday
+                )
+            }
+
+            // Photo Section (moved here - below date, above expense type)
+            item {
+                PhotoSection(
+                    photoUri = localPreviewUri,  // Utiliser la preview locale pour l'affichage immédiat
+                    isUploaded = photoUri != null,  // Indique si l'upload est terminé
+                    isAnalyzing = isAnalyzingReceipt,
+                    onCameraClick = { launchCamera() },
+                    onGalleryClick = { imagePickerLauncher.launch("image/*") }
                 )
             }
 
@@ -267,48 +336,6 @@ fun AddExpenseScreen(
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                         )
                     )
-                }
-            }
-
-            // Photo
-            item {
-                Column {
-                    Text(
-                        text = "Receipt Photo",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    OutlinedButton(
-                        onClick = { imagePickerLauncher.launch("image/*") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        enabled = !isAnalyzingReceipt
-                    ) {
-                        if (isAnalyzingReceipt) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Analyzing receipt...",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.CameraAlt,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                if (photoUri != null) "Photo added ✓" else "Add photo (auto-detect amounts)",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -490,5 +517,233 @@ fun AmountField(
                     MaterialTheme.colorScheme.primary
             )
         )
+    }
+}
+
+@Composable
+fun PhotoSection(
+    photoUri: Uri?,
+    isUploaded: Boolean = false,
+    isAnalyzing: Boolean,
+    onCameraClick: () -> Unit,
+    onGalleryClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            // Header
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 12.dp)
+            ) {
+                Icon(
+                    Icons.Default.Receipt,
+                    contentDescription = null,
+                    tint = MockupGreen,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Receipt Photo",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            // Loading state
+            if (isAnalyzing) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = MockupGreen
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        "Analyzing receipt...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+            } else {
+                // Two buttons: Camera and Gallery
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Camera button
+                    OutlinedButton(
+                        onClick = onCameraClick,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MockupGreen
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MockupGreen.copy(alpha = 0.5f))
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MockupGreen
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Camera",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                "Take photo",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+
+                    // Gallery button
+                    OutlinedButton(
+                        onClick = onGalleryClick,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MockupGreen
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MockupGreen.copy(alpha = 0.5f))
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PhotoLibrary,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MockupGreen
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Gallery",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                "Choose photo",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+
+                // Preview thumbnail if photo is added
+                photoUri?.let { uri ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isUploaded) MockupGreen.copy(alpha = 0.1f) else Color(0xFFFFF3CD)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Thumbnail
+                            AsyncImage(
+                                model = uri,
+                                contentDescription = "Receipt preview",
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (isUploaded) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MockupGreen,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            "Photo saved",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MockupGreen
+                                        )
+                                    } else {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color(0xFFD97706)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            "Uploading...",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFD97706)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    if (isUploaded) "Receipt photo uploaded to cloud" else "Saving photo to cloud...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Helper text when no photo
+                if (photoUri == null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "Amounts will be auto-detected from receipt",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            }
+        }
     }
 }

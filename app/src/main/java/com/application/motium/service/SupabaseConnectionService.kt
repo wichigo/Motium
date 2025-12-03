@@ -41,11 +41,8 @@ class SupabaseConnectionService : Service() {
 
         fun startService(context: Context) {
             val intent = Intent(context, SupabaseConnectionService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            // Démarrer en service normal (pas foreground) - pas besoin de notification séparée
+            context.startService(intent)
         }
 
         fun stopService(context: Context) {
@@ -68,26 +65,10 @@ class SupabaseConnectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        MotiumApplication.logger.i("🔗 SupabaseConnectionService started", "ConnectionService")
+        MotiumApplication.logger.i("🔗 SupabaseConnectionService started (no notification)", "ConnectionService")
 
-        createNotificationChannel()
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Motium Service")
-            .setContentText("Ensuring data is up-to-date.")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        // Ne pas créer de notification séparée - fonctionne en arrière-plan
+        // La notification "Suivi de vos déplacements" d'ActivityRecognitionService suffit
 
         return START_STICKY
     }
