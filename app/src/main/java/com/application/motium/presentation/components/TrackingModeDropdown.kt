@@ -1,10 +1,14 @@
 package com.application.motium.presentation.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,13 +32,13 @@ private data class TrackingModeOption(
 
 /**
  * Dropdown menu pour sélectionner le mode d'auto-tracking.
+ * Utilise un style personnalisé avec fond blanc/surface.
  *
  * @param selectedMode Le mode actuellement sélectionné
  * @param onModeSelected Callback quand un nouveau mode est sélectionné
  * @param enabled Si le dropdown est interactif
  * @param modifier Modifier pour personnaliser le layout
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrackingModeDropdown(
     selectedMode: TrackingMode,
@@ -68,18 +72,18 @@ fun TrackingModeDropdown(
     var expanded by remember { mutableStateOf(false) }
     val selectedOption = trackingModes.find { it.mode == selectedMode } ?: trackingModes.last()
 
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { if (enabled) expanded = it },
-        modifier = modifier
-    ) {
+    Box(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = selectedOption.label,
             onValueChange = {},
             readOnly = true,
             label = { Text("Auto Tracking") },
             trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = if (enabled) MotiumPrimary else Color.Gray
+                )
             },
             leadingIcon = {
                 Icon(
@@ -92,22 +96,36 @@ fun TrackingModeDropdown(
                     }
                 )
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(),
-            shape = RoundedCornerShape(12.dp),
-            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            enabled = false,
             colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                focusedBorderColor = MotiumPrimary,
-                unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                focusedLabelColor = MotiumPrimary
+                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                disabledLeadingIconColor = when (selectedMode) {
+                    TrackingMode.ALWAYS -> MotiumPrimary
+                    TrackingMode.WORK_HOURS_ONLY -> MotiumPrimary
+                    TrackingMode.DISABLED -> Color.Gray
+                },
+                disabledTrailingIconColor = if (enabled) MotiumPrimary else Color.Gray
             )
         )
+        // Transparent overlay to catch clicks
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clickable(enabled = enabled) { expanded = !expanded }
+        )
 
-        ExposedDropdownMenu(
+        DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp)
+                )
         ) {
             trackingModes.forEach { option ->
                 DropdownMenuItem(
@@ -129,7 +147,8 @@ fun TrackingModeDropdown(
                             Column {
                                 Text(
                                     text = option.label,
-                                    style = MaterialTheme.typography.bodyLarge
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = option.description,
@@ -143,7 +162,7 @@ fun TrackingModeDropdown(
                         onModeSelected(option.mode)
                         expanded = false
                     },
-                    leadingIcon = null
+                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                 )
             }
         }

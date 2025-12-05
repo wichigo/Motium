@@ -10,6 +10,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -362,73 +364,80 @@ fun EnterpriseExportScreen(
                     )
 
                     // Vehicle filter
-                    Column {
-                        Text(
-                            "Vehicle",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = textSecondaryColor,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-
+                    run {
                         var vehicleExpanded by remember { mutableStateOf(false) }
                         val selectedVehicle = vehicles.firstOrNull { it.id == filters.vehicleId }
 
-                        ExposedDropdownMenuBox(
-                            expanded = vehicleExpanded,
-                            onExpandedChange = {
-                                vehicleExpanded = !vehicleExpanded
-                                selectedField = if (vehicleExpanded) "vehicle" else null
-                            }
-                        ) {
+                        Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
                                 value = selectedVehicle?.name ?: "All Vehicles",
                                 onValueChange = {},
                                 readOnly = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
+                                label = { Text("Vehicle") },
+                                modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = {
                                     Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
+                                        if (vehicleExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "vehicle") MotiumPrimary else MotiumPrimary
+                                        tint = MotiumPrimary
                                     )
                                 },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.DirectionsCar,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                enabled = false,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedContainerColor = backgroundColor,
-                                    focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "vehicle") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MotiumPrimary,
-                                    unfocusedTextColor = textColor,
-                                    focusedTextColor = textColor
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledLeadingIconColor = MotiumPrimary,
+                                    disabledTrailingIconColor = MotiumPrimary
                                 ),
                                 shape = RoundedCornerShape(16.dp)
                             )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable {
+                                        vehicleExpanded = !vehicleExpanded
+                                        selectedField = if (vehicleExpanded) "vehicle" else null
+                                    }
+                            )
 
-                            ExposedDropdownMenu(
+                            DropdownMenu(
                                 expanded = vehicleExpanded,
                                 onDismissRequest = {
                                     vehicleExpanded = false
                                     selectedField = null
-                                }
+                                },
+                                modifier = Modifier
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("All Vehicles") },
+                                    text = { Text("All Vehicles", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setVehicleFilter(null)
                                         vehicleExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 vehicles.forEach { vehicle ->
                                     DropdownMenuItem(
-                                        text = { Text(vehicle.name) },
+                                        text = { Text(vehicle.name, color = MaterialTheme.colorScheme.onSurface) },
                                         onClick = {
                                             viewModel.setVehicleFilter(vehicle.id)
                                             vehicleExpanded = false
                                             selectedField = null
-                                        }
+                                        },
+                                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                     )
                                 }
                             }
@@ -436,103 +445,97 @@ fun EnterpriseExportScreen(
                     }
 
                     // Trip Type filter
-                    Column {
-                        Text(
-                            "Trip Type",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = textSecondaryColor,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-
+                    run {
                         var tripTypeExpanded by remember { mutableStateOf(false) }
 
-                        ExposedDropdownMenuBox(
-                            expanded = tripTypeExpanded,
-                            onExpandedChange = {
-                                tripTypeExpanded = !tripTypeExpanded
-                                selectedField = if (tripTypeExpanded) "tripType" else null
-                            }
-                        ) {
+                        Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
                                 value = filters.tripType ?: "All Types",
                                 onValueChange = {},
                                 readOnly = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
+                                label = { Text("Trip Type") },
+                                modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = {
                                     Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
+                                        if (tripTypeExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "tripType") MotiumPrimary else MotiumPrimary
+                                        tint = MotiumPrimary
                                     )
                                 },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Route,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                enabled = false,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedContainerColor = backgroundColor,
-                                    focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "tripType") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MotiumPrimary,
-                                    unfocusedTextColor = textColor,
-                                    focusedTextColor = textColor
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledLeadingIconColor = MotiumPrimary,
+                                    disabledTrailingIconColor = MotiumPrimary
                                 ),
                                 shape = RoundedCornerShape(16.dp)
                             )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable {
+                                        tripTypeExpanded = !tripTypeExpanded
+                                        selectedField = if (tripTypeExpanded) "tripType" else null
+                                    }
+                            )
 
-                            ExposedDropdownMenu(
+                            DropdownMenu(
                                 expanded = tripTypeExpanded,
                                 onDismissRequest = {
                                     tripTypeExpanded = false
                                     selectedField = null
-                                }
+                                },
+                                modifier = Modifier
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("All Types") },
+                                    text = { Text("All Types", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setTripTypeFilter(null)
                                         tripTypeExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Professional") },
+                                    text = { Text("Professional", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setTripTypeFilter("Professional")
                                         tripTypeExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Personal") },
+                                    text = { Text("Personal", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setTripTypeFilter("Personal")
                                         tripTypeExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                             }
                         }
                     }
 
                     // Expense Mode filter
-                    Column {
-                        Text(
-                            "Export Content",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = textSecondaryColor,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-
+                    run {
                         var expenseModeExpanded by remember { mutableStateOf(false) }
 
-                        ExposedDropdownMenuBox(
-                            expanded = expenseModeExpanded,
-                            onExpandedChange = {
-                                expenseModeExpanded = !expenseModeExpanded
-                                selectedField = if (expenseModeExpanded) "expenseMode" else null
-                            }
-                        ) {
+                        Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
                                 value = when (filters.expenseMode) {
                                     "trips_only" -> "Trips only"
@@ -542,57 +545,79 @@ fun EnterpriseExportScreen(
                                 },
                                 onValueChange = {},
                                 readOnly = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
+                                label = { Text("Export Content") },
+                                modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = {
                                     Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
+                                        if (expenseModeExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "expenseMode") MotiumPrimary else MotiumPrimary
+                                        tint = MotiumPrimary
                                     )
                                 },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                enabled = false,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedContainerColor = backgroundColor,
-                                    focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "expenseMode") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MotiumPrimary,
-                                    unfocusedTextColor = textColor,
-                                    focusedTextColor = textColor
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledLeadingIconColor = MotiumPrimary,
+                                    disabledTrailingIconColor = MotiumPrimary
                                 ),
                                 shape = RoundedCornerShape(16.dp)
                             )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable {
+                                        expenseModeExpanded = !expenseModeExpanded
+                                        selectedField = if (expenseModeExpanded) "expenseMode" else null
+                                    }
+                            )
 
-                            ExposedDropdownMenu(
+                            DropdownMenu(
                                 expanded = expenseModeExpanded,
                                 onDismissRequest = {
                                     expenseModeExpanded = false
                                     selectedField = null
-                                }
+                                },
+                                modifier = Modifier
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Trips only") },
+                                    text = { Text("Trips only", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setExpenseModeFilter("trips_only")
                                         expenseModeExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Trips with expenses") },
+                                    text = { Text("Trips with expenses", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setExpenseModeFilter("trips_with_expenses")
                                         expenseModeExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Expenses only") },
+                                    text = { Text("Expenses only", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setExpenseModeFilter("expenses_only")
                                         expenseModeExpanded = false
                                         selectedField = null
-                                    }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                             }
                         }
@@ -600,73 +625,78 @@ fun EnterpriseExportScreen(
 
                     // Include Photos filter (only visible if expenses are included)
                     if (filters.expenseMode != "trips_only") {
-                        Column {
-                            Text(
-                                "Include Photos",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = textSecondaryColor,
-                                fontSize = 12.sp
+                        var includePhotosExpanded by remember { mutableStateOf(false) }
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = if (filters.includePhotos) "With photos" else "Without photos",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Include Photos") },
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = {
+                                    Icon(
+                                        if (includePhotosExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Photo,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                enabled = false,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledLeadingIconColor = MotiumPrimary,
+                                    disabledTrailingIconColor = MotiumPrimary
+                                ),
+                                shape = RoundedCornerShape(16.dp)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable {
+                                        includePhotosExpanded = !includePhotosExpanded
+                                        selectedField = if (includePhotosExpanded) "includePhotos" else null
+                                    }
+                            )
 
-                            var includePhotosExpanded by remember { mutableStateOf(false) }
-
-                            ExposedDropdownMenuBox(
+                            DropdownMenu(
                                 expanded = includePhotosExpanded,
-                                onExpandedChange = {
-                                    includePhotosExpanded = !includePhotosExpanded
-                                    selectedField = if (includePhotosExpanded) "includePhotos" else null
-                                }
+                                onDismissRequest = {
+                                    includePhotosExpanded = false
+                                    selectedField = null
+                                },
+                                modifier = Modifier
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surface,
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
                             ) {
-                                OutlinedTextField(
-                                    value = if (filters.includePhotos) "With photos" else "Without photos",
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .menuAnchor(),
-                                    trailingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.ArrowDropDown,
-                                            contentDescription = null,
-                                            tint = if (selectedField == "includePhotos") MotiumPrimary else MotiumPrimary
-                                        )
-                                    },
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        unfocusedContainerColor = backgroundColor,
-                                        focusedContainerColor = backgroundColor,
-                                        unfocusedBorderColor = if (selectedField == "includePhotos") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                        focusedBorderColor = MotiumPrimary,
-                                        unfocusedTextColor = textColor,
-                                        focusedTextColor = textColor
-                                    ),
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-
-                                ExposedDropdownMenu(
-                                    expanded = includePhotosExpanded,
-                                    onDismissRequest = {
+                                DropdownMenuItem(
+                                    text = { Text("Without photos", color = MaterialTheme.colorScheme.onSurface) },
+                                    onClick = {
+                                        viewModel.setIncludePhotos(false)
                                         includePhotosExpanded = false
                                         selectedField = null
-                                    }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Without photos") },
-                                        onClick = {
-                                            viewModel.setIncludePhotos(false)
-                                            includePhotosExpanded = false
-                                            selectedField = null
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("With photos") },
-                                        onClick = {
-                                            viewModel.setIncludePhotos(true)
-                                            includePhotosExpanded = false
-                                            selectedField = null
-                                        }
-                                    )
-                                }
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("With photos", color = MaterialTheme.colorScheme.onSurface) },
+                                    onClick = {
+                                        viewModel.setIncludePhotos(true)
+                                        includePhotosExpanded = false
+                                        selectedField = null
+                                    },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                                )
                             }
                         }
                     }

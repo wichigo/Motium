@@ -3,6 +3,8 @@ package com.application.motium.presentation.individual.addtrip
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -588,46 +590,59 @@ fun VehicleSelectionField(
                 )
             )
         } else {
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it }
-            ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "Select a vehicle",
                     onValueChange = {},
                     readOnly = true,
+                    label = { Text("Vehicle") },
                     trailingIcon = {
                         Icon(
-                            Icons.Default.ExpandMore,
-                            contentDescription = null
+                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MotiumPrimary
                         )
                     },
                     leadingIcon = {
                         Icon(
                             Icons.Default.DirectionsCar,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            tint = MotiumPrimary
                         )
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
+                    modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
+                    enabled = false,
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        disabledLeadingIconColor = MotiumPrimary,
+                        disabledTrailingIconColor = MotiumPrimary
                     )
                 )
-                ExposedDropdownMenu(
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { expanded = !expanded }
+                )
+                DropdownMenu(
                     expanded = expanded,
-                    onDismissRequest = { expanded = false }
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(16.dp)
+                        )
                 ) {
                     availableVehicles.forEach { vehicle ->
                         DropdownMenuItem(
-                            text = { Text(vehicle.name) },
+                            text = { Text(vehicle.name, color = MaterialTheme.colorScheme.onSurface) },
                             onClick = {
                                 onVehicleSelected(vehicle.id)
                                 expanded = false
-                            }
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                         )
                     }
                 }
@@ -675,50 +690,54 @@ fun ExpenseItemRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Type dropdown
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Type",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = it }
-                    ) {
-                        OutlinedTextField(
-                            value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = {
-                                Icon(
-                                    Icons.Default.ExpandMore,
-                                    contentDescription = null
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            shape = RoundedCornerShape(16.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                Box(modifier = Modifier.weight(1f)) {
+                    OutlinedTextField(
+                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Type") },
+                        trailingIcon = {
+                            Icon(
+                                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = MotiumPrimary
                             )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        shape = RoundedCornerShape(16.dp),
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            disabledLeadingIconColor = MotiumPrimary,
+                            disabledTrailingIconColor = MotiumPrimary
                         )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            expenseTypes.forEach { (type, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    onClick = {
-                                        onExpenseChange(expense.copy(type = type))
-                                        expanded = false
-                                    }
-                                )
-                            }
+                    )
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { expanded = !expanded }
+                    )
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier
+                            .background(
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                    ) {
+                        expenseTypes.forEach { (type, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label, color = MaterialTheme.colorScheme.onSurface) },
+                                onClick = {
+                                    onExpenseChange(expense.copy(type = type))
+                                    expanded = false
+                                },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                            )
                         }
                     }
                 }

@@ -317,27 +317,22 @@ fun AddExpenseScreen(
 
             // Note
             item {
-                Column {
-                    Text(
-                        text = "Note",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(bottom = 4.dp)
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Note") },
+                    placeholder = { Text("Add a note for this expense...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 5,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        focusedLabelColor = MotiumPrimary
                     )
-                    OutlinedTextField(
-                        value = note,
-                        onValueChange = { note = it },
-                        placeholder = { Text("Add a note for this expense...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3,
-                        maxLines = 5,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                        )
-                    )
-                }
+                )
             }
         }
     }
@@ -349,38 +344,29 @@ fun ReadOnlyField(
     value: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector
 ) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp)
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        readOnly = true,
+        label = { Text(label) },
+        leadingIcon = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MotiumPrimary
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+            focusedBorderColor = MotiumPrimary,
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            focusedLabelColor = MotiumPrimary
         )
-        OutlinedTextField(
-            value = value,
-            onValueChange = {},
-            readOnly = true,
-            leadingIcon = {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                disabledBorderColor = Color.Transparent,
-                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-            ),
-            enabled = false
-        )
-    }
+    )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExpenseTypeField(
     selectedType: ExpenseType,
@@ -398,56 +384,66 @@ fun ExpenseTypeField(
 
     var expanded by remember { mutableStateOf(false) }
 
-    Column {
-        Text(
-            text = "Expense Type",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it }
-        ) {
-            OutlinedTextField(
-                value = expenseTypes.find { it.first == selectedType }?.second ?: "Fuel",
-                onValueChange = {},
-                readOnly = true,
-                trailingIcon = {
-                    Icon(
-                        Icons.Default.ExpandMore,
-                        contentDescription = null
-                    )
-                },
-                leadingIcon = {
-                    Icon(
-                        Icons.Default.Receipt,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = expenseTypes.find { it.first == selectedType }?.second ?: "Fuel",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Expense Type") },
+            trailingIcon = {
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = MotiumPrimary
                 )
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Receipt,
+                    contentDescription = null,
+                    tint = MotiumPrimary
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            enabled = false,
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                disabledLeadingIconColor = MotiumPrimary,
+                disabledTrailingIconColor = MotiumPrimary
             )
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                expenseTypes.forEach { (type, label) ->
-                    DropdownMenuItem(
-                        text = { Text(label) },
-                        onClick = {
-                            onTypeSelected(type)
-                            expanded = false
-                        }
-                    )
-                }
+        )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clickable { expanded = !expanded }
+        )
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp)
+                )
+        ) {
+            expenseTypes.forEach { (type, label) ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            label,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    onClick = {
+                        onTypeSelected(type)
+                        expanded = false
+                    },
+                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                )
             }
         }
     }
@@ -461,64 +457,57 @@ fun AmountField(
     isMandatory: Boolean,
     isAutoDetected: Boolean = false
 ) {
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
+                Text(label)
                 if (isAutoDetected) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Auto-detected",
                         tint = MotiumPrimary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
-            if (isMandatory) {
+        },
+        leadingIcon = {
+            Text(
+                "€",
+                fontWeight = FontWeight.Bold,
+                color = MotiumPrimary
+            )
+        },
+        trailingIcon = if (isMandatory) {
+            {
                 Text(
-                    text = "Required",
+                    "Required",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.Red.copy(alpha = 0.7f)
+                    color = Color.Red.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(end = 8.dp)
                 )
             }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            leadingIcon = {
-                Text(
-                    "€",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("0.00") },
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = if (isAutoDetected)
-                    MotiumPrimary.copy(alpha = 0.5f)
-                else
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                focusedBorderColor = if (isAutoDetected)
-                    MotiumPrimary
-                else
-                    MaterialTheme.colorScheme.primary
-            )
+        } else null,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("0.00") },
+        shape = RoundedCornerShape(16.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = if (isAutoDetected)
+                MotiumPrimary.copy(alpha = 0.5f)
+            else
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+            focusedBorderColor = MotiumPrimary,
+            unfocusedLabelColor = if (isAutoDetected)
+                MotiumPrimary
+            else
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            focusedLabelColor = MotiumPrimary
         )
-    }
+    )
 }
 
 @Composable

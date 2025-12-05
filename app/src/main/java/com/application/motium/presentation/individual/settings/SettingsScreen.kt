@@ -285,57 +285,51 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column {
-                        Text(
-                            "Phone Number",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontWeight = FontWeight.Medium
-                            ),
-                            color = textSecondaryColor,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = phoneNumber,
-                            onValueChange = { phoneNumber = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("+1 (555) 123-4567") },
-                            shape = RoundedCornerShape(8.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedTextColor = textColor,
-                                focusedTextColor = textColor,
-                                unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                                focusedBorderColor = MotiumPrimary
-                            ),
-                            singleLine = true
-                        )
-                    }
+                    OutlinedTextField(
+                        value = phoneNumber,
+                        onValueChange = { phoneNumber = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Phone Number") },
+                        placeholder = { Text("+1 (555) 123-4567") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Phone,
+                                contentDescription = null,
+                                tint = MotiumPrimary
+                            )
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            focusedLabelColor = MotiumPrimary
+                        ),
+                        singleLine = true
+                    )
 
-                    Column {
-                        Text(
-                            "Address",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontWeight = FontWeight.Medium
-                            ),
-                            color = textSecondaryColor,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = address,
-                            onValueChange = { address = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("123 Main St, Anytown, USA") },
-                            shape = RoundedCornerShape(8.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedTextColor = textColor,
-                                focusedTextColor = textColor,
-                                unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                                focusedBorderColor = MotiumPrimary
-                            ),
-                            singleLine = true
-                        )
-                    }
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Address") },
+                        placeholder = { Text("123 Main St, Anytown, USA") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Home,
+                                contentDescription = null,
+                                tint = MotiumPrimary
+                            )
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            focusedLabelColor = MotiumPrimary
+                        ),
+                        singleLine = true
+                    )
                 }
             },
             confirmButton = {
@@ -351,7 +345,7 @@ fun SettingsScreen(
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MotiumPrimary
                     ),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Text("Save", color = Color.White)
                 }

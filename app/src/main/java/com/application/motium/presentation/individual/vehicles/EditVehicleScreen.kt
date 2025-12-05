@@ -1,5 +1,7 @@
 package com.application.motium.presentation.individual.vehicles
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,7 +10,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
@@ -26,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.*
 import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.FrenchMileageCalculator
 import kotlinx.datetime.Instant
 
@@ -69,6 +73,7 @@ fun EditVehicleScreen(
 
     var showTypeDropdown by remember { mutableStateOf(false) }
     var showPowerDropdown by remember { mutableStateOf(false) }
+    var showFuelTypeDropdown by remember { mutableStateOf(false) }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val nameFocusRequester = remember { FocusRequester() }
@@ -205,41 +210,69 @@ fun EditVehicleScreen(
                         onNext = { plateFocusRequester.requestFocus() }
                     ),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        focusedLabelColor = MotiumPrimary
+                    )
                 )
 
                 // Vehicle type dropdown
-                ExposedDropdownMenuBox(
-                    expanded = showTypeDropdown,
-                    onExpandedChange = { showTypeDropdown = !showTypeDropdown },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = selectedType.displayName,
                         onValueChange = { },
                         readOnly = true,
                         label = { Text("Type") },
                         trailingIcon = {
-                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                            Icon(
+                                if (showTypeDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = MotiumPrimary
+                            )
                         },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(16.dp),
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            disabledLeadingIconColor = MotiumPrimary,
+                            disabledTrailingIconColor = MotiumPrimary
+                        )
+                    )
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { showTypeDropdown = !showTypeDropdown }
                     )
 
-                    ExposedDropdownMenu(
+                    DropdownMenu(
                         expanded = showTypeDropdown,
-                        onDismissRequest = { showTypeDropdown = false }
+                        onDismissRequest = { showTypeDropdown = false },
+                        modifier = Modifier
+                            .background(
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(16.dp)
+                            )
                     ) {
                         VehicleType.values().forEach { type ->
                             DropdownMenuItem(
-                                text = { Text(type.displayName) },
+                                text = {
+                                    Text(
+                                        type.displayName,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
                                 onClick = {
                                     selectedType = type
                                     showTypeDropdown = false
-                                }
+                                },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                             )
                         }
                     }
@@ -261,80 +294,154 @@ fun EditVehicleScreen(
                         onDone = { keyboardController?.hide() }
                     ),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        focusedLabelColor = MotiumPrimary
+                    )
                 )
 
                 // Power dropdown
-                ExposedDropdownMenuBox(
-                    expanded = showPowerDropdown,
-                    onExpandedChange = { showPowerDropdown = !showPowerDropdown },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = selectedPower?.displayName ?: "Select power",
                         onValueChange = { },
                         readOnly = true,
                         label = { Text("Power (in CV)") },
                         trailingIcon = {
-                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                            Icon(
+                                if (showPowerDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = MotiumPrimary
+                            )
                         },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(16.dp),
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            disabledLeadingIconColor = MotiumPrimary,
+                            disabledTrailingIconColor = MotiumPrimary
+                        )
+                    )
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { showPowerDropdown = !showPowerDropdown }
                     )
 
-                    ExposedDropdownMenu(
+                    DropdownMenu(
                         expanded = showPowerDropdown,
-                        onDismissRequest = { showPowerDropdown = false }
+                        onDismissRequest = { showPowerDropdown = false },
+                        modifier = Modifier
+                            .background(
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(16.dp)
+                            )
                     ) {
                         DropdownMenuItem(
-                            text = { Text("None") },
+                            text = {
+                                Text(
+                                    "None",
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            },
                             onClick = {
                                 selectedPower = null
                                 showPowerDropdown = false
-                            }
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                         )
                         VehiclePower.values().forEach { power ->
                             DropdownMenuItem(
-                                text = { Text(power.displayName) },
+                                text = {
+                                    Text(
+                                        power.displayName,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
                                 onClick = {
                                     selectedPower = power
                                     showPowerDropdown = false
-                                }
+                                },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                             )
                         }
                     }
                 }
 
-                // Fuel type radio buttons
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "Fuel Type",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                // Fuel type dropdown
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = selectedFuelType?.displayName ?: "Select fuel type",
+                        onValueChange = { },
+                        readOnly = true,
+                        label = { Text("Fuel Type") },
+                        trailingIcon = {
+                            Icon(
+                                if (showFuelTypeDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = MotiumPrimary
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            disabledLeadingIconColor = MotiumPrimary,
+                            disabledTrailingIconColor = MotiumPrimary
+                        )
+                    )
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { showFuelTypeDropdown = !showFuelTypeDropdown }
                     )
 
-                    FuelType.values().forEach { fuel ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = selectedFuelType == fuel,
-                                onClick = { selectedFuelType = fuel },
-                                colors = RadioButtonDefaults.colors(
-                                    selectedColor = MotiumGreen
-                                )
+                    DropdownMenu(
+                        expanded = showFuelTypeDropdown,
+                        onDismissRequest = { showFuelTypeDropdown = false },
+                        modifier = Modifier
+                            .background(
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = fuel.displayName,
-                                style = MaterialTheme.typography.bodyMedium
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "None",
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                selectedFuelType = null
+                                showFuelTypeDropdown = false
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                        )
+                        FuelType.values().forEach { fuel ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        fuel.displayName,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    selectedFuelType = fuel
+                                    showFuelTypeDropdown = false
+                                },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                             )
                         }
                     }
@@ -344,9 +451,9 @@ fun EditVehicleScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MotiumGreen.copy(alpha = 0.1f)
+                        containerColor = MotiumPrimary.copy(alpha = 0.1f)
                     ),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -364,7 +471,7 @@ fun EditVehicleScreen(
                             text = String.format("%.3f \u20ac/km", calculatedMileageRate),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MotiumGreen
+                            color = MotiumPrimary
                         )
                     }
                 }
@@ -389,12 +496,12 @@ fun EditVehicleScreen(
                     },
                     enabled = name.isNotBlank() && !uiState.isLoading,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MotiumGreen
+                        containerColor = MotiumPrimary
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     if (uiState.isLoading) {
                         CircularProgressIndicator(

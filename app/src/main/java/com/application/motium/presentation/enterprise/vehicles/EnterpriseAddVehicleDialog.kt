@@ -1,5 +1,7 @@
 package com.application.motium.presentation.enterprise.vehicles
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,7 +10,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.application.motium.domain.model.*
 import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.FrenchMileageCalculator
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -119,37 +123,54 @@ fun EnterpriseAddVehicleScreen(
             )
 
             // Vehicle type dropdown
-            ExposedDropdownMenuBox(
-                expanded = showTypeDropdown,
-                onExpandedChange = { showTypeDropdown = !showTypeDropdown },
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = selectedType.displayName,
                     onValueChange = { },
                     readOnly = true,
                     label = { Text("Type") },
                     trailingIcon = {
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        Icon(
+                            if (showTypeDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
+                    modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    enabled = false,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        disabledLeadingIconColor = MotiumPrimary,
+                        disabledTrailingIconColor = MotiumPrimary
+                    )
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { showTypeDropdown = !showTypeDropdown }
                 )
 
-                ExposedDropdownMenu(
+                DropdownMenu(
                     expanded = showTypeDropdown,
-                    onDismissRequest = { showTypeDropdown = false }
+                    onDismissRequest = { showTypeDropdown = false },
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(16.dp)
+                        )
                 ) {
                     VehicleType.values().forEach { type ->
                         DropdownMenuItem(
-                            text = { Text(type.displayName) },
+                            text = { Text(type.displayName, color = MaterialTheme.colorScheme.onSurface) },
                             onClick = {
                                 selectedType = type
                                 showTypeDropdown = false
-                            }
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                         )
                     }
                 }
@@ -175,11 +196,7 @@ fun EnterpriseAddVehicleScreen(
             )
 
             // Power dropdown
-            ExposedDropdownMenuBox(
-                expanded = showPowerDropdown,
-                onExpandedChange = { showPowerDropdown = !showPowerDropdown },
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = selectedPower?.displayName ?: "Select power",
                     onValueChange = { },
@@ -187,33 +204,55 @@ fun EnterpriseAddVehicleScreen(
                     label = { Text("Power (in hp)") },
                     placeholder = { Text("e.g. 150") },
                     trailingIcon = {
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        Icon(
+                            if (showPowerDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
+                    modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    enabled = false,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        disabledLeadingIconColor = MotiumPrimary,
+                        disabledTrailingIconColor = MotiumPrimary
+                    )
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { showPowerDropdown = !showPowerDropdown }
                 )
 
-                ExposedDropdownMenu(
+                DropdownMenu(
                     expanded = showPowerDropdown,
-                    onDismissRequest = { showPowerDropdown = false }
+                    onDismissRequest = { showPowerDropdown = false },
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(16.dp)
+                        )
                 ) {
                     DropdownMenuItem(
-                        text = { Text("None") },
+                        text = { Text("None", color = MaterialTheme.colorScheme.onSurface) },
                         onClick = {
                             selectedPower = null
                             showPowerDropdown = false
-                        }
+                        },
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                     )
                     VehiclePower.values().forEach { power ->
                         DropdownMenuItem(
-                            text = { Text(power.displayName) },
+                            text = { Text(power.displayName, color = MaterialTheme.colorScheme.onSurface) },
                             onClick = {
                                 selectedPower = power
                                 showPowerDropdown = false
-                            }
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                         )
                     }
                 }

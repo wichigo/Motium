@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import com.application.motium.data.geocoding.NominatimResult
 import com.application.motium.data.geocoding.NominatimService
+import com.application.motium.presentation.theme.MotiumPrimary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -100,9 +101,12 @@ fun AddressAutocomplete(
                 }
             },
             singleLine = true,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                focusedBorderColor = MotiumPrimary,
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                focusedLabelColor = MotiumPrimary
             )
         )
 
@@ -111,7 +115,11 @@ fun AddressAutocomplete(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 200.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             ) {
                 LazyColumn {
                     items(suggestions) { suggestion ->
