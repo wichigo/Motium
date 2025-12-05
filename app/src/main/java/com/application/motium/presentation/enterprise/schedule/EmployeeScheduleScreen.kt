@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigation
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.ThemeManager
 import java.text.SimpleDateFormat
 import java.util.*
@@ -163,7 +163,7 @@ fun ScheduleDayCard(
                         )
                     },
                     colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MockupGreen,
+                        containerColor = MotiumPrimary,
                         labelColor = Color.White
                     )
                 )

@@ -24,7 +24,8 @@ import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.model.VehiclePower
 import com.application.motium.domain.model.VehicleType
 import com.application.motium.presentation.components.MotiumBottomNavigation
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.utils.ThemeManager
 
 // A separate composable for the details, to keep VehiclesScreen cleaner
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,10 +40,28 @@ fun VehicleDetailsScreen(
 ) {
     val context = LocalContext.current
     val viewModel: VehicleViewModel = viewModel { VehicleViewModel(context) }
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
     val vehicles by viewModel.vehicles.collectAsState()
 
     val vehicle = remember(vehicles, vehicleId) {
         vehicles.firstOrNull { it.id == vehicleId }
+    }
+
+    // State for showing edit screen
+    var showEditScreen by remember { mutableStateOf(false) }
+
+    // Show edit screen if requested
+    if (showEditScreen) {
+        EditVehicleScreen(
+            vehicleId = vehicleId,
+            onNavigateBack = { showEditScreen = false },
+            onVehicleUpdated = {
+                // Reload vehicles after update
+                viewModel.loadVehicles()
+            }
+        )
+        return
     }
 
     Scaffold(
@@ -64,10 +83,11 @@ fun VehicleDetailsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { /* TODO: Edit vehicle */ }) {
+                    IconButton(onClick = { showEditScreen = true }) {
                         Icon(
                             imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit"
+                            contentDescription = "Edit",
+                            tint = MotiumPrimary
                         )
                     }
                 },
@@ -86,7 +106,8 @@ fun VehicleDetailsScreen(
                         "export" -> onNavigateToExport()
                         "settings" -> onNavigateToSettings()
                     }
-                }
+                },
+                isDarkMode = isDarkMode
             )
         }
     ) { paddingValues ->
@@ -98,7 +119,7 @@ fun VehicleDetailsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 // To prevent flicker while vehicle is loading after a change
-                CircularProgressIndicator(color = MockupGreen)
+                CircularProgressIndicator(color = MotiumPrimary)
             }
         } else {
             Column(
@@ -115,7 +136,7 @@ fun VehicleDetailsScreen(
                     modifier = Modifier
                         .size(120.dp)
                         .clip(CircleShape)
-                        .background(MockupGreen.copy(alpha = 0.2f)),
+                        .background(MotiumPrimary.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -149,12 +170,12 @@ fun VehicleDetailsScreen(
                     if (vehicle.isDefault) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = MockupGreen.copy(alpha = 0.2f),
+                            color = MotiumPrimary.copy(alpha = 0.2f),
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
                             Text(
                                 text = "⭐ Default",
-                                color = MockupGreen,
+                                color = MotiumPrimary,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )

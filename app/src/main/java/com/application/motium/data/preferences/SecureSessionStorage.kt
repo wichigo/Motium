@@ -48,7 +48,21 @@ class SecureSessionStorage(context: Context) {
         private const val KEY_TOKEN_TYPE = "token_type"
         private const val KEY_SESSION_CREATED_AT = "session_created_at"
         private const val KEY_PERSISTENT_SESSION_FLAG = "persistent_session_flag"
+        // Credentials for silent re-authentication
+        private const val KEY_AUTH_EMAIL = "auth_email"
+        private const val KEY_AUTH_PASSWORD = "auth_password"
+        private const val KEY_AUTH_METHOD = "auth_method" // "email", "google", etc.
     }
+
+    /**
+     * Credentials data for silent re-authentication.
+     * Only stored for email/password auth (OAuth uses different flow).
+     */
+    data class AuthCredentials(
+        val email: String,
+        val password: String,
+        val authMethod: String = "email"
+    )
 
     data class SessionData(
         val accessToken: String,
@@ -150,4 +164,89 @@ class SecureSessionStorage(context: Context) {
         val expiresAt = encryptedPrefs.getLong(KEY_EXPIRES_AT, 0)
         return (expiresAt - System.currentTimeMillis()) < minutes * 60 * 1000
     }
+
+    // ==================== Credentials for Silent Re-Authentication ====================
+
+    /**
+     * Save credentials for silent re-authentication.
+     * Only call this for email/password authentication (not OAuth).
+     */
+    fun saveCredentials(email: String, password: String, authMethod: String = "email") {
+        try {
+            encryptedPrefs.edit()
+                .putString(KEY_AUTH_EMAIL, email)
+                .putString(KEY_AUTH_PASSWORD, password)
+                .putString(KEY_AUTH_METHOD, authMethod)
+                .apply()
+            MotiumApplication.logger.i("✅ Credentials saved for silent re-auth", "SecureSession")
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error saving credentials: ${e.message}", "SecureSession", e)
+        }
+    }
+
+    /**
+     * Retrieve stored credentials for silent re-authentication.
+     * Returns null if no credentials are stored or if auth method is not email/password.
+     */
+    fun getCredentials(): AuthCredentials? {
+        return try {
+            val email = encryptedPrefs.getString(KEY_AUTH_EMAIL, null)
+            val password = encryptedPrefs.getString(KEY_AUTH_PASSWORD, null)
+            val authMethod = encryptedPrefs.getString(KEY_AUTH_METHOD, "email") ?: "email"
+
+            if (email != null && password != null && authMethod == "email") {
+                AuthCredentials(email, password, authMethod)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error retrieving credentials: ${e.message}", "SecureSession", e)
+            null
+        }
+    }
+
+    /**
+     * Check if we have stored credentials for silent re-authentication.
+     */
+    fun hasStoredCredentials(): Boolean {
+        return try {
+            val email = encryptedPrefs.getString(KEY_AUTH_EMAIL, null)
+            val password = encryptedPrefs.getString(KEY_AUTH_PASSWORD, null)
+            val authMethod = encryptedPrefs.getString(KEY_AUTH_METHOD, "email")
+            email != null && password != null && authMethod == "email"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Clear stored credentials (called on explicit logout).
+     */
+    fun clearCredentials() {
+        try {
+            encryptedPrefs.edit()
+                .remove(KEY_AUTH_EMAIL)
+                .remove(KEY_AUTH_PASSWORD)
+                .remove(KEY_AUTH_METHOD)
+                .apply()
+            MotiumApplication.logger.i("🗑️ Credentials cleared", "SecureSession")
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error clearing credentials: ${e.message}", "SecureSession", e)
+        }
+    }
+
+    /**
+     * Update the auth method (useful when switching between email/OAuth).
+     */
+    fun setAuthMethod(method: String) {
+        try {
+            encryptedPrefs.edit()
+                .putString(KEY_AUTH_METHOD, method)
+                .apply()
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error setting auth method: ${e.message}", "SecureSession", e)
+        }
+    }
+
+    fun getAuthMethod(): String = encryptedPrefs.getString(KEY_AUTH_METHOD, "email") ?: "email"
 }

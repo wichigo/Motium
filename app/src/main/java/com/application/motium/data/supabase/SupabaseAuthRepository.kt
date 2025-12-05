@@ -64,6 +64,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val organization_name: String? = null,
         val subscription_type: String = "FREE",
         val subscription_expires_at: String? = null,
+        val stripe_customer_id: String? = null,
+        val stripe_subscription_id: String? = null,
         val monthly_trip_count: Int = 0,
         val created_at: String,
         val updated_at: String
@@ -149,11 +151,74 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     }
 
     /**
+     * Tente une reconnexion silencieuse avec les credentials stockés.
+     * Retourne true si la reconnexion a réussi, false sinon.
+     */
+    private suspend fun trySilentReAuthentication(): Boolean {
+        val credentials = secureSessionStorage.getCredentials()
+        if (credentials == null) {
+            MotiumApplication.logger.i("ℹ️ Pas de credentials stockés pour reconnexion silencieuse", "SupabaseAuth")
+            return false
+        }
+
+        return try {
+            MotiumApplication.logger.i("🔄 Tentative de reconnexion silencieuse pour ${credentials.email}...", "SupabaseAuth")
+
+            withTimeout(15_000L) {
+                auth.signInWith(Email) {
+                    email = credentials.email
+                    password = credentials.password
+                }
+            }
+
+            val authUser = getCurrentAuthUser()
+            if (authUser != null) {
+                saveCurrentSessionSecurely()
+
+                val userProfileResult = getUserProfile(authUser.id)
+                val user = if (userProfileResult is AuthResult.Success) userProfileResult.data else null
+
+                if (user != null) {
+                    localUserRepository.saveUser(user, isLocallyConnected = true)
+                }
+
+                _authState.value = AuthState(
+                    isAuthenticated = true,
+                    authUser = authUser,
+                    user = user,
+                    isLoading = false
+                )
+
+                MotiumApplication.logger.i("✅ Reconnexion silencieuse réussie pour ${credentials.email}", "SupabaseAuth")
+                true
+            } else {
+                MotiumApplication.logger.w("⚠️ authUser null après reconnexion silencieuse", "SupabaseAuth")
+                false
+            }
+        } catch (e: TimeoutCancellationException) {
+            MotiumApplication.logger.w("⏱️ Timeout lors de la reconnexion silencieuse", "SupabaseAuth")
+            false
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("⚠️ Échec de la reconnexion silencieuse: ${e.message}", "SupabaseAuth")
+            // Si le mot de passe a changé, effacer les credentials obsolètes
+            if (e.message?.contains("Invalid login credentials", ignoreCase = true) == true) {
+                secureSessionStorage.clearCredentials()
+                MotiumApplication.logger.i("🗑️ Credentials obsolètes effacés", "SupabaseAuth")
+            }
+            false
+        }
+    }
+
+    /**
      * Migre une ancienne session vers le nouveau système Room.
+     * Si le refresh échoue, tente une reconnexion silencieuse avec les credentials stockés.
      */
     private suspend fun tryMigrateOldSession(session: SecureSessionStorage.SessionData) {
         try {
-            auth.refreshSession(session.refreshToken)
+            // TIMEOUT: Éviter que la migration ne bloque indéfiniment
+            withTimeout(15_000L) {
+                auth.refreshSession(session.refreshToken)
+            }
             saveCurrentSessionSecurely()
 
             // Récupérer le profil utilisateur et le sauvegarder dans Room
@@ -185,10 +250,33 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     }
 
                     MotiumApplication.logger.i("✅ Migration réussie", "SupabaseAuth")
+                    return // Migration réussie, on sort
+                } else {
+                    MotiumApplication.logger.w("⚠️ Échec de récupération du profil, tentative de reconnexion silencieuse...", "SupabaseAuth")
                 }
+            } else {
+                MotiumApplication.logger.w("⚠️ authUser null après refresh, tentative de reconnexion silencieuse...", "SupabaseAuth")
             }
+
+            // Fallback: Tentative de reconnexion silencieuse
+            if (trySilentReAuthentication()) {
+                return
+            }
+
+            // Si tout échoue, marquer comme déconnecté
+            _authState.value = AuthState(isLoading = false, isAuthenticated = false)
+
+        } catch (e: TimeoutCancellationException) {
+            MotiumApplication.logger.w("⏱️ Timeout lors de la migration, tentative de reconnexion silencieuse...", "SupabaseAuth")
+            if (trySilentReAuthentication()) {
+                return
+            }
+            _authState.value = AuthState(isLoading = false, isAuthenticated = false)
         } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Échec de la migration: ${e.message}", "SupabaseAuth", e)
+            MotiumApplication.logger.w("⚠️ Échec de la migration: ${e.message}, tentative de reconnexion silencieuse...", "SupabaseAuth")
+            if (trySilentReAuthentication()) {
+                return
+            }
             _authState.value = AuthState(isLoading = false, isAuthenticated = false)
         }
     }
@@ -279,6 +367,9 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 MotiumApplication.logger.i("✅ Utilisateur sauvegardé dans la base locale: ${user.email}", "SupabaseAuth")
             }
 
+            // Sauvegarder les credentials pour la reconnexion automatique silencieuse
+            secureSessionStorage.saveCredentials(request.email, request.password, "email")
+
             // Planifier la synchronisation en arrière-plan
             SyncScheduler.scheduleSyncWork(context)
 
@@ -308,8 +399,9 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 MotiumApplication.logger.w("⚠️ Échec de la déconnexion Supabase (offline?): ${e.message}", "SupabaseAuth")
             }
 
-            // Effacer le stockage de session sécurisé
+            // Effacer le stockage de session sécurisé ET les credentials
             secureSessionStorage.manualLogout()
+            secureSessionStorage.clearCredentials()
 
             // CRITIQUE: Supprimer TOUTES les données locales de la base de données Room
             MotiumDatabase.clearAllData(context)
@@ -506,7 +598,12 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         id = id ?: auth_id,
         name = name, email = email, role = UserRole.valueOf(role),
         organizationId = organization_id, organizationName = organization_name,
-        subscription = Subscription(type = SubscriptionType.valueOf(subscription_type), expiresAt = subscription_expires_at?.let { Instant.parse(it) }),
+        subscription = Subscription(
+            type = SubscriptionType.valueOf(subscription_type),
+            expiresAt = subscription_expires_at?.let { Instant.parse(it) },
+            stripeCustomerId = stripe_customer_id,
+            stripeSubscriptionId = stripe_subscription_id
+        ),
         monthlyTripCount = monthly_trip_count,
         createdAt = Instant.parse(created_at), updatedAt = Instant.parse(updated_at)
     )
@@ -516,6 +613,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         organization_id = organizationId, organization_name = organizationName,
         subscription_type = subscription.type.name,
         subscription_expires_at = subscription.expiresAt?.toString(),
+        stripe_customer_id = subscription.stripeCustomerId,
+        stripe_subscription_id = subscription.stripeSubscriptionId,
         monthly_trip_count = monthlyTripCount,
         created_at = createdAt.toString(), updated_at = updatedAt.toString()
     )

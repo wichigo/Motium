@@ -181,7 +181,7 @@ fun EnterpriseExportScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = OutlinedTextFieldDefaults.colors(
                                         disabledContainerColor = backgroundColor,
-                                        disabledBorderColor = if (selectedField == "start") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        disabledBorderColor = if (selectedField == "start") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
                                         disabledTextColor = textColor
                                     ),
                                     shape = RoundedCornerShape(16.dp),
@@ -221,7 +221,7 @@ fun EnterpriseExportScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = OutlinedTextFieldDefaults.colors(
                                         disabledContainerColor = backgroundColor,
-                                        disabledBorderColor = if (selectedField == "end") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        disabledBorderColor = if (selectedField == "end") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
                                         disabledTextColor = textColor
                                     ),
                                     shape = RoundedCornerShape(16.dp),
@@ -392,14 +392,14 @@ fun EnterpriseExportScreen(
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "vehicle") MockupGreen else MockupGreen
+                                        tint = if (selectedField == "vehicle") MotiumPrimary else MotiumPrimary
                                     )
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     unfocusedContainerColor = backgroundColor,
                                     focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "vehicle") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MockupGreen,
+                                    unfocusedBorderColor = if (selectedField == "vehicle") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumPrimary,
                                     unfocusedTextColor = textColor,
                                     focusedTextColor = textColor
                                 ),
@@ -465,14 +465,14 @@ fun EnterpriseExportScreen(
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "tripType") MockupGreen else MockupGreen
+                                        tint = if (selectedField == "tripType") MotiumPrimary else MotiumPrimary
                                     )
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     unfocusedContainerColor = backgroundColor,
                                     focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "tripType") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MockupGreen,
+                                    unfocusedBorderColor = if (selectedField == "tripType") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumPrimary,
                                     unfocusedTextColor = textColor,
                                     focusedTextColor = textColor
                                 ),
@@ -549,14 +549,14 @@ fun EnterpriseExportScreen(
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "expenseMode") MockupGreen else MockupGreen
+                                        tint = if (selectedField == "expenseMode") MotiumPrimary else MotiumPrimary
                                     )
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     unfocusedContainerColor = backgroundColor,
                                     focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "expenseMode") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MockupGreen,
+                                    unfocusedBorderColor = if (selectedField == "expenseMode") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumPrimary,
                                     unfocusedTextColor = textColor,
                                     focusedTextColor = textColor
                                 ),
@@ -629,14 +629,14 @@ fun EnterpriseExportScreen(
                                         Icon(
                                             imageVector = Icons.Default.ArrowDropDown,
                                             contentDescription = null,
-                                            tint = if (selectedField == "includePhotos") MockupGreen else MockupGreen
+                                            tint = if (selectedField == "includePhotos") MotiumPrimary else MotiumPrimary
                                         )
                                     },
                                     colors = OutlinedTextFieldDefaults.colors(
                                         unfocusedContainerColor = backgroundColor,
                                         focusedContainerColor = backgroundColor,
-                                        unfocusedBorderColor = if (selectedField == "includePhotos") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                        focusedBorderColor = MockupGreen,
+                                        unfocusedBorderColor = if (selectedField == "includePhotos") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        focusedBorderColor = MotiumPrimary,
                                         unfocusedTextColor = textColor,
                                         focusedTextColor = textColor
                                     ),
@@ -810,7 +810,7 @@ fun EnterpriseExportScreen(
                             .fillMaxWidth()
                             .height(56.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MockupGreen
+                            containerColor = MotiumPrimary
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
@@ -992,8 +992,8 @@ private fun CalendarGrid(
                                             .fillMaxWidth()
                                             .height(36.dp)
                                             .background(
-                                                if (isDarkMode) MockupGreen.copy(alpha = 0.2f)
-                                                else MockupGreen.copy(alpha = 0.15f)
+                                                if (isDarkMode) MotiumPrimary.copy(alpha = 0.2f)
+                                                else MotiumPrimary.copy(alpha = 0.15f)
                                             )
                                     )
                                 }
@@ -1004,7 +1004,7 @@ private fun CalendarGrid(
                                         .size(36.dp)
                                         .background(
                                             when {
-                                                isStartDay || isEndDay -> MockupGreen
+                                                isStartDay || isEndDay -> MotiumPrimary
                                                 else -> Color.Transparent
                                             },
                                             CircleShape

@@ -24,7 +24,8 @@ import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.model.VehiclePower
 import com.application.motium.domain.model.VehicleType
 import com.application.motium.presentation.components.MotiumBottomNavigation
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.utils.ThemeManager
 
 // A separate composable for the details, to keep VehiclesScreen cleaner
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,6 +40,8 @@ fun EnterpriseVehicleDetailsScreen(
 ) {
     val context = LocalContext.current
     val viewModel: EnterpriseVehicleViewModel = viewModel { EnterpriseVehicleViewModel(context) }
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
     val vehicles by viewModel.vehicles.collectAsState()
 
     val vehicle = remember(vehicles, vehicleId) {
@@ -86,7 +89,8 @@ fun EnterpriseVehicleDetailsScreen(
                         "export" -> onNavigateToExport()
                         "settings" -> onNavigateToSettings()
                     }
-                }
+                },
+                isDarkMode = isDarkMode
             )
         }
     ) { paddingValues ->
@@ -98,7 +102,7 @@ fun EnterpriseVehicleDetailsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 // To prevent flicker while vehicle is loading after a change
-                CircularProgressIndicator(color = MockupGreen)
+                CircularProgressIndicator(color = MotiumPrimary)
             }
         } else {
             Column(
@@ -115,7 +119,7 @@ fun EnterpriseVehicleDetailsScreen(
                     modifier = Modifier
                         .size(120.dp)
                         .clip(CircleShape)
-                        .background(MockupGreen.copy(alpha = 0.2f)),
+                        .background(MotiumPrimary.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -149,12 +153,12 @@ fun EnterpriseVehicleDetailsScreen(
                     if (vehicle.isDefault) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = MockupGreen.copy(alpha = 0.2f),
+                            color = MotiumPrimary.copy(alpha = 0.2f),
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
                             Text(
                                 text = "⭐ Default",
-                                color = MockupGreen,
+                                color = MotiumPrimary,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )

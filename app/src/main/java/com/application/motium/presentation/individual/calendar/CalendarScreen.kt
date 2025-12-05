@@ -41,7 +41,8 @@ import com.application.motium.presentation.calendar.WorkScheduleViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.MotiumBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.MotiumPrimaryTint
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
 import com.application.motium.utils.CalendarUtils
@@ -160,7 +161,8 @@ fun CalendarScreen(
                 },
                 onPremiumFeatureClick = {
                     showPremiumDialog = true
-                }
+                },
+                isDarkMode = isDarkMode
             )
         }
     ) { paddingValues ->
@@ -318,7 +320,7 @@ fun CalendarScreen(
                                 Icon(
                                     Icons.Default.Visibility,
                                     contentDescription = "View Expenses",
-                                    tint = MockupGreen,
+                                    tint = MotiumPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -331,7 +333,7 @@ fun CalendarScreen(
                                 Icon(
                                     Icons.Default.Receipt,
                                     contentDescription = "Add Expense",
-                                    tint = MockupGreen,
+                                    tint = MotiumPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -360,9 +362,9 @@ fun CalendarScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                CalendarStatItem(String.format("%.1f", totalDistance), "Kilometers", MockupGreen, textColor, subTextColor)
-                                CalendarStatItem(String.format("$%.2f", totalIndemnities), "Indemnities", MockupGreen, textColor, subTextColor)
-                                CalendarStatItem(selectedDayTrips.size.toString(), "Trips", MockupGreen, textColor, subTextColor)
+                                CalendarStatItem(String.format("%.1f", totalDistance), "Kilometers", MotiumPrimary, textColor, subTextColor)
+                                CalendarStatItem(String.format("$%.2f", totalIndemnities), "Indemnities", MotiumPrimary, textColor, subTextColor)
+                                CalendarStatItem(selectedDayTrips.size.toString(), "Trips", MotiumPrimary, textColor, subTextColor)
                             }
                         }
                     }
@@ -548,7 +550,7 @@ fun CalendarTripCard(
                             modifier = Modifier
                                 .padding(top = 6.dp)
                                 .size(8.dp)
-                                .background(MockupGreen, CircleShape)
+                                .background(MotiumPrimary, CircleShape)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
@@ -569,7 +571,7 @@ fun CalendarTripCard(
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = when (trip.tripType) {
-                            "PROFESSIONAL" -> Color(0xFF10B981).copy(alpha = 0.15f)
+                            "PROFESSIONAL" -> MotiumPrimaryTint
                             "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
                             else -> Color.Gray.copy(alpha = 0.15f)
                         }
@@ -588,7 +590,7 @@ fun CalendarTripCard(
                                 contentDescription = null,
                                 modifier = Modifier.size(12.dp),
                                 tint = when (trip.tripType) {
-                                    "PROFESSIONAL" -> Color(0xFF10B981)
+                                    "PROFESSIONAL" -> MotiumPrimary
                                     "PERSONAL" -> Color(0xFF3B82F6)
                                     else -> Color.Gray
                                 }
@@ -602,7 +604,7 @@ fun CalendarTripCard(
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                 fontSize = 11.sp,
                                 color = when (trip.tripType) {
-                                    "PROFESSIONAL" -> Color(0xFF10B981)
+                                    "PROFESSIONAL" -> MotiumPrimary
                                     "PERSONAL" -> Color(0xFF3B82F6)
                                     else -> Color.Gray
                                 }
@@ -644,7 +646,7 @@ fun CalendarTripCard(
                             modifier = Modifier
                                 .padding(top = 6.dp)
                                 .size(8.dp)
-                                .background(MockupGreen, CircleShape)
+                                .background(MotiumPrimary, CircleShape)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
@@ -671,7 +673,7 @@ fun CalendarTripCard(
                         Text(
                             text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MockupGreen,
+                            color = MotiumPrimary,
                             fontSize = 14.sp
                         )
 
@@ -681,7 +683,7 @@ fun CalendarTripCard(
                             onCheckedChange = { onToggleValidation() },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
-                                checkedTrackColor = MockupGreen,
+                                checkedTrackColor = MotiumPrimary,
                                 uncheckedThumbColor = Color.White,
                                 uncheckedTrackColor = Color(0xFFE5E7EB),
                                 uncheckedBorderColor = Color.Transparent
@@ -710,7 +712,7 @@ fun RadioButtonOption(text: String, selected: Boolean, onClick: () -> Unit) {
             selected = selected,
             onClick = onClick,
             colors = RadioButtonDefaults.colors(
-                selectedColor = MockupGreen
+                selectedColor = MotiumPrimary
             )
         )
         Spacer(Modifier.width(8.dp))
@@ -737,7 +739,7 @@ fun CalendarDay(
             .clickable { onDayClick() }
             .background(
                 color = when {
-                    isToday -> MockupGreen
+                    isToday -> MotiumPrimary
                     isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                     day.hasTrips -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                     else -> Color.Transparent
@@ -754,7 +756,7 @@ fun CalendarDay(
                 text = day.number.toString(),
                 color = when {
                     isToday -> Color.White
-                    day.hasTrips -> MockupGreen
+                    day.hasTrips -> MotiumPrimary
                     else -> MaterialTheme.colorScheme.onSurface
                 },
                 fontWeight = if (day.hasTrips || isToday) FontWeight.Bold else FontWeight.Normal,
@@ -841,7 +843,7 @@ fun WeekView(onAutoTrackingSettingsClick: () -> Unit) {
             onClick = onAutoTrackingSettingsClick,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MockupGreen
+                containerColor = MotiumPrimary
             )
         ) {
             Icon(Icons.Default.Settings, contentDescription = null)
@@ -916,7 +918,7 @@ fun WorkScheduleCard(dayName: String) {
                 onCheckedChange = { isEnabled = it },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = MockupGreen
+                    checkedTrackColor = MotiumPrimary
                 )
             )
         }
@@ -988,7 +990,7 @@ fun TabSection(
                         fontWeight = if (selectedTab == 1) FontWeight.Medium else FontWeight.Normal
                     ),
                     color = if (selectedTab == 1)
-                        MockupGreen
+                        MotiumPrimary
                     else
                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -1139,7 +1141,7 @@ fun DayScheduleCard(
                     TextButton(
                         onClick = onAddTimeSlot,
                         colors = ButtonDefaults.textButtonColors(
-                            contentColor = MockupGreen
+                            contentColor = MotiumPrimary
                         )
                     ) {
                         Text(
@@ -1158,7 +1160,7 @@ fun DayScheduleCard(
                 TextButton(
                     onClick = onAddTimeSlot,
                     colors = ButtonDefaults.textButtonColors(
-                        contentColor = MockupGreen
+                        contentColor = MotiumPrimary
                     ),
                     modifier = Modifier.align(Alignment.End)
                 ) {
@@ -1389,7 +1391,7 @@ fun TimeSlotEditDialog(
                     onConfirm(updatedSlot)
                 }
             ) {
-                Text("Save", color = MockupGreen)
+                Text("Save", color = MotiumPrimary)
             }
         },
         dismissButton = {

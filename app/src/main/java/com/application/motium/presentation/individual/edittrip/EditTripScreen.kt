@@ -27,13 +27,13 @@ import com.application.motium.data.TripLocation
 import com.application.motium.data.TripRepository
 import com.application.motium.data.geocoding.NominatimService
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.ExpenseRepository
+import com.application.motium.data.VehicleRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.domain.model.Vehicle
 import com.application.motium.presentation.components.AddressAutocomplete
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
 import java.text.SimpleDateFormat
@@ -59,8 +59,8 @@ fun EditTripScreen(
     val coroutineScope = rememberCoroutineScope()
     val nominatimService = remember { NominatimService.getInstance() }
     val tripRepository = remember { TripRepository.getInstance(context) }
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
-    val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }  // Room cache
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
 
     // Auth state
@@ -396,7 +396,7 @@ fun EditTripScreen(
                     LocationField(
                         label = "Departure Location",
                         value = startLocation,
-                        iconColor = MockupGreen,
+                        iconColor = MotiumPrimary,
                         onValueChange = { startLocation = it },
                         onAddressSelected = { result ->
                             startCoordinates = result.lat.toDouble() to result.lon.toDouble()
@@ -628,7 +628,7 @@ fun ProfessionalTripToggle(
                 onCheckedChange = onToggle,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = MockupGreen
+                    checkedTrackColor = MotiumPrimary
                 )
             )
         }

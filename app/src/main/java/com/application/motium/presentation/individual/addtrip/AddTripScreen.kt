@@ -25,14 +25,14 @@ import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
 import com.application.motium.data.geocoding.NominatimService
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.VehicleRepository
 import com.application.motium.domain.model.AuthState
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.domain.model.Vehicle
 import com.application.motium.presentation.components.AddressAutocomplete
 import com.application.motium.presentation.components.MiniMap
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
 import java.text.SimpleDateFormat
@@ -55,7 +55,7 @@ fun AddTripScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val nominatimService = remember { NominatimService.getInstance() }
-    val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }  // Room cache
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
 
     val authState by authRepository.authState.collectAsState(initial = AuthState())
@@ -319,7 +319,7 @@ fun AddTripScreen(
                 LocationField(
                     label = "Departure Location",
                     value = startLocation,
-                    iconColor = MockupGreen,
+                    iconColor = MotiumPrimary,
                     onValueChange = { startLocation = it },
                     onAddressSelected = { result ->
                         startCoordinates = result.lat.toDouble() to result.lon.toDouble()
@@ -548,7 +548,7 @@ fun ProfessionalTripToggle(
                 onCheckedChange = onToggle,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = MockupGreen
+                    checkedTrackColor = MotiumPrimary
                 )
             )
         }

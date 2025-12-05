@@ -39,7 +39,7 @@ import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.calendar.WorkScheduleViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
 import com.application.motium.utils.CalendarUtils
@@ -476,7 +476,7 @@ fun RadioButtonOption(text: String, selected: Boolean, onClick: () -> Unit) {
             selected = selected,
             onClick = onClick,
             colors = RadioButtonDefaults.colors(
-                selectedColor = MockupGreen
+                selectedColor = MotiumPrimary
             )
         )
         Spacer(Modifier.width(8.dp))
@@ -503,7 +503,7 @@ fun CalendarDay(
             .clickable { onDayClick() }
             .background(
                 color = when {
-                    isToday -> MockupGreen
+                    isToday -> MotiumPrimary
                     isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                     day.hasTrips -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                     else -> Color.Transparent
@@ -520,7 +520,7 @@ fun CalendarDay(
                 text = day.number.toString(),
                 color = when {
                     isToday -> Color.White
-                    day.hasTrips -> MockupGreen
+                    day.hasTrips -> MotiumPrimary
                     else -> MaterialTheme.colorScheme.onSurface
                 },
                 fontWeight = if (day.hasTrips || isToday) FontWeight.Bold else FontWeight.Normal,
@@ -695,7 +695,7 @@ fun WeekView(onAutoTrackingSettingsClick: () -> Unit) {
             onClick = onAutoTrackingSettingsClick,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MockupGreen
+                containerColor = MotiumPrimary
             )
         ) {
             Icon(Icons.Default.Settings, contentDescription = null)
@@ -770,7 +770,7 @@ fun WorkScheduleCard(dayName: String) {
                 onCheckedChange = { isEnabled = it },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = MockupGreen
+                    checkedTrackColor = MotiumPrimary
                 )
             )
         }
@@ -842,7 +842,7 @@ fun TabSection(
                         fontWeight = if (selectedTab == 1) FontWeight.Medium else FontWeight.Normal
                     ),
                     color = if (selectedTab == 1)
-                        MockupGreen
+                        MotiumPrimary
                     else
                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -1017,9 +1017,9 @@ fun AutoTrackingCard(
                     },
                     contentDescription = "Toggle tracking mode",
                     tint = when (trackingMode) {
-                        TrackingMode.ALWAYS -> MockupGreen
+                        TrackingMode.ALWAYS -> MotiumPrimary
                         TrackingMode.DISABLED -> Color.Gray
-                        TrackingMode.WORK_HOURS_ONLY -> MockupGreen
+                        TrackingMode.WORK_HOURS_ONLY -> MotiumPrimary
                     },
                     modifier = Modifier.size(32.dp)
                 )
@@ -1073,7 +1073,7 @@ fun DayScheduleCard(
                     TextButton(
                         onClick = onAddTimeSlot,
                         colors = ButtonDefaults.textButtonColors(
-                            contentColor = MockupGreen
+                            contentColor = MotiumPrimary
                         )
                     ) {
                         Text(
@@ -1092,7 +1092,7 @@ fun DayScheduleCard(
                 TextButton(
                     onClick = onAddTimeSlot,
                     colors = ButtonDefaults.textButtonColors(
-                        contentColor = MockupGreen
+                        contentColor = MotiumPrimary
                     ),
                     modifier = Modifier.align(Alignment.End)
                 ) {

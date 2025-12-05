@@ -18,7 +18,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 
 data class EnterpriseBottomNavItemSimple(
     val route: String,
@@ -88,7 +88,7 @@ fun EnterpriseBottomNavigationSimple(
                                 modifier = Modifier
                                     .size(44.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF4CAF50)), // Vert
+                                    .background(MotiumPrimary), // Couleur primaire dynamique
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
@@ -106,7 +106,7 @@ fun EnterpriseBottomNavigationSimple(
                         val isEnabled = if (isExport) isPremium else true
                         val iconColor = when {
                             !isEnabled -> Color(0xFFD1D5DB)
-                            isSelected -> MockupGreen
+                            isSelected -> MotiumPrimary
                             else -> Color(0xFF64748b).copy(alpha = 0.5f)
                         }
 
@@ -115,7 +115,7 @@ fun EnterpriseBottomNavigationSimple(
                                 .weight(1f)
                                 .fillMaxHeight()
                                 .background(
-                                    color = if (isSelected) MockupGreen.copy(alpha = 0.1f) else Color.Transparent,
+                                    color = if (isSelected) MotiumPrimary.copy(alpha = 0.1f) else Color.Transparent,
                                     shape = RoundedCornerShape(8.dp)
                                 )
                                 .clickable {

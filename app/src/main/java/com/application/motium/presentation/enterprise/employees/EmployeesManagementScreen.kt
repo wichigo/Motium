@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigation
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.ThemeManager
 import androidx.compose.ui.platform.LocalContext
 
@@ -152,7 +152,7 @@ fun EmployeesManagementScreen(
                             .height(48.dp)
                             .padding(vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MockupGreen
+                            containerColor = MotiumPrimary
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
@@ -268,11 +268,11 @@ fun EmployeeCard(
                         },
                         colors = AssistChipDefaults.assistChipColors(
                             containerColor = if (employee.status == "Active")
-                                MockupGreen.copy(alpha = 0.2f)
+                                MotiumPrimary.copy(alpha = 0.2f)
                             else
                                 Color(0xFFEF4444).copy(alpha = 0.2f),
                             labelColor = if (employee.status == "Active")
-                                MockupGreen
+                                MotiumPrimary
                             else
                                 Color(0xFFEF4444)
                         ),
@@ -282,7 +282,7 @@ fun EmployeeCard(
                                     .size(6.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (employee.status == "Active") MockupGreen else Color(0xFFEF4444)
+                                        if (employee.status == "Active") MotiumPrimary else Color(0xFFEF4444)
                                     )
                             )
                         }
@@ -294,7 +294,7 @@ fun EmployeeCard(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = "Navigate",
-                tint = MockupGreen,
+                tint = MotiumPrimary,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -326,8 +326,8 @@ fun SearchBar(
         },
         singleLine = true,
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = MockupGreen,
-            unfocusedContainerColor = MockupGreen,
+            focusedContainerColor = MotiumPrimary,
+            unfocusedContainerColor = MotiumPrimary,
             focusedTextColor = Color.White,
             unfocusedTextColor = Color.White,
             focusedPlaceholderColor = Color.White.copy(alpha = 0.7f),

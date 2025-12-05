@@ -20,7 +20,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 
 data class EnterpriseNavItem(
     val route: String,
@@ -118,7 +118,7 @@ fun EnterpriseBottomNavigation(
                         val isEnabled = if (isExport) isPremium else true
                         val iconColor = when {
                             !isEnabled -> Color(0xFFD1D5DB)
-                            isSelected -> MockupGreen
+                            isSelected -> MotiumPrimary
                             else -> Color(0xFF9CA3AF)
                         }
 
@@ -168,7 +168,7 @@ fun EnterpriseBottomNavigation(
                             modifier = Modifier
                                 .size(44.dp)
                                 .clip(CircleShape)
-                                .background(MockupGreen),
+                                .background(MotiumPrimary),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -183,7 +183,7 @@ fun EnterpriseBottomNavigation(
                             text = "Menu",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Normal,
-                            color = MockupGreen
+                            color = MotiumPrimary
                         )
                     }
                 }
@@ -205,7 +205,7 @@ fun EnterpriseExpandedMenuItem(
             .clickable { onNavigate() },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MockupGreen.copy(alpha = 0.15f) else Color.White
+            containerColor = if (isSelected) MotiumPrimary.copy(alpha = 0.15f) else Color.White
         ),
         elevation = CardDefaults.cardElevation(
             defaultElevation = if (isSelected) 6.dp else 2.dp
@@ -222,14 +222,14 @@ fun EnterpriseExpandedMenuItem(
                 imageVector = item.icon,
                 contentDescription = item.label,
                 modifier = Modifier.size(24.dp),
-                tint = if (isSelected) MockupGreen else Color(0xFF9CA3AF)
+                tint = if (isSelected) MotiumPrimary else Color(0xFF9CA3AF)
             )
             Text(
                 text = item.label,
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                 ),
-                color = if (isSelected) MockupGreen else Color(0xFF374151)
+                color = if (isSelected) MotiumPrimary else Color(0xFF374151)
             )
         }
     }

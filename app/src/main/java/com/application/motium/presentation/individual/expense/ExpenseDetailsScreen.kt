@@ -24,8 +24,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.application.motium.MotiumApplication
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
@@ -33,8 +33,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-// Colors matching HomeScreen
-private val MockupGreen = Color(0xFF10B981)
+// Colors matching HomeScreen (MotiumPrimary est importé de theme)
 private val MockupTextBlack = Color(0xFF1F2937)
 private val MockupTextGray = Color(0xFF6B7280)
 private val MockupBackground = Color(0xFFF3F4F6)
@@ -47,7 +46,7 @@ fun ExpenseDetailsScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val themeManager = remember { ThemeManager.getInstance(context) }
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
@@ -127,10 +126,11 @@ fun ExpenseDetailsScreen(
         }
     }
 
-    // Load all expenses for this day (MODIFIÉ: utilise getExpensesForDay)
+    // Load all expenses for this day from local cache (offline-first)
     LaunchedEffect(date) {
         coroutineScope.launch {
-            expenseRepository.getExpensesForDay(date).onSuccess { expenseList ->
+            try {
+                val expenseList = expenseRepository.getExpensesForDate(date)
                 expenses = expenseList
 
                 // Calculate totals
@@ -138,8 +138,8 @@ fun ExpenseDetailsScreen(
                 totalHT = expenses.mapNotNull { it.amountHT }.sum()
 
                 MotiumApplication.logger.i("Loaded ${expenseList.size} expenses for $date", "ExpenseDetailsScreen")
-            }.onFailure { error ->
-                MotiumApplication.logger.e("Failed to load expenses for date $date: ${error.message}", "ExpenseDetailsScreen", error)
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Failed to load expenses for date $date: ${e.message}", "ExpenseDetailsScreen", e)
             }
 
             isLoading = false
@@ -221,7 +221,7 @@ fun ExpenseDetailsScreen(
                                     Text(
                                         "${expenses.size}",
                                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MockupGreen
+                                        color = MotiumPrimary
                                     )
                                     Text(
                                         "Expenses",
@@ -234,7 +234,7 @@ fun ExpenseDetailsScreen(
                                     Text(
                                         String.format("%.2f €", totalTTC),
                                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MockupGreen
+                                        color = MotiumPrimary
                                     )
                                     Text(
                                         "Total TTC",
@@ -247,7 +247,7 @@ fun ExpenseDetailsScreen(
                                     Text(
                                         String.format("%.2f €", totalHT),
                                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MockupGreen
+                                        color = MotiumPrimary
                                     )
                                     Text(
                                         "Total HT",
@@ -335,7 +335,7 @@ fun ExpenseCard(
                 modifier = Modifier
                     .size(56.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MockupGreen.copy(alpha = 0.15f)),
+                    .background(MotiumPrimary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -349,7 +349,7 @@ fun ExpenseCard(
                         else -> Icons.Default.Receipt
                     },
                     contentDescription = null,
-                    tint = MockupGreen,
+                    tint = MotiumPrimary,
                     modifier = Modifier.size(28.dp)
                 )
             }
@@ -373,7 +373,7 @@ fun ExpenseCard(
                     // Type badge
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = MockupGreen.copy(alpha = 0.15f)
+                        color = MotiumPrimary.copy(alpha = 0.15f)
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -384,13 +384,13 @@ fun ExpenseCard(
                                 imageVector = Icons.Default.Receipt,
                                 contentDescription = null,
                                 modifier = Modifier.size(12.dp),
-                                tint = MockupGreen
+                                tint = MotiumPrimary
                             )
                             Text(
                                 "Expense",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                 fontSize = 11.sp,
-                                color = MockupGreen
+                                color = MotiumPrimary
                             )
                         }
                     }
@@ -436,14 +436,14 @@ fun ExpenseCard(
                         Text(
                             expense.getFormattedAmount(),
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MockupGreen
+                            color = MotiumPrimary
                         )
                         if (expense.photoUri != null) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Surface(
                                 modifier = Modifier.clickable { onPhotoClick(expense.photoUri!!) },
                                 shape = RoundedCornerShape(8.dp),
-                                color = MockupGreen.copy(alpha = 0.1f)
+                                color = MotiumPrimary.copy(alpha = 0.1f)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -453,13 +453,13 @@ fun ExpenseCard(
                                     Icon(
                                         Icons.Default.CameraAlt,
                                         contentDescription = "View photo",
-                                        tint = MockupGreen,
+                                        tint = MotiumPrimary,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
                                         "Photo",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MockupGreen
+                                        color = MotiumPrimary
                                     )
                                 }
                             }

@@ -33,17 +33,29 @@ class LocationTrackingService : Service() {
         private const val STANDBY_UPDATE_INTERVAL = 60000L // 60 secondes (1 minute)
         private const val STANDBY_FASTEST_INTERVAL = 60000L // 60 secondes
 
-        // Mode TRIP (trajet en cours): haute fréquence pour précision
-        private const val TRIP_UPDATE_INTERVAL = 10000L // 10 secondes
-        private const val TRIP_FASTEST_INTERVAL = 5000L // 5 secondes minimum
+        // Mode TRIP (trajet en cours): fréquence adaptative selon la vitesse
+        // Mode BASSE VITESSE (ville, embouteillage < 40 km/h): haute fréquence pour précision tracé
+        private const val LOW_SPEED_THRESHOLD_KMH = 40f // Seuil basse vitesse
+        private const val LOW_SPEED_UPDATE_INTERVAL = 4000L // 4 secondes
+        private const val LOW_SPEED_FASTEST_INTERVAL = 2000L // 2 secondes minimum
+        private const val LOW_SPEED_MIN_DISPLACEMENT = 5f // 5 mètres
 
-        private const val MIN_DISPLACEMENT = 10f // 10 mètres pour éviter bruit GPS
+        // Mode HAUTE VITESSE (autoroute, voie rapide > 40 km/h): économie batterie
+        private const val HIGH_SPEED_UPDATE_INTERVAL = 10000L // 10 secondes
+        private const val HIGH_SPEED_FASTEST_INTERVAL = 5000L // 5 secondes minimum
+        private const val HIGH_SPEED_MIN_DISPLACEMENT = 15f // 15 mètres
+
+        // Legacy constants pour compatibilité
+        private const val TRIP_UPDATE_INTERVAL = LOW_SPEED_UPDATE_INTERVAL // Défaut: basse vitesse
+        private const val TRIP_FASTEST_INTERVAL = LOW_SPEED_FASTEST_INTERVAL
+
+        private const val MIN_DISPLACEMENT = LOW_SPEED_MIN_DISPLACEMENT // 5 mètres pour meilleure précision
 
         // Critères de validation des trajets (très assouplis pour tests et conditions réelles)
         private const val MIN_TRIP_DISTANCE_METERS = 10.0 // 10m minimum (très réduit pour tests)
         private const val MIN_TRIP_DURATION_MS = 15000L // 15 secondes minimum (très réduit pour tests)
         private const val MIN_AVERAGE_SPEED_MPS = 0.1 // 0.36 km/h = 0.1 m/s (très réduit pour tests)
-        private const val MAX_GPS_ACCURACY_METERS = 100f // 100m précision GPS (assoupli pour conditions réelles)
+        private const val MAX_GPS_ACCURACY_METERS = 50f // 50m précision GPS (réduit pour meilleure qualité)
 
         // Critères de précision pour points de départ/arrivée (OPTIMISÉS pour geocoding précis)
         private const val START_POINT_ANCHORING_DELAY_MS = 8000L // 8 secondes d'ancrage (augmenté pour stabilisation GPS)
@@ -233,6 +245,7 @@ class LocationTrackingService : Service() {
     private lateinit var workScheduleRepository: WorkScheduleRepository
     private lateinit var authRepository: SupabaseAuthRepository
     private var isTracking = false
+    private var currentSpeedMode: Boolean? = null // null = not set, true = low speed, false = high speed
     private var currentTrip: TripData? = null
 
     // Données pour l'assignation automatique du véhicule et du type de trajet
@@ -1049,17 +1062,80 @@ class LocationTrackingService : Service() {
 
     /**
      * Change la fréquence GPS selon le mode (STANDBY vs TRIP)
+     * En mode TRIP, utilise par défaut la fréquence basse vitesse (haute précision)
      */
     private fun updateGPSFrequency(tripMode: Boolean) {
         if (!isTracking) return
 
-        val interval = if (tripMode) TRIP_UPDATE_INTERVAL else STANDBY_UPDATE_INTERVAL
-        val fastestInterval = if (tripMode) TRIP_FASTEST_INTERVAL else STANDBY_FASTEST_INTERVAL
+        if (tripMode) {
+            // En mode trip, réinitialiser le mode vitesse pour forcer la détection
+            currentSpeedMode = null
+            // Démarrer en mode LOW_SPEED par défaut pour capturer précisément le départ
+            applyGPSFrequency(
+                interval = LOW_SPEED_UPDATE_INTERVAL,
+                fastestInterval = LOW_SPEED_FASTEST_INTERVAL,
+                minDisplacement = LOW_SPEED_MIN_DISPLACEMENT,
+                modeName = "TRIP LOW_SPEED (4s, 5m)"
+            )
+        } else {
+            // Mode STANDBY
+            currentSpeedMode = null
+            applyGPSFrequency(
+                interval = STANDBY_UPDATE_INTERVAL,
+                fastestInterval = STANDBY_FASTEST_INTERVAL,
+                minDisplacement = MIN_DISPLACEMENT,
+                modeName = "STANDBY (1min)"
+            )
+        }
+    }
 
+    /**
+     * Adapte la fréquence GPS selon la vitesse actuelle (pendant un trajet actif)
+     * - Basse vitesse (<40 km/h): 4s intervalle, 5m déplacement → précision en ville
+     * - Haute vitesse (>40 km/h): 10s intervalle, 15m déplacement → économie batterie
+     */
+    private fun updateGPSFrequencyBasedOnSpeed(currentSpeedKmh: Float) {
+        if (!isTracking) return
+        if (tripState != TripState.TRIP_ACTIVE && tripState != TripState.BUFFERING) return
+
+        val isLowSpeed = currentSpeedKmh < LOW_SPEED_THRESHOLD_KMH
+
+        // Ne pas changer si on est déjà dans le bon mode
+        if (currentSpeedMode == isLowSpeed) return
+
+        currentSpeedMode = isLowSpeed
+
+        if (isLowSpeed) {
+            applyGPSFrequency(
+                interval = LOW_SPEED_UPDATE_INTERVAL,
+                fastestInterval = LOW_SPEED_FASTEST_INTERVAL,
+                minDisplacement = LOW_SPEED_MIN_DISPLACEMENT,
+                modeName = "TRIP LOW_SPEED (4s, 5m) - ${currentSpeedKmh.toInt()} km/h"
+            )
+        } else {
+            applyGPSFrequency(
+                interval = HIGH_SPEED_UPDATE_INTERVAL,
+                fastestInterval = HIGH_SPEED_FASTEST_INTERVAL,
+                minDisplacement = HIGH_SPEED_MIN_DISPLACEMENT,
+                modeName = "TRIP HIGH_SPEED (10s, 15m) - ${currentSpeedKmh.toInt()} km/h"
+            )
+        }
+    }
+
+    /**
+     * Applique la configuration GPS spécifiée
+     */
+    private fun applyGPSFrequency(
+        interval: Long,
+        fastestInterval: Long,
+        minDisplacement: Float,
+        modeName: String
+    ) {
         locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
             .setWaitForAccurateLocation(false)
             .setMinUpdateIntervalMillis(fastestInterval)
             .setMaxUpdateDelayMillis(interval * 2)
+            .setMinUpdateDistanceMeters(minDisplacement)
             .build()
 
         // Redémarrer les updates GPS avec la nouvelle fréquence
@@ -1073,8 +1149,7 @@ class LocationTrackingService : Service() {
                 Looper.getMainLooper()
             )
 
-            val mode = if (tripMode) "TRIP (10s)" else "STANDBY (1min)"
-            MotiumApplication.logger.i("GPS frequency switched to $mode", "LocationService")
+            MotiumApplication.logger.i("GPS frequency switched to $modeName", "LocationService")
         }
     }
 
@@ -1167,6 +1242,12 @@ class LocationTrackingService : Service() {
 
         // NOUVEAU: Détection d'inactivité GPS pour auto-stop des trips fantômes
         detectInactivityAndAutoStop(location)
+
+        // GPS ADAPTATIF: Ajuster la fréquence GPS selon la vitesse actuelle
+        if (location.hasSpeed() && (tripState == TripState.TRIP_ACTIVE || tripState == TripState.BUFFERING)) {
+            val currentSpeedKmh = location.speed * 3.6f // Convert m/s to km/h
+            updateGPSFrequencyBasedOnSpeed(currentSpeedKmh)
+        }
 
         MotiumApplication.logger.logLocationUpdate(
             location.latitude,
@@ -2011,6 +2092,24 @@ class LocationTrackingService : Service() {
                 // Déterminer le type de trajet (PRO/PERSO) selon les horaires de travail
                 val tripType = determineTripType()
 
+                // Recharger le véhicule par défaut au cas où il a changé pendant le trajet
+                val currentDefaultVehicleId = currentUserId?.let { userId ->
+                    try {
+                        vehicleRepository.getDefaultVehicle(userId)?.id.also { vehicleId ->
+                            if (vehicleId != null && vehicleId != defaultVehicleId) {
+                                defaultVehicleId = vehicleId
+                                MotiumApplication.logger.i(
+                                    "🔄 Default vehicle updated before saving trip: $vehicleId",
+                                    "AutoTracking"
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("Failed to reload default vehicle: ${e.message}", "AutoTracking")
+                        defaultVehicleId
+                    }
+                } ?: defaultVehicleId
+
                 val tripToSave = Trip(
                     id = trip.id,
                     startTime = trip.startTime,
@@ -2018,23 +2117,34 @@ class LocationTrackingService : Service() {
                     locations = trip.locations,
                     totalDistance = trip.totalDistance,
                     isValidated = false,
-                    vehicleId = defaultVehicleId,  // Véhicule par défaut de l'utilisateur
+                    vehicleId = currentDefaultVehicleId,  // Véhicule par défaut actuel de l'utilisateur
                     tripType = tripType,            // PRO ou PERSO selon horaires de travail
                     startAddress = startAddress,
                     endAddress = endAddress
                 )
 
-                tripRepository.saveTrip(tripToSave)
+                // Save trip with subscription limit check
+                val tripSaved = tripRepository.saveTripWithLimitCheck(tripToSave)
 
-                MotiumApplication.logger.i(
-                    "✅ Trip saved: ${trip.locations.size} points, " +
-                    "${String.format("%.2f", trip.totalDistance / 1000)} km, " +
-                    "vehicleId=${defaultVehicleId ?: "none"}, " +
-                    "type=$tripType, " +
-                    "start: ${startAddress ?: "unknown"}, " +
-                    "end: ${endAddress ?: "unknown"}",
-                    "DatabaseSave"
-                )
+                if (tripSaved) {
+                    MotiumApplication.logger.i(
+                        "✅ Trip saved: ${trip.locations.size} points, " +
+                        "${String.format("%.2f", trip.totalDistance / 1000)} km, " +
+                        "vehicleId=${currentDefaultVehicleId ?: "none"}, " +
+                        "type=$tripType, " +
+                        "start: ${startAddress ?: "unknown"}, " +
+                        "end: ${endAddress ?: "unknown"}",
+                        "DatabaseSave"
+                    )
+                } else {
+                    MotiumApplication.logger.w(
+                        "⚠️ Trip NOT saved - monthly limit reached. " +
+                        "Trip: ${trip.locations.size} points, ${String.format("%.2f", trip.totalDistance / 1000)} km",
+                        "DatabaseSave"
+                    )
+                    // Show notification that trip was not saved due to limit
+                    showTripLimitNotification()
+                }
             } catch (e: Exception) {
                 MotiumApplication.logger.e(
                     "Error saving trip: ${e.message}",
@@ -2066,5 +2176,41 @@ class LocationTrackingService : Service() {
             notificationWatchRunnable = null
         }
         MotiumApplication.logger.i("Notification watch stopped", "LocationService")
+    }
+
+    /**
+     * Show a notification when a trip was not saved due to monthly limit
+     */
+    private fun showTripLimitNotification() {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+
+            // Create intent to open subscription screen
+            val intent = Intent(this, com.application.motium.presentation.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("navigate_to", "subscription")
+            }
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Limite de trajets atteinte")
+                .setContentText("Passez à Premium pour des trajets illimités")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build()
+
+            notificationManager.notify(NOTIFICATION_ID + 100, notification)
+            MotiumApplication.logger.i("📢 Trip limit notification shown", "LocationService")
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to show trip limit notification: ${e.message}", "LocationService", e)
+        }
     }
 }

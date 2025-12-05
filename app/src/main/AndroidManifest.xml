@@ -60,6 +60,27 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Deep Links for Company Link Invitations (HTTPS) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="motium.app"
+                    android:pathPrefix="/link" />
+            </intent-filter>
+
+            <!-- Custom Scheme for App Links (fallback) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="motium"
+                    android:host="link" />
+            </intent-filter>
         </activity>
 
         <!-- Activity Recognition Service -->

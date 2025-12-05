@@ -5,7 +5,7 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
-import com.application.motium.data.supabase.SupabaseExpenseRepository
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.service.SupabaseStorageService
 import com.application.motium.domain.model.Expense
 import com.itextpdf.kernel.colors.Color
@@ -44,7 +44,7 @@ class ExportManager(private val context: Context) {
         private val GRAY_DARK = DeviceRgb(107, 114, 128) // #6B7280
     }
 
-    private val expenseRepository = SupabaseExpenseRepository.getInstance(context)
+    private val expenseRepository = ExpenseRepository.getInstance(context)
     private val storageService = SupabaseStorageService.getInstance(context)
 
     /**

@@ -20,6 +20,8 @@ data class UserEntity(
     val organizationName: String?,
     val subscriptionType: String, // SubscriptionType enum stored as String
     val subscriptionExpiresAt: String?, // Instant stored as ISO-8601 string
+    val stripeCustomerId: String? = null, // Stripe customer ID for payments
+    val stripeSubscriptionId: String? = null, // Stripe subscription ID
     val monthlyTripCount: Int,
     val phoneNumber: String,
     val address: String,
@@ -46,7 +48,9 @@ fun UserEntity.toDomainModel(): User {
         organizationName = organizationName,
         subscription = Subscription(
             type = SubscriptionType.valueOf(subscriptionType),
-            expiresAt = subscriptionExpiresAt?.let { Instant.parse(it) }
+            expiresAt = subscriptionExpiresAt?.let { Instant.parse(it) },
+            stripeCustomerId = stripeCustomerId,
+            stripeSubscriptionId = stripeSubscriptionId
         ),
         monthlyTripCount = monthlyTripCount,
         phoneNumber = phoneNumber,
@@ -73,6 +77,8 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         organizationName = organizationName,
         subscriptionType = subscription.type.name,
         subscriptionExpiresAt = subscription.expiresAt?.toString(),
+        stripeCustomerId = subscription.stripeCustomerId,
+        stripeSubscriptionId = subscription.stripeSubscriptionId,
         monthlyTripCount = monthlyTripCount,
         phoneNumber = phoneNumber,
         address = address,

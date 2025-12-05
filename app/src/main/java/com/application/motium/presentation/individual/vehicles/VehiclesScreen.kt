@@ -32,7 +32,9 @@ import com.application.motium.domain.model.VehicleType
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.components.MotiumBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.MotiumPrimaryTint
+import com.application.motium.utils.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,6 +48,8 @@ fun VehiclesScreen(
 ) {
     val context = LocalContext.current
     val viewModel: VehicleViewModel = viewModel { VehicleViewModel(context) }
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     // Utiliser authState de authViewModel au lieu de créer une nouvelle instance
     val authState by authViewModel.authState.collectAsState()
@@ -188,7 +192,7 @@ fun VehiclesScreen(
                         androidx.compose.material3.Icon(
                             imageVector = androidx.compose.material.icons.Icons.Default.Refresh,
                             contentDescription = "Refresh vehicles",
-                            tint = MockupGreen
+                            tint = MotiumPrimary
                         )
                     }
                 },
@@ -211,13 +215,14 @@ fun VehiclesScreen(
                 },
                 onPremiumFeatureClick = {
                     showPremiumDialog = true
-                }
+                },
+                isDarkMode = isDarkMode
             )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAddVehicleScreen = true },
-                containerColor = MockupGreen,
+                containerColor = MotiumPrimary,
                 contentColor = Color.White,
                 shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
@@ -417,7 +422,7 @@ fun VehiclesScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = MockupGreen)
+                    CircularProgressIndicator(color = MotiumPrimary)
                 }
             }
         }
@@ -466,7 +471,7 @@ fun ModernVehicleCard(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFFD1FAE5)),
+                        .background(MotiumPrimaryTint),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -510,7 +515,7 @@ fun ModernVehicleCard(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(MockupGreen)
+                                .background(MotiumPrimary)
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Icon(

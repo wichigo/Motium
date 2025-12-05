@@ -197,16 +197,27 @@ class VehicleRepository private constructor(context: Context) {
      */
     suspend fun updateVehicle(vehicle: Vehicle) = withContext(Dispatchers.IO) {
         try {
+            // Si le véhicule est marqué comme défaut, retirer le statut des autres d'abord
+            if (vehicle.isDefault) {
+                vehicleDao.unsetAllDefaultVehicles(vehicle.userId)
+                MotiumApplication.logger.i("Unset default from all vehicles for user: ${vehicle.userId}", "VehicleRepository")
+            }
+
             // 1. Mettre à jour localement dans Room
             val vehicleEntity = vehicle.toEntity(needsSync = true)
             vehicleDao.updateVehicle(vehicleEntity)
 
-            MotiumApplication.logger.i("✅ Vehicle updated in Room Database: ${vehicle.id}", "VehicleRepository")
+            MotiumApplication.logger.i("✅ Vehicle updated in Room Database: ${vehicle.id}, isDefault=${vehicle.isDefault}", "VehicleRepository")
 
             // 2. Synchroniser avec Supabase si possible
             try {
                 val currentUser = authRepository.getCurrentAuthUser()
                 if (currentUser != null) {
+                    // Si le véhicule est défaut, utiliser setDefaultVehicle pour unset les autres sur Supabase aussi
+                    if (vehicle.isDefault) {
+                        supabaseVehicleRepository.setDefaultVehicle(vehicle.userId, vehicle.id)
+                    }
+                    // Puis mettre à jour toutes les autres propriétés
                     supabaseVehicleRepository.updateVehicle(vehicle)
 
                     // Marquer comme synchronisé

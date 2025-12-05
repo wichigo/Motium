@@ -17,7 +17,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.SurfaceLight
+import com.application.motium.presentation.theme.SurfaceDark
+import com.application.motium.presentation.theme.TextSecondaryLight
+import com.application.motium.presentation.theme.TextSecondaryDark
 
 data class BottomNavItem(
     val route: String,
@@ -39,8 +43,14 @@ fun MotiumBottomNavigation(
     currentRoute: String,
     onNavigate: (String) -> Unit,
     isPremium: Boolean = true, // Par défaut, assume premium pour compatibilité
-    onPremiumFeatureClick: () -> Unit = {} // Callback quand un compte free clique sur une feature premium
+    onPremiumFeatureClick: () -> Unit = {}, // Callback quand un compte free clique sur une feature premium
+    isDarkMode: Boolean = false // Support du mode sombre
 ) {
+    // Couleurs dynamiques basées sur le mode
+    val surfaceColor = if (isDarkMode) SurfaceDark else SurfaceLight
+    val inactiveColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
+    val disabledColor = if (isDarkMode) Color(0xFF4B5563) else Color(0xFFD1D5DB)
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -54,7 +64,7 @@ fun MotiumBottomNavigation(
                 .height(82.dp),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
-                containerColor = Color.White
+                containerColor = surfaceColor
             ),
             elevation = CardDefaults.cardElevation(
                 defaultElevation = 12.dp
@@ -63,7 +73,7 @@ fun MotiumBottomNavigation(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.White)
+                    .background(surfaceColor)
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
@@ -73,9 +83,9 @@ fun MotiumBottomNavigation(
                     val isExport = item.route == "export"
                     val isEnabled = if (isExport) isPremium else true
                     val iconColor = when {
-                        !isEnabled -> Color(0xFFD1D5DB) // Gris clair si désactivé
-                        isSelected -> MockupGreen
-                        else -> Color(0xFF64748b).copy(alpha = 0.5f)
+                        !isEnabled -> disabledColor
+                        isSelected -> MotiumPrimary
+                        else -> inactiveColor.copy(alpha = 0.7f)
                     }
 
                     Column(
@@ -83,7 +93,7 @@ fun MotiumBottomNavigation(
                             .weight(1f)
                             .fillMaxHeight()
                             .background(
-                                color = if (isSelected) MockupGreen.copy(alpha = 0.1f) else Color.Transparent,
+                                color = if (isSelected) MotiumPrimary.copy(alpha = 0.1f) else Color.Transparent,
                                 shape = RoundedCornerShape(8.dp)
                             )
                             .clickable {

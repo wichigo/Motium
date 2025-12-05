@@ -2,6 +2,12 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.local.MotiumDatabase
+import com.application.motium.data.local.dao.WorkScheduleDao
+import com.application.motium.data.local.entities.AutoTrackingSettingsEntity
+import com.application.motium.data.local.entities.WorkScheduleEntity
+import com.application.motium.data.local.entities.toDomainModel
+import com.application.motium.data.local.entities.toEntity
 import com.application.motium.domain.model.WorkSchedule
 import com.application.motium.domain.model.AutoTrackingSettings
 import com.application.motium.domain.model.TrackingMode
@@ -14,10 +20,18 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+/**
+ * Repository for work schedules and auto-tracking settings.
+ * Uses offline-first architecture: Room cache first, then sync with Supabase.
+ */
 class WorkScheduleRepository private constructor(private val context: Context) {
 
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
+
+    // Room database for offline-first caching
+    private val database = MotiumDatabase.getInstance(context)
+    private val workScheduleDao: WorkScheduleDao = database.workScheduleDao()
 
     @Serializable
     data class WorkScheduleDto(
@@ -62,33 +76,71 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Récupère tous les créneaux horaires d'un utilisateur
+     * Récupère tous les créneaux horaires d'un utilisateur depuis le cache local.
+     * Utilise Room en priorité (offline-first).
      */
     suspend fun getWorkSchedules(userId: String): List<WorkSchedule> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("Fetching work schedules for user: $userId", "WorkScheduleRepository")
+            // Lire depuis le cache Room d'abord (offline-first)
+            val cachedSchedules = workScheduleDao.getWorkSchedulesForUser(userId)
+            if (cachedSchedules.isNotEmpty()) {
+                MotiumApplication.logger.d("Loaded ${cachedSchedules.size} work schedules from Room cache", "WorkScheduleRepository")
+                return@withContext cachedSchedules.map { it.toDomainModel() }
+            }
 
+            // Si cache vide, essayer de charger depuis Supabase
+            MotiumApplication.logger.i("No cached work schedules, fetching from Supabase for user: $userId", "WorkScheduleRepository")
+            val schedules = fetchWorkSchedulesFromSupabase(userId)
+
+            // Mettre en cache localement
+            if (schedules.isNotEmpty()) {
+                val entities = schedules.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                workScheduleDao.insertWorkSchedules(entities)
+                MotiumApplication.logger.i("Cached ${schedules.size} work schedules in Room", "WorkScheduleRepository")
+            }
+
+            schedules
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error loading work schedules: ${e.message}", "WorkScheduleRepository", e)
+            // Fallback to local cache even on error
+            try {
+                workScheduleDao.getWorkSchedulesForUser(userId).map { it.toDomainModel() }
+            } catch (e2: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    /**
+     * Fetch work schedules directly from Supabase (for sync).
+     */
+    private suspend fun fetchWorkSchedulesFromSupabase(userId: String): List<WorkSchedule> {
+        return try {
             val response = postgres.from("work_schedules")
                 .select {
                     filter {
                         eq("user_id", userId)
                     }
                 }.decodeList<WorkScheduleDto>()
-
-            val schedules = response.map { it.toWorkSchedule() }
-            MotiumApplication.logger.i("Loaded ${schedules.size} work schedules", "WorkScheduleRepository")
-            schedules
+            response.map { it.toWorkSchedule() }
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error loading work schedules: ${e.message}", "WorkScheduleRepository", e)
+            MotiumApplication.logger.e("Error fetching from Supabase: ${e.message}", "WorkScheduleRepository", e)
             emptyList()
         }
     }
 
     /**
-     * Récupère les créneaux d'un jour spécifique
+     * Récupère les créneaux d'un jour spécifique depuis le cache local.
      */
     suspend fun getWorkSchedulesForDay(userId: String, dayOfWeek: Int): List<WorkSchedule> = withContext(Dispatchers.IO) {
         try {
+            // Lire depuis le cache Room (offline-first)
+            val cachedSchedules = workScheduleDao.getWorkSchedulesForDay(userId, dayOfWeek)
+            if (cachedSchedules.isNotEmpty()) {
+                return@withContext cachedSchedules.map { it.toDomainModel() }
+            }
+
+            // Si cache vide, essayer Supabase
             val response = postgres.from("work_schedules")
                 .select {
                     filter {
@@ -97,33 +149,59 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                     }
                 }.decodeList<WorkScheduleDto>()
 
-            response.map { it.toWorkSchedule() }
+            val schedules = response.map { it.toWorkSchedule() }
+
+            // Mettre en cache
+            if (schedules.isNotEmpty()) {
+                val entities = schedules.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                workScheduleDao.insertWorkSchedules(entities)
+            }
+
+            schedules
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading schedules for day $dayOfWeek: ${e.message}", "WorkScheduleRepository", e)
-            emptyList()
+            // Fallback vers cache local
+            try {
+                workScheduleDao.getWorkSchedulesForDay(userId, dayOfWeek).map { it.toDomainModel() }
+            } catch (e2: Exception) {
+                emptyList()
+            }
         }
     }
 
     /**
-     * Sauvegarde un nouveau créneau horaire
+     * Sauvegarde un nouveau créneau horaire localement et synchronise avec Supabase.
      */
     suspend fun saveWorkSchedule(schedule: WorkSchedule): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Saving work schedule for day ${schedule.dayOfWeek}", "WorkScheduleRepository")
 
-            val dto = WorkScheduleDto(
-                user_id = schedule.userId,
-                day_of_week = schedule.dayOfWeek,
-                start_hour = schedule.startHour,
-                start_minute = schedule.startMinute,
-                end_hour = schedule.endHour,
-                end_minute = schedule.endMinute,
-                is_overnight = schedule.isOvernight,
-                is_active = schedule.isActive
-            )
+            // Sauvegarder localement d'abord (offline-first)
+            val entity = schedule.toEntity(lastSyncedAt = null, needsSync = true)
+            workScheduleDao.insertWorkSchedule(entity)
+            MotiumApplication.logger.i("✅ Work schedule saved locally", "WorkScheduleRepository")
 
-            postgres.from("work_schedules").insert(dto)
-            MotiumApplication.logger.i("✅ Work schedule saved successfully", "WorkScheduleRepository")
+            // Essayer de synchroniser avec Supabase
+            try {
+                val dto = WorkScheduleDto(
+                    id = schedule.id.ifEmpty { null },
+                    user_id = schedule.userId,
+                    day_of_week = schedule.dayOfWeek,
+                    start_hour = schedule.startHour,
+                    start_minute = schedule.startMinute,
+                    end_hour = schedule.endHour,
+                    end_minute = schedule.endMinute,
+                    is_overnight = schedule.isOvernight,
+                    is_active = schedule.isActive
+                )
+
+                postgres.from("work_schedules").insert(dto)
+                workScheduleDao.markWorkScheduleAsSynced(schedule.id, System.currentTimeMillis())
+                MotiumApplication.logger.i("✅ Work schedule synced to Supabase", "WorkScheduleRepository")
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("⚠️ Work schedule saved locally, will sync later: ${e.message}", "WorkScheduleRepository")
+            }
+
             true
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error saving work schedule: ${e.message}", "WorkScheduleRepository", e)
@@ -132,31 +210,43 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Met à jour un créneau existant
+     * Met à jour un créneau existant localement et synchronise avec Supabase.
      */
     suspend fun updateWorkSchedule(schedule: WorkSchedule): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Updating work schedule ${schedule.id}", "WorkScheduleRepository")
 
-            val dto = WorkScheduleDto(
-                user_id = schedule.userId,
-                day_of_week = schedule.dayOfWeek,
-                start_hour = schedule.startHour,
-                start_minute = schedule.startMinute,
-                end_hour = schedule.endHour,
-                end_minute = schedule.endMinute,
-                is_overnight = schedule.isOvernight,
-                is_active = schedule.isActive
-            )
+            // Mettre à jour localement d'abord (offline-first)
+            val entity = schedule.toEntity(lastSyncedAt = null, needsSync = true)
+            workScheduleDao.updateWorkSchedule(entity)
+            MotiumApplication.logger.i("✅ Work schedule updated locally", "WorkScheduleRepository")
 
-            postgres.from("work_schedules")
-                .update(dto) {
-                    filter {
-                        eq("id", schedule.id)
+            // Essayer de synchroniser avec Supabase
+            try {
+                val dto = WorkScheduleDto(
+                    user_id = schedule.userId,
+                    day_of_week = schedule.dayOfWeek,
+                    start_hour = schedule.startHour,
+                    start_minute = schedule.startMinute,
+                    end_hour = schedule.endHour,
+                    end_minute = schedule.endMinute,
+                    is_overnight = schedule.isOvernight,
+                    is_active = schedule.isActive
+                )
+
+                postgres.from("work_schedules")
+                    .update(dto) {
+                        filter {
+                            eq("id", schedule.id)
+                        }
                     }
-                }
 
-            MotiumApplication.logger.i("✅ Work schedule updated successfully", "WorkScheduleRepository")
+                workScheduleDao.markWorkScheduleAsSynced(schedule.id, System.currentTimeMillis())
+                MotiumApplication.logger.i("✅ Work schedule synced to Supabase", "WorkScheduleRepository")
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("⚠️ Work schedule updated locally, will sync later: ${e.message}", "WorkScheduleRepository")
+            }
+
             true
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error updating work schedule: ${e.message}", "WorkScheduleRepository", e)
@@ -165,20 +255,29 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Supprime un créneau horaire
+     * Supprime un créneau horaire localement et de Supabase.
      */
     suspend fun deleteWorkSchedule(scheduleId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Deleting work schedule $scheduleId", "WorkScheduleRepository")
 
-            postgres.from("work_schedules")
-                .delete {
-                    filter {
-                        eq("id", scheduleId)
-                    }
-                }
+            // Supprimer localement d'abord (offline-first)
+            workScheduleDao.deleteWorkScheduleById(scheduleId)
+            MotiumApplication.logger.i("✅ Work schedule deleted locally", "WorkScheduleRepository")
 
-            MotiumApplication.logger.i("✅ Work schedule deleted successfully", "WorkScheduleRepository")
+            // Essayer de supprimer de Supabase
+            try {
+                postgres.from("work_schedules")
+                    .delete {
+                        filter {
+                            eq("id", scheduleId)
+                        }
+                    }
+                MotiumApplication.logger.i("✅ Work schedule deleted from Supabase", "WorkScheduleRepository")
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("⚠️ Could not delete from Supabase: ${e.message}", "WorkScheduleRepository")
+            }
+
             true
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error deleting work schedule: ${e.message}", "WorkScheduleRepository", e)
@@ -187,12 +286,20 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Récupère les paramètres d'auto-tracking
+     * Récupère les paramètres d'auto-tracking depuis le cache local.
      */
     suspend fun getAutoTrackingSettings(userId: String): AutoTrackingSettings? = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Fetching auto-tracking settings for user: $userId", "WorkScheduleRepository")
 
+            // Lire depuis le cache Room d'abord (offline-first)
+            val cachedSettings = workScheduleDao.getAutoTrackingSettings(userId)
+            if (cachedSettings != null) {
+                MotiumApplication.logger.d("Loaded auto-tracking settings from Room cache", "WorkScheduleRepository")
+                return@withContext cachedSettings.toDomainModel()
+            }
+
+            // Si cache vide, essayer Supabase
             val response = postgres.from("auto_tracking_settings")
                 .select {
                     filter {
@@ -203,38 +310,58 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             val settings = response?.toAutoTrackingSettings()
             if (settings != null) {
                 MotiumApplication.logger.i("Auto-tracking mode: ${settings.trackingMode}", "WorkScheduleRepository")
+                // Mettre en cache
+                val entity = settings.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                workScheduleDao.insertAutoTrackingSettings(entity)
+                MotiumApplication.logger.i("Cached auto-tracking settings in Room", "WorkScheduleRepository")
             } else {
                 MotiumApplication.logger.i("No auto-tracking settings found, using default", "WorkScheduleRepository")
             }
             settings
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading auto-tracking settings: ${e.message}", "WorkScheduleRepository", e)
-            null
+            // Fallback vers cache local
+            try {
+                workScheduleDao.getAutoTrackingSettings(userId)?.toDomainModel()
+            } catch (e2: Exception) {
+                null
+            }
         }
     }
 
     /**
-     * Sauvegarde les paramètres d'auto-tracking (upsert)
+     * Sauvegarde les paramètres d'auto-tracking localement et synchronise avec Supabase.
      */
     suspend fun saveAutoTrackingSettings(settings: AutoTrackingSettings): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Saving auto-tracking settings: ${settings.trackingMode} for user ${settings.userId}", "WorkScheduleRepository")
 
-            val dto = AutoTrackingSettingsDto(
-                id = settings.id,
-                user_id = settings.userId,
-                tracking_mode = settings.trackingMode.name,
-                min_trip_distance_meters = settings.minTripDistanceMeters,
-                min_trip_duration_seconds = settings.minTripDurationSeconds
-            )
+            // Sauvegarder localement d'abord (offline-first)
+            val entity = settings.toEntity(lastSyncedAt = null, needsSync = true)
+            workScheduleDao.insertAutoTrackingSettings(entity)
+            MotiumApplication.logger.i("✅ Auto-tracking settings saved locally", "WorkScheduleRepository")
 
-            postgres.from("auto_tracking_settings")
-                .upsert(dto) {
-                    // Utiliser user_id comme clé de conflit (contrainte UNIQUE)
-                    onConflict = "user_id"
-                }
+            // Essayer de synchroniser avec Supabase
+            try {
+                val dto = AutoTrackingSettingsDto(
+                    id = settings.id.ifEmpty { null },
+                    user_id = settings.userId,
+                    tracking_mode = settings.trackingMode.name,
+                    min_trip_distance_meters = settings.minTripDistanceMeters,
+                    min_trip_duration_seconds = settings.minTripDurationSeconds
+                )
 
-            MotiumApplication.logger.i("✅ Auto-tracking settings saved successfully", "WorkScheduleRepository")
+                postgres.from("auto_tracking_settings")
+                    .upsert(dto) {
+                        onConflict = "user_id"
+                    }
+
+                workScheduleDao.markAutoTrackingSettingsAsSynced(settings.userId, System.currentTimeMillis())
+                MotiumApplication.logger.i("✅ Auto-tracking settings synced to Supabase", "WorkScheduleRepository")
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("⚠️ Auto-tracking settings saved locally, will sync later: ${e.message}", "WorkScheduleRepository")
+            }
+
             true
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error saving auto-tracking settings: ${e.message}", "WorkScheduleRepository", e)
@@ -333,5 +460,112 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             createdAt = created_at?.let { Instant.parse(it) } ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
             updatedAt = updated_at?.let { Instant.parse(it) } ?: Instant.fromEpochMilliseconds(System.currentTimeMillis())
         )
+    }
+
+    // ==================== Sync Methods ====================
+
+    /**
+     * Synchronise les données depuis Supabase vers le cache local.
+     */
+    suspend fun syncFromSupabase(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("Starting sync from Supabase for user: $userId", "WorkScheduleRepository")
+
+            // Sync work schedules
+            val schedules = fetchWorkSchedulesFromSupabase(userId)
+            if (schedules.isNotEmpty()) {
+                val entities = schedules.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                workScheduleDao.insertWorkSchedules(entities)
+                MotiumApplication.logger.i("Synced ${schedules.size} work schedules from Supabase", "WorkScheduleRepository")
+            }
+
+            // Sync auto-tracking settings
+            try {
+                val response = postgres.from("auto_tracking_settings")
+                    .select {
+                        filter {
+                            eq("user_id", userId)
+                        }
+                    }.decodeSingleOrNull<AutoTrackingSettingsDto>()
+
+                response?.toAutoTrackingSettings()?.let { settings ->
+                    val entity = settings.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                    workScheduleDao.insertAutoTrackingSettings(entity)
+                    MotiumApplication.logger.i("Synced auto-tracking settings from Supabase", "WorkScheduleRepository")
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Could not sync auto-tracking settings: ${e.message}", "WorkScheduleRepository")
+            }
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error syncing from Supabase: ${e.message}", "WorkScheduleRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Synchronise les données locales vers Supabase.
+     */
+    suspend fun syncToSupabase(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("Starting sync to Supabase for user: $userId", "WorkScheduleRepository")
+
+            // Sync work schedules that need sync
+            val schedulesNeedingSync = workScheduleDao.getWorkSchedulesNeedingSync(userId)
+            for (entity in schedulesNeedingSync) {
+                try {
+                    val dto = WorkScheduleDto(
+                        id = entity.id.ifEmpty { null },
+                        user_id = entity.userId,
+                        day_of_week = entity.dayOfWeek,
+                        start_hour = entity.startHour,
+                        start_minute = entity.startMinute,
+                        end_hour = entity.endHour,
+                        end_minute = entity.endMinute,
+                        is_overnight = entity.isOvernight,
+                        is_active = entity.isActive
+                    )
+
+                    postgres.from("work_schedules")
+                        .upsert(dto) {
+                            onConflict = "id"
+                        }
+
+                    workScheduleDao.markWorkScheduleAsSynced(entity.id, System.currentTimeMillis())
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Failed to sync work schedule ${entity.id}: ${e.message}", "WorkScheduleRepository")
+                }
+            }
+
+            // Sync auto-tracking settings if needed
+            val settingsNeedingSync = workScheduleDao.getAutoTrackingSettingsNeedingSync(userId)
+            if (settingsNeedingSync != null) {
+                try {
+                    val dto = AutoTrackingSettingsDto(
+                        id = settingsNeedingSync.id.ifEmpty { null },
+                        user_id = settingsNeedingSync.userId,
+                        tracking_mode = settingsNeedingSync.trackingMode,
+                        min_trip_distance_meters = settingsNeedingSync.minTripDistanceMeters,
+                        min_trip_duration_seconds = settingsNeedingSync.minTripDurationSeconds
+                    )
+
+                    postgres.from("auto_tracking_settings")
+                        .upsert(dto) {
+                            onConflict = "user_id"
+                        }
+
+                    workScheduleDao.markAutoTrackingSettingsAsSynced(userId, System.currentTimeMillis())
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Failed to sync auto-tracking settings: ${e.message}", "WorkScheduleRepository")
+                }
+            }
+
+            MotiumApplication.logger.i("Sync to Supabase completed", "WorkScheduleRepository")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error syncing to Supabase: ${e.message}", "WorkScheduleRepository", e)
+            Result.failure(e)
+        }
     }
 }

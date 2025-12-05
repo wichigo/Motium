@@ -44,8 +44,9 @@ import com.application.motium.presentation.enterprise.export.EmployeeExportScree
 import com.application.motium.presentation.enterprise.facturation.EmployeeFacturationScreen
 import androidx.compose.ui.platform.LocalContext
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.MotiumApplication
+import com.application.motium.utils.DeepLinkHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -70,18 +71,33 @@ fun MotiumNavHost(
         if (!authState.isLoading) {
             // Chargement terminé, naviguer vers la destination appropriée
             if (authState.isAuthenticated) {
-                // Déterminer si l'utilisateur est une entreprise en utilisant le rôle
-                val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
-                val homeRoute = if (isEnterprise) "enterprise_home" else "home"
+                // Check if there's a pending deep link to handle (company link invitation)
+                if (DeepLinkHandler.hasPendingLink()) {
+                    val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
+                    val settingsRoute = if (isEnterprise) "enterprise_settings" else "settings"
 
-                MotiumApplication.logger.i("🧭 Navigating to: $homeRoute (isEnterprise: $isEnterprise)", "Navigation")
+                    MotiumApplication.logger.i("🔗 Pending deep link detected - navigating to $settingsRoute", "Navigation")
 
-                // Si l'utilisateur est connecté, aller à l'accueil approprié
-                navController.navigate(homeRoute) {
-                    popUpTo("splash") { inclusive = true }
-                    popUpTo("login") { inclusive = true }
-                    popUpTo("register") { inclusive = true }
-                    launchSingleTop = true
+                    navController.navigate(settingsRoute) {
+                        popUpTo("splash") { inclusive = true }
+                        popUpTo("login") { inclusive = true }
+                        popUpTo("register") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                } else {
+                    // Déterminer si l'utilisateur est une entreprise en utilisant le rôle
+                    val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
+                    val homeRoute = if (isEnterprise) "enterprise_home" else "home"
+
+                    MotiumApplication.logger.i("🧭 Navigating to: $homeRoute (isEnterprise: $isEnterprise)", "Navigation")
+
+                    // Si l'utilisateur est connecté, aller à l'accueil approprié
+                    navController.navigate(homeRoute) {
+                        popUpTo("splash") { inclusive = true }
+                        popUpTo("login") { inclusive = true }
+                        popUpTo("register") { inclusive = true }
+                        launchSingleTop = true
+                    }
                 }
             } else {
                 MotiumApplication.logger.i("🧭 Navigating to: login (not authenticated)", "Navigation")

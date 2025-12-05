@@ -15,6 +15,11 @@ val MotiumPrimary: Color
     @Composable
     get() = LocalMotiumPrimary.current
 
+// Teinte claire dynamique pour les fonds d'icônes (basée sur la couleur primaire)
+val MotiumPrimaryTint: Color
+    @Composable
+    get() = LocalMotiumPrimary.current.copy(alpha = 0.15f)
+
 val MotiumPrimaryLight = Color(0xFF22c55e)
 val MotiumPrimaryDark = Color(0xFF15803d)
 

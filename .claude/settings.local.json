@@ -9,7 +9,10 @@
       "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\test\\java\\com\\application\\motium\\service\\LocationTrackingServiceTest.kt\")",
       "WebFetch(domain:bpifrance-creation.fr)",
       "Skill(supabase-kotlin)",
-      "Bash(timeout 30 adb shell:*)"
+      "Bash(timeout 30 adb shell:*)",
+      "Bash(timeout 20 adb logcat:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs"
     ],
     "deny": [],
     "ask": []

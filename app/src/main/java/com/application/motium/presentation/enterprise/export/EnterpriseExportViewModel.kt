@@ -6,7 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.VehicleRepository
 import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.repository.AuthRepository
 import com.application.motium.utils.ExportManager
@@ -44,7 +44,7 @@ data class ExportStats(
 class EnterpriseExportViewModel(private val context: Context) : ViewModel() {
 
     private val tripRepository = TripRepository.getInstance(context)
-    private val vehicleRepository = SupabaseVehicleRepository.getInstance(context)
+    private val vehicleRepository = VehicleRepository.getInstance(context)  // Room cache
     private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context)
     private val exportManager = ExportManager(context)
 

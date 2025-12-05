@@ -163,7 +163,7 @@ fun TripLimitReachedDialog(
     onDismiss: () -> Unit,
     onUpgrade: () -> Unit = {},
     remainingTrips: Int = 0,
-    tripLimit: Int = 10
+    tripLimit: Int = 20
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Card(

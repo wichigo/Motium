@@ -50,8 +50,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-// Définition des couleurs spécifiques à la maquette
-val MockupGreen = Color(0xFF10B981)
+// Couleurs additionnelles (MotiumPrimary remplacé par MotiumPrimary du thème)
 val MockupTextBlack = Color(0xFF1F2937)
 val MockupTextGray = Color(0xFF6B7280)
 val MockupBackground = Color(0xFFF3F4F6)
@@ -82,7 +81,8 @@ fun NewHomeScreen(
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var autoTrackingEnabled by remember { mutableStateOf(false) }
-    var trackingMode by remember { mutableStateOf<TrackingMode?>(null) }
+    // Initialiser avec la valeur du cache local pour éviter le "flash" DISABLED → mode réel
+    var trackingMode by remember { mutableStateOf(tripRepository.getTrackingMode()) }
     var hasWorkSchedules by remember { mutableStateOf(false) }
     var showNoSchedulesDialog by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -183,7 +183,10 @@ fun NewHomeScreen(
                 currentUser?.let { user ->
                     coroutineScope.launch(Dispatchers.IO) {
                         val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
-                        trackingMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                        val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                        // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
+                        tripRepository.setTrackingMode(supabaseMode)
+                        trackingMode = supabaseMode
 
                         // Vérifier si l'utilisateur a des horaires définis
                         val schedules = workScheduleRepository.getWorkSchedules(user.id)
@@ -200,11 +203,11 @@ fun NewHomeScreen(
         }
     }
 
-    // Couleurs dynamiques
-    val backgroundColor = if (isDarkMode) Color(0xFF121212) else MockupBackground
-    val cardColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White
-    val textColor = if (isDarkMode) Color.White else MockupTextBlack
-    val subTextColor = if (isDarkMode) Color.Gray else MockupTextGray
+    // Couleurs dynamiques (utilise les couleurs du thème)
+    val backgroundColor = if (isDarkMode) BackgroundDark else BackgroundLight
+    val cardColor = if (isDarkMode) SurfaceDark else SurfaceLight
+    val textColor = if (isDarkMode) TextDark else TextLight
+    val subTextColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -250,7 +253,9 @@ fun NewHomeScreen(
                             // 3. Sync horaires de travail
                             currentUser?.let { user ->
                                 val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
-                                trackingMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                                val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                                tripRepository.setTrackingMode(supabaseMode)
+                                trackingMode = supabaseMode
                                 val schedules = workScheduleRepository.getWorkSchedules(user.id)
                                 hasWorkSchedules = schedules.isNotEmpty()
                             }
@@ -291,7 +296,7 @@ fun NewHomeScreen(
                             .fillMaxWidth()
                             .height(56.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MockupGreen,
+                            containerColor = MotiumPrimary,
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(28.dp),
@@ -319,7 +324,7 @@ fun NewHomeScreen(
                                 .padding(horizontal = 20.dp, vertical = 16.dp)
                         ) {
                             TrackingModeDropdown(
-                                selectedMode = trackingMode ?: TrackingMode.DISABLED,
+                                selectedMode = trackingMode,
                                 onModeSelected = { newMode ->
                                     // Si Pro sélectionné sans horaires définis, rediriger vers Planning
                                     if (newMode == TrackingMode.WORK_HOURS_ONLY && !hasWorkSchedules) {
@@ -340,6 +345,8 @@ fun NewHomeScreen(
                                                 updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis())
                                             )
                                             workScheduleRepository.saveAutoTrackingSettings(settings)
+                                            // Mettre à jour le cache local ET l'état UI
+                                            tripRepository.setTrackingMode(newMode)
                                             trackingMode = newMode
 
                                             // Gérer le démarrage/arrêt des services selon le mode
@@ -394,9 +401,9 @@ fun NewHomeScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                StatItem(String.format("%.1f", todayDistance / 1000), "Kilometers", MockupGreen, textColor, subTextColor)
-                                StatItem(String.format("$%.2f", todayIndemnities / 1000), "Indemnities", MockupGreen, textColor, subTextColor)
-                                StatItem(todayTrips.size.toString(), "Trips", MockupGreen, textColor, subTextColor)
+                                StatItem(String.format("%.1f", todayDistance / 1000), "Kilometers", MotiumPrimary, textColor, subTextColor)
+                                StatItem(String.format("$%.2f", todayIndemnities / 1000), "Indemnities", MotiumPrimary, textColor, subTextColor)
+                                StatItem(todayTrips.size.toString(), "Trips", MotiumPrimary, textColor, subTextColor)
                             }
                         }
                     }
@@ -444,7 +451,7 @@ fun NewHomeScreen(
                                     Icon(
                                         Icons.Default.Visibility,
                                         contentDescription = "View Expenses",
-                                        tint = MockupGreen,
+                                        tint = MotiumPrimary,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -461,7 +468,7 @@ fun NewHomeScreen(
                                     Icon(
                                         Icons.Default.Receipt,
                                         contentDescription = "Add Expense",
-                                        tint = MockupGreen,
+                                        tint = MotiumPrimary,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -511,7 +518,7 @@ fun NewHomeScreen(
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(32.dp),
-                                color = MockupGreen
+                                color = MotiumPrimary
                             )
                         }
                     }
@@ -543,7 +550,7 @@ fun NewHomeScreen(
                     refreshing = isRefreshing,
                     state = pullRefreshState,
                     modifier = Modifier.align(Alignment.TopCenter),
-                    contentColor = MockupGreen
+                    contentColor = MotiumPrimary
                 )
             }
         }
@@ -558,7 +565,8 @@ fun NewHomeScreen(
                         "export" -> onNavigateToExport()
                         "settings" -> onNavigateToSettings()
                     }
-                }
+                },
+                isDarkMode = isDarkMode
             )
         }
     }
@@ -586,7 +594,7 @@ fun NewHomeScreen(
                         onNavigateToCalendarPlanning()
                     }
                 ) {
-                    Text("Configurer", color = MockupGreen)
+                    Text("Configurer", color = MotiumPrimary)
                 }
             },
             dismissButton = {
@@ -643,14 +651,14 @@ fun NewHomeTripCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.Top
+                .padding(12.dp)
+                .height(83.dp)
         ) {
             // 1. MAP
             Box(
                 modifier = Modifier
-                    .size(88.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(83.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(Color(0xFFE5E7EB))
             ) {
                 if (startLocation != null && endLocation != null) {
@@ -674,164 +682,166 @@ fun NewHomeTripCard(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            // 2. DETAILS COLUMN
-            Column(
-                modifier = Modifier.weight(1f)
+            // 2. MIDDLE SECTION: Dots + Addresses
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
             ) {
-                // --- Ligne Départ ---
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Row(modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .size(8.dp)
-                                .background(MockupGreen, CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = trip.startAddress ?: "Unknown Start",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = textColor,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = startTimeStr,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = subTextColor
-                            )
-                        }
-                    }
-                    // Badge Pro/Perso
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = when (trip.tripType) {
-                            "PROFESSIONAL" -> Color(0xFF10B981).copy(alpha = 0.15f)
-                            "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
-                            else -> Color.Gray.copy(alpha = 0.15f)
-                        }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = when (trip.tripType) {
-                                    "PROFESSIONAL" -> Icons.Default.Work
-                                    "PERSONAL" -> Icons.Default.Person
-                                    else -> Icons.Default.HelpOutline
-                                },
-                                contentDescription = null,
-                                modifier = Modifier.size(12.dp),
-                                tint = when (trip.tripType) {
-                                    "PROFESSIONAL" -> Color(0xFF10B981)
-                                    "PERSONAL" -> Color(0xFF3B82F6)
-                                    else -> Color.Gray
-                                }
-                            )
-                            Text(
-                                when (trip.tripType) {
-                                    "PROFESSIONAL" -> "Pro"
-                                    "PERSONAL" -> "Perso"
-                                    else -> "?"
-                                },
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                fontSize = 11.sp,
-                                color = when (trip.tripType) {
-                                    "PROFESSIONAL" -> Color(0xFF10B981)
-                                    "PERSONAL" -> Color(0xFF3B82F6)
-                                    else -> Color.Gray
-                                }
-                            )
-                        }
-                    }
-                }
-
-                // --- Connecteur (Pointillés) ---
-                Row(modifier = Modifier.height(24.dp)) {
-                    Box(modifier = Modifier.width(4.dp))
-                    Canvas(modifier = Modifier
-                        .width(1.dp)
+                // Colonne des points et ligne de connexion
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
                         .fillMaxHeight()
-                        .padding(vertical = 2.dp)
+                        .padding(end = 6.dp)
+                ) {
+                    // Point de départ
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(MotiumPrimary, CircleShape)
+                    )
+                    // Ligne pointillée
+                    Canvas(
+                        modifier = Modifier
+                            .width(2.dp)
+                            .weight(1f)
                     ) {
                         drawLine(
                             color = Color.LightGray,
-                            start = Offset(0f, 0f),
-                            end = Offset(0f, size.height),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f),
-                            strokeWidth = 2.dp.toPx()
+                            start = Offset(size.width / 2, 0f),
+                            end = Offset(size.width / 2, size.height),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f),
+                            strokeWidth = 1.5.dp.toPx()
+                        )
+                    }
+                    // Point d'arrivée
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(MotiumPrimary, CircleShape)
+                    )
+                }
+
+                // Colonne des adresses
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Départ
+                    Column {
+                        Text(
+                            text = trip.startAddress ?: "Unknown Start",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = textColor,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = startTimeStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = subTextColor
+                        )
+                    }
+
+                    // Arrivée
+                    Column {
+                        Text(
+                            text = trip.endAddress ?: "Unknown End",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = textColor,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = endTimeStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = subTextColor
+                        )
+                    }
+                }
+            }
+
+            // 3. RIGHT SECTION: Badge + Price + Switch (colonne alignée au centre)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .padding(start = 14.dp)
+            ) {
+                // Badge Pro/Perso (en haut)
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = when (trip.tripType) {
+                        "PROFESSIONAL" -> MotiumPrimaryTint
+                        "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
+                        else -> Color.Gray.copy(alpha = 0.15f)
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Icon(
+                            imageVector = when (trip.tripType) {
+                                "PROFESSIONAL" -> Icons.Default.Work
+                                "PERSONAL" -> Icons.Default.Person
+                                else -> Icons.Default.HelpOutline
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(9.dp),
+                            tint = when (trip.tripType) {
+                                "PROFESSIONAL" -> MotiumPrimary
+                                "PERSONAL" -> Color(0xFF3B82F6)
+                                else -> Color.Gray
+                            }
+                        )
+                        Text(
+                            when (trip.tripType) {
+                                "PROFESSIONAL" -> "Pro"
+                                "PERSONAL" -> "Perso"
+                                else -> "?"
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.sp),
+                            color = when (trip.tripType) {
+                                "PROFESSIONAL" -> MotiumPrimary
+                                "PERSONAL" -> Color(0xFF3B82F6)
+                                else -> Color.Gray
+                            }
                         )
                     }
                 }
 
-                // --- Ligne Arrivée + Indemnités + Switch ---
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                // Prix + Switch groupés en bas
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    // Adresse d'arrivée
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .size(8.dp)
-                                .background(MockupGreen, CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = trip.endAddress ?: "Unknown End",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = textColor,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = endTimeStr,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = subTextColor
-                            )
-                        }
-                    }
+                    // Indemnités
+                    Text(
+                        text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = MotiumPrimary
+                    )
 
-                    // Indemnités + Switch (colonne)
-                    Column(
-                        horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        // Indemnités
-                        Text(
-                            text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MockupGreen,
-                            fontSize = 14.sp
-                        )
-
-                        // Toggle Switch (compacté)
-                        Switch(
-                            checked = trip.isValidated,
-                            onCheckedChange = { onToggleValidation() },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = MockupGreen,
-                                uncheckedThumbColor = Color.White,
-                                uncheckedTrackColor = Color(0xFFE5E7EB),
-                                uncheckedBorderColor = Color.Transparent
-                            ),
-                            modifier = Modifier
-                                .scale(0.8f)
-                                .offset(y = (-4).dp)
-                        )
-                    }
+                    // Toggle Switch
+                    Switch(
+                        checked = trip.isValidated,
+                        onCheckedChange = { onToggleValidation() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = MotiumPrimary,
+                            uncheckedThumbColor = Color.White,
+                            uncheckedTrackColor = Color(0xFFE5E7EB),
+                            uncheckedBorderColor = Color.Transparent
+                        ),
+                        modifier = Modifier
+                            .scale(0.65f)
+                            .offset(y = 22.dp)
+                    )
                 }
             }
         }

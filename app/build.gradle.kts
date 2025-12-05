@@ -23,6 +23,9 @@ android {
         // Build config for Supabase keys
         buildConfigField("String", "SUPABASE_URL", "\"https://hjknuqqtmvbfvrmvvtxh.supabase.co\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhqa251cXF0bXZiZnZybXZ2dHhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3MTA0MjIsImV4cCI6MjA3NDI4NjQyMn0.VLh94hdp1Q1OFcKx-yM3j2EifxC5KJjUQEyZ7eMFOIk\"")
+
+        // Stripe configuration (publishable key - safe to include in client)
+        buildConfigField("String", "STRIPE_PUBLISHABLE_KEY", "\"pk_test_YOUR_STRIPE_PUBLISHABLE_KEY\"")
     }
 
     buildTypes {
@@ -133,6 +136,9 @@ dependencies {
 
     // PDF Generation
     implementation(libs.itextpdf)
+
+    // Stripe Payments
+    implementation("com.stripe:stripe-android:22.0.0")
 
     // Permissions
     implementation(libs.accompanist.permissions)

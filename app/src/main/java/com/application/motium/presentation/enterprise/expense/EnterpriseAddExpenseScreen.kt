@@ -20,11 +20,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.application.motium.MotiumApplication
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.service.ReceiptAnalysisService
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
@@ -39,7 +39,7 @@ fun EnterpriseAddExpenseScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val tripRepository = remember { TripRepository.getInstance(context) }
     val receiptAnalysisService = remember { ReceiptAnalysisService.getInstance(context) }
     val storageService = remember { com.application.motium.service.SupabaseStorageService.getInstance(context) }
@@ -165,14 +165,15 @@ fun EnterpriseAddExpenseScreen(
                                 )
 
                                 coroutineScope.launch {
-                                    try {
-                                        expenseRepository.saveExpenses(listOf(expense))
+                                    val result = expenseRepository.saveExpense(expense)
+                                    if (result.isSuccess) {
                                         MotiumApplication.logger.i("Expense saved: ${expense.id}", "AddExpenseScreen")
                                         Toast.makeText(context, "Expense saved successfully", Toast.LENGTH_SHORT).show()
                                         onExpenseSaved()
-                                    } catch (e: Exception) {
-                                        MotiumApplication.logger.e("Failed to save expense: ${e.message}", "AddExpenseScreen", e)
-                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        val error = result.exceptionOrNull()
+                                        MotiumApplication.logger.e("Failed to save expense: ${error?.message}", "AddExpenseScreen", error)
+                                        Toast.makeText(context, "Error: ${error?.message}", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             } catch (e: Exception) {
@@ -451,7 +452,7 @@ fun AmountField(
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Auto-detected",
-                        tint = MockupGreen,
+                        tint = MotiumPrimary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -481,11 +482,11 @@ fun AmountField(
             shape = RoundedCornerShape(16.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 unfocusedBorderColor = if (isAutoDetected)
-                    MockupGreen.copy(alpha = 0.5f)
+                    MotiumPrimary.copy(alpha = 0.5f)
                 else
                     MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                 focusedBorderColor = if (isAutoDetected)
-                    MockupGreen
+                    MotiumPrimary
                 else
                     MaterialTheme.colorScheme.primary
             )

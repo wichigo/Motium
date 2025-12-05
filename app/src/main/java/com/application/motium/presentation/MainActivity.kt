@@ -1,5 +1,6 @@
 package com.application.motium.presentation
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -26,6 +27,7 @@ import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.navigation.MotiumNavHost
 import com.application.motium.presentation.theme.MotiumTheme
+import com.application.motium.utils.DeepLinkHandler
 import com.application.motium.utils.GoogleSignInHelper
 import com.application.motium.utils.PermissionManager
 import com.application.motium.utils.ThemeManager
@@ -68,6 +70,9 @@ class MainActivity : ComponentActivity() {
         } else {
             MotiumApplication.logger.i("All permissions already granted", "MainActivity")
         }
+
+        // Handle deep link from intent
+        handleDeepLink(intent)
 
         setContent {
             val themeManager = ThemeManager.getInstance(this)
@@ -129,11 +134,32 @@ class MainActivity : ComponentActivity() {
         MotiumApplication.logger.i("⏸️ App paused - connection service continues", "MainActivity")
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Handle deep links when app is already running
+        handleDeepLink(intent)
+    }
+
+    /**
+     * Process deep link from intent.
+     * Extracts token for company link invitations and stores it for later processing.
+     */
+    private fun handleDeepLink(intent: Intent?) {
+        if (intent == null) return
+
+        val handled = DeepLinkHandler.handleIntent(intent)
+        if (handled) {
+            MotiumApplication.logger.i("Deep link processed successfully", "MainActivity")
+        }
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
     override fun onRequestPermissionsResult(
         requestCode: Int,
-        permissions: Array<out String>,
+        permissions: Array<String>,
         grantResults: IntArray
     ) {
+        @Suppress("DEPRECATION")
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         PermissionManager.handlePermissionResult(
             requestCode = requestCode,

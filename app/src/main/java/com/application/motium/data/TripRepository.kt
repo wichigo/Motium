@@ -10,6 +10,7 @@ import com.application.motium.data.supabase.SupabaseTripRepository
 import com.application.motium.domain.model.Trip as DomainTrip
 import com.application.motium.domain.model.TripType
 import com.application.motium.domain.model.LocationPoint
+import com.application.motium.domain.model.TrackingMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
@@ -20,6 +21,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.*
+import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.domain.model.SubscriptionType
 
 @Serializable
 data class TripLocation(
@@ -85,6 +88,7 @@ class TripRepository private constructor(context: Context) {
         private const val PREFS_NAME = "motium_trips"
         private const val KEY_TRIPS = "trips_json"
         private const val KEY_AUTO_TRACKING = "auto_tracking_enabled"
+        private const val KEY_TRACKING_MODE = "tracking_mode"  // Cache local du TrackingMode (ALWAYS, WORK_HOURS_ONLY, DISABLED)
         private const val KEY_LAST_USER_ID = "last_user_id"  // Pour charger les trips avant l'auth complète
         private const val KEY_MIGRATION_COMPLETE = "trips_migrated_to_room" // Flag de migration
 
@@ -108,6 +112,7 @@ class TripRepository private constructor(context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val supabaseTripRepository = SupabaseTripRepository.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
+    private val localUserRepository = LocalUserRepository.getInstance(context)
 
     // Migration automatique au premier lancement
     init {
@@ -263,6 +268,131 @@ class TripRepository private constructor(context: Context) {
         }
     }
 
+    /**
+     * Sealed class representing trip limit check result
+     */
+    sealed class TripLimitCheckResult {
+        data class Allowed(val remaining: Int?, val isUnlimited: Boolean) : TripLimitCheckResult()
+        data class LimitReached(val limit: Int, val current: Int) : TripLimitCheckResult()
+        data class Error(val message: String) : TripLimitCheckResult()
+    }
+
+    /**
+     * Check if user can create a new trip based on subscription limits.
+     * FREE users: 20 trips/month
+     * PREMIUM/LIFETIME: Unlimited
+     */
+    suspend fun canCreateTrip(): TripLimitCheckResult = withContext(Dispatchers.IO) {
+        try {
+            val user = localUserRepository.getLoggedInUser()
+                ?: return@withContext TripLimitCheckResult.Error("Utilisateur non connecté")
+
+            val subscription = user.subscription
+            val tripLimit = subscription.getTripLimit()
+
+            if (tripLimit == null) {
+                // Unlimited trips (Premium or Lifetime)
+                return@withContext TripLimitCheckResult.Allowed(
+                    remaining = null,
+                    isUnlimited = true
+                )
+            }
+
+            val currentCount = user.monthlyTripCount
+            val remaining = tripLimit - currentCount
+
+            if (remaining > 0) {
+                TripLimitCheckResult.Allowed(
+                    remaining = remaining,
+                    isUnlimited = false
+                )
+            } else {
+                TripLimitCheckResult.LimitReached(
+                    limit = tripLimit,
+                    current = currentCount
+                )
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error checking trip limit: ${e.message}", "TripRepository", e)
+            TripLimitCheckResult.Error("Erreur: ${e.message}")
+        }
+    }
+
+    /**
+     * Get remaining trips count for the current month.
+     * Returns null if unlimited.
+     */
+    suspend fun getRemainingTripsCount(): Int? = withContext(Dispatchers.IO) {
+        try {
+            val user = localUserRepository.getLoggedInUser() ?: return@withContext null
+            val tripLimit = user.subscription.getTripLimit() ?: return@withContext null
+            val remaining = tripLimit - user.monthlyTripCount
+            maxOf(0, remaining)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting remaining trips: ${e.message}", "TripRepository", e)
+            null
+        }
+    }
+
+    /**
+     * Increment the monthly trip count after a successful trip save.
+     * Only increments for FREE users (Premium/Lifetime have unlimited trips).
+     * Note: Supabase sync will happen via normal user profile sync mechanisms.
+     */
+    private suspend fun incrementMonthlyTripCount() = withContext(Dispatchers.IO) {
+        try {
+            val user = localUserRepository.getLoggedInUser() ?: return@withContext
+
+            // Only track for FREE users
+            if (user.subscription.type != SubscriptionType.FREE) {
+                return@withContext
+            }
+
+            val newCount = user.monthlyTripCount + 1
+            val updatedUser = user.copy(monthlyTripCount = newCount)
+            localUserRepository.updateUser(updatedUser)
+
+            MotiumApplication.logger.i(
+                "📊 Monthly trip count incremented: $newCount/${user.subscription.getTripLimit() ?: "∞"}",
+                "TripRepository"
+            )
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error incrementing trip count: ${e.message}", "TripRepository", e)
+        }
+    }
+
+    /**
+     * Save a trip with limit checking.
+     * Returns false if the trip limit has been reached.
+     */
+    suspend fun saveTripWithLimitCheck(trip: Trip): Boolean = withContext(Dispatchers.IO) {
+        // Check limit first
+        when (val limitCheck = canCreateTrip()) {
+            is TripLimitCheckResult.LimitReached -> {
+                MotiumApplication.logger.w(
+                    "⚠️ Trip limit reached: ${limitCheck.current}/${limitCheck.limit}. Trip not saved.",
+                    "TripRepository"
+                )
+                return@withContext false
+            }
+            is TripLimitCheckResult.Error -> {
+                MotiumApplication.logger.e("Error checking trip limit: ${limitCheck.message}", "TripRepository")
+                // Allow saving in case of error (fail-open)
+            }
+            is TripLimitCheckResult.Allowed -> {
+                // Continue to save
+            }
+        }
+
+        // Save the trip
+        saveTrip(trip)
+
+        // Increment count after successful save
+        incrementMonthlyTripCount()
+
+        true
+    }
+
     suspend fun getAllTrips(): List<Trip> = withContext(Dispatchers.IO) {
         try {
             // SECURITY: Obtenir l'utilisateur actuel pour filtrer les trips
@@ -290,6 +420,19 @@ class TripRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading trips: ${e.message}", "TripRepository", e)
             return@withContext emptyList()
+        }
+    }
+
+    /**
+     * Récupère un trajet par son ID directement depuis Room (rapide, pas de chargement de tous les trajets).
+     */
+    suspend fun getTripById(tripId: String): Trip? = withContext(Dispatchers.IO) {
+        try {
+            val entity = tripDao.getTripById(tripId)
+            entity?.toDataModel()
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting trip by ID: ${e.message}", "TripRepository", e)
+            null
         }
     }
 
@@ -386,6 +529,29 @@ class TripRepository private constructor(context: Context) {
     fun setAutoTrackingEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_AUTO_TRACKING, enabled).apply()
         MotiumApplication.logger.i("Auto tracking set to: $enabled", "TripRepository")
+    }
+
+    /**
+     * Récupère le TrackingMode depuis le cache local (SharedPreferences).
+     * Cette valeur est utilisée pour l'affichage immédiat avant la synchronisation avec Supabase.
+     */
+    fun getTrackingMode(): TrackingMode {
+        val modeName = prefs.getString(KEY_TRACKING_MODE, TrackingMode.DISABLED.name)
+        return try {
+            TrackingMode.valueOf(modeName ?: TrackingMode.DISABLED.name)
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("Invalid tracking mode in prefs: $modeName, defaulting to DISABLED", "TripRepository")
+            TrackingMode.DISABLED
+        }
+    }
+
+    /**
+     * Sauvegarde le TrackingMode dans le cache local (SharedPreferences).
+     * Doit être appelé après chaque changement de mode pour maintenir la cohérence.
+     */
+    fun setTrackingMode(mode: TrackingMode) {
+        prefs.edit().putString(KEY_TRACKING_MODE, mode.name).apply()
+        MotiumApplication.logger.i("Tracking mode cached locally: $mode", "TripRepository")
     }
 
     suspend fun getTripStats(): TripStats = withContext(Dispatchers.IO) {

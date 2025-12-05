@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-val MockupGreen = Color(0xFF10B981)
+// MotiumPrimary est importé de com.application.motium.presentation.theme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -245,7 +245,7 @@ fun EnterpriseNewHomeScreen(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MockupGreen,
+                            containerColor = MotiumPrimary,
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(24.dp) // Fully rounded
@@ -303,7 +303,7 @@ fun EnterpriseNewHomeScreen(
                                 },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
-                                    checkedTrackColor = MockupGreen,
+                                    checkedTrackColor = MotiumPrimary,
                                     uncheckedThumbColor = Color.White,
                                     uncheckedTrackColor = Color(0xFFe2e8f0)
                                 )
@@ -401,7 +401,7 @@ fun EnterpriseNewHomeScreen(
                                         Icon(
                                             Icons.Default.Visibility,
                                             contentDescription = "View Expenses",
-                                            tint = MockupGreen
+                                            tint = MotiumPrimary
                                         )
                                     }
 
@@ -416,7 +416,7 @@ fun EnterpriseNewHomeScreen(
                                         Icon(
                                             Icons.Default.Receipt,
                                             contentDescription = "Add Expense",
-                                            tint = MockupGreen
+                                            tint = MotiumPrimary
                                         )
                                     }
                                 }
@@ -481,7 +481,7 @@ fun EnterpriseNewHomeScreen(
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(32.dp),
-                                color = MockupGreen
+                                color = MotiumPrimary
                             )
                         }
                     }
@@ -548,7 +548,7 @@ fun EnterpriseNewHomeScreen(
                 TextButton(
                     onClick = { showAutoTrackingBlockedDialog = false }
                 ) {
-                    Text("OK", color = MockupGreen)
+                    Text("OK", color = MotiumPrimary)
                 }
             },
             containerColor = Color.White,
@@ -572,7 +572,7 @@ private fun EnterpriseHomeDailyStat(
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
-            color = MockupGreen,
+            color = MotiumPrimary,
             fontSize = 20.sp
         )
         Text(
@@ -682,7 +682,7 @@ private fun EnterpriseHomeTripCard(
                                 Icon(
                                     imageVector = Icons.Default.LocationOn,
                                     contentDescription = null,
-                                    tint = MockupGreen,
+                                    tint = MotiumPrimary,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
@@ -705,7 +705,7 @@ private fun EnterpriseHomeTripCard(
                                 modifier = Modifier
                                     .padding(top = 4.dp)
                                     .size(8.dp)
-                                    .background(MockupGreen, shape = RoundedCornerShape(4.dp))
+                                    .background(MotiumPrimary, shape = RoundedCornerShape(4.dp))
                             )
                             Column {
                                 Text(
@@ -744,7 +744,7 @@ private fun EnterpriseHomeTripCard(
                                 modifier = Modifier
                                     .padding(top = 4.dp)
                                     .size(8.dp)
-                                    .background(MockupGreen, shape = RoundedCornerShape(4.dp))
+                                    .background(MotiumPrimary, shape = RoundedCornerShape(4.dp))
                             )
                             Column {
                                 Text(
@@ -775,7 +775,7 @@ private fun EnterpriseHomeTripCard(
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
-                    color = MockupGreen,
+                    color = MotiumPrimary,
                     fontSize = 14.sp,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -793,7 +793,7 @@ private fun EnterpriseHomeTripCard(
                         onCheckedChange = { onToggleValidation() },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
-                            checkedTrackColor = MockupGreen,
+                            checkedTrackColor = MotiumPrimary,
                             uncheckedThumbColor = Color.White,
                             uncheckedTrackColor = Color(0xFFe2e8f0)
                         ),

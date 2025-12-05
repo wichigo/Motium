@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,15 +124,15 @@ fun EmployeeDetailsScreen(
                             )
                         },
                         colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MockupGreen.copy(alpha = 0.2f),
-                            labelColor = MockupGreen
+                            containerColor = MotiumPrimary.copy(alpha = 0.2f),
+                            labelColor = MotiumPrimary
                         ),
                         leadingIcon = {
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(MockupGreen)
+                                    .background(MotiumPrimary)
                             )
                         }
                     )
@@ -174,7 +174,7 @@ fun EmployeeDetailsScreen(
                             Icon(
                                 imageVector = Icons.Default.Email,
                                 contentDescription = null,
-                                tint = MockupGreen,
+                                tint = MotiumPrimary,
                                 modifier = Modifier.size(28.dp)
                             )
                             Column(
@@ -218,7 +218,7 @@ fun EmployeeDetailsScreen(
                             Icon(
                                 imageVector = Icons.Default.Phone,
                                 contentDescription = null,
-                                tint = MockupGreen,
+                                tint = MotiumPrimary,
                                 modifier = Modifier.size(28.dp)
                             )
                             Column(
@@ -371,7 +371,7 @@ fun EmployeeDetailsScreen(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MockupGreen
+                            containerColor = MotiumPrimary
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
@@ -397,7 +397,7 @@ fun EmployeeDetailsScreen(
                             "Edit Details",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
-                            color = MockupGreen
+                            color = MotiumPrimary
                         )
                     }
                 }

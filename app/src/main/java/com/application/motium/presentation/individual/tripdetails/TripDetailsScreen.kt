@@ -28,8 +28,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.VehicleRepository
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.domain.model.Vehicle
@@ -56,8 +56,8 @@ fun TripDetailsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
-    val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }  // Room cache, not Supabase
     val themeManager = remember { ThemeManager.getInstance(context) }
 
     // Utiliser authState de authViewModel
@@ -80,10 +80,10 @@ fun TripDetailsScreen(
     // Charger le trip et les expenses au démarrage
     LaunchedEffect(tripId) {
         coroutineScope.launch {
-            val allTrips = tripRepository.getAllTrips()
-            trip = allTrips.firstOrNull { it.id == tripId }
+            // Chargement direct par ID (rapide, utilise Room)
+            trip = tripRepository.getTripById(tripId)
 
-            // Load vehicle if trip has a vehicleId
+            // Load vehicle if trip has a vehicleId (from Room cache)
             trip?.vehicleId?.let { vehicleId ->
                 try {
                     val loadedVehicle = vehicleRepository.getVehicleById(vehicleId)
@@ -162,7 +162,7 @@ fun TripDetailsScreen(
                         Icon(
                             Icons.Default.Edit,
                             contentDescription = "Modifier",
-                            tint = MockupGreen
+                            tint = MotiumPrimary
                         )
                     }
                     IconButton(onClick = { showDeleteDialog = true }) {
@@ -187,7 +187,7 @@ fun TripDetailsScreen(
                     .padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = MockupGreen)
+                CircularProgressIndicator(color = MotiumPrimary)
             }
         } else if (trip == null) {
             Box(
@@ -258,7 +258,7 @@ fun TripDetailsScreen(
                                         .align(Alignment.TopEnd)
                                         .padding(8.dp),
                                     strokeWidth = 2.dp,
-                                    color = MockupGreen
+                                    color = MotiumPrimary
                                 )
                             }
                         } else {
@@ -307,7 +307,7 @@ fun TripDetailsScreen(
                                 modifier = Modifier.clickable { showTripTypeDialog = true },
                                 shape = RoundedCornerShape(12.dp),
                                 color = when (currentTrip.tripType) {
-                                    "PROFESSIONAL" -> MockupGreen.copy(alpha = 0.15f)
+                                    "PROFESSIONAL" -> MotiumPrimary.copy(alpha = 0.15f)
                                     "PERSONAL" -> Color(0xFF3B82F6).copy(alpha = 0.15f)
                                     else -> Color.Gray.copy(alpha = 0.15f)
                                 }
@@ -326,7 +326,7 @@ fun TripDetailsScreen(
                                         contentDescription = null,
                                         modifier = Modifier.size(16.dp),
                                         tint = when (currentTrip.tripType) {
-                                            "PROFESSIONAL" -> MockupGreen
+                                            "PROFESSIONAL" -> MotiumPrimary
                                             "PERSONAL" -> Color(0xFF3B82F6)
                                             else -> Color.Gray
                                         }
@@ -340,7 +340,7 @@ fun TripDetailsScreen(
                                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                         fontSize = 13.sp,
                                         color = when (currentTrip.tripType) {
-                                            "PROFESSIONAL" -> MockupGreen
+                                            "PROFESSIONAL" -> MotiumPrimary
                                             "PERSONAL" -> Color(0xFF3B82F6)
                                             else -> Color.Gray
                                         }
@@ -496,7 +496,7 @@ fun TripDetailsScreen(
                                                 if (isElectric) append(" • +20% électrique")
                                             },
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = if (isElectric) Color(0xFF10B981) else subTextColor,
+                                            color = if (isElectric) MotiumPrimary else subTextColor,
                                             fontSize = 12.sp
                                         )
                                     }
@@ -504,7 +504,7 @@ fun TripDetailsScreen(
                                 Text(
                                     "€${String.format("%.2f", mileageCost)}",
                                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                    color = Color(0xFF10B981),
+                                    color = MotiumPrimary,
                                     fontSize = 22.sp
                                 )
                             }
@@ -525,7 +525,7 @@ fun TripDetailsScreen(
                                     Text(
                                         "${String.format("%.3f", effectiveRate)} €/km",
                                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                                        color = if (isElectric) Color(0xFF10B981) else textColor
+                                        color = if (isElectric) MotiumPrimary else textColor
                                     )
                                 }
                             }
@@ -543,7 +543,7 @@ fun TripDetailsScreen(
                                 color = textColor
                             )
 
-                            val statusColor = if (currentTrip.isValidated) Color(0xFF10B981) else Color(0xFFF59E0B)
+                            val statusColor = if (currentTrip.isValidated) MotiumPrimary else Color(0xFFF59E0B)
 
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
@@ -594,7 +594,7 @@ fun TripDetailsScreen(
                         containerColor = if (currentTrip.isValidated)
                             subTextColor.copy(alpha = 0.2f)
                         else
-                            MockupGreen
+                            MotiumPrimary
                     ),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
@@ -653,10 +653,10 @@ fun TripDetailsScreen(
                                 }
                             },
                         shape = RoundedCornerShape(16.dp),
-                        color = MockupGreen.copy(alpha = 0.1f),
+                        color = MotiumPrimary.copy(alpha = 0.1f),
                         border = androidx.compose.foundation.BorderStroke(
                             2.dp,
-                            if (trip?.tripType == "PROFESSIONAL") MockupGreen else Color.Transparent
+                            if (trip?.tripType == "PROFESSIONAL") MotiumPrimary else Color.Transparent
                         )
                     ) {
                         Row(
@@ -667,14 +667,14 @@ fun TripDetailsScreen(
                             Icon(
                                 imageVector = Icons.Default.Work,
                                 contentDescription = null,
-                                tint = MockupGreen,
+                                tint = MotiumPrimary,
                                 modifier = Modifier.size(24.dp)
                             )
                             Column {
                                 Text(
                                     "Professionnel",
                                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                                    color = MockupGreen
+                                    color = MotiumPrimary
                                 )
                                 Text(
                                     "Trajet dans le cadre du travail",
@@ -829,7 +829,7 @@ fun StatItem(label: String, value: String, subTextColor: Color = Color.Gray) {
         Text(
             value,
             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-            color = MockupGreen
+            color = MotiumPrimary
         )
         Text(
             label,

@@ -32,7 +32,8 @@ import com.application.motium.domain.model.VehicleType
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.components.EnterpriseBottomNavigationSimple
 import com.application.motium.presentation.components.PremiumDialog
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.presentation.theme.MotiumPrimaryTint
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -188,7 +189,7 @@ fun EnterpriseVehiclesScreen(
                         androidx.compose.material3.Icon(
                             imageVector = androidx.compose.material.icons.Icons.Default.Refresh,
                             contentDescription = "Refresh vehicles",
-                            tint = MockupGreen
+                            tint = MotiumPrimary
                         )
                     }
                 },
@@ -217,7 +218,7 @@ fun EnterpriseVehiclesScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAddVehicleScreen = true },
-                containerColor = MockupGreen,
+                containerColor = MotiumPrimary,
                 contentColor = Color.White,
                 shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
@@ -417,7 +418,7 @@ fun EnterpriseVehiclesScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = MockupGreen)
+                    CircularProgressIndicator(color = MotiumPrimary)
                 }
             }
         }
@@ -466,7 +467,7 @@ fun ModernVehicleCard(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFFD1FAE5)),
+                        .background(MotiumPrimaryTint),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -510,7 +511,7 @@ fun ModernVehicleCard(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(MockupGreen)
+                                .background(MotiumPrimary)
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Icon(

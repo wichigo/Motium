@@ -26,7 +26,7 @@ import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MotiumBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.*
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.ThemeManager
 import java.text.SimpleDateFormat
 import java.util.*
@@ -123,7 +123,8 @@ fun ExportScreen(
                 },
                 onPremiumFeatureClick = {
                     showPremiumDialog = true
-                }
+                },
+                isDarkMode = isDarkMode
             )
         },
         containerColor = backgroundColor
@@ -182,7 +183,7 @@ fun ExportScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = OutlinedTextFieldDefaults.colors(
                                         disabledContainerColor = backgroundColor,
-                                        disabledBorderColor = if (selectedField == "start") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        disabledBorderColor = if (selectedField == "start") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
                                         disabledTextColor = textColor
                                     ),
                                     shape = RoundedCornerShape(16.dp),
@@ -222,7 +223,7 @@ fun ExportScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = OutlinedTextFieldDefaults.colors(
                                         disabledContainerColor = backgroundColor,
-                                        disabledBorderColor = if (selectedField == "end") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        disabledBorderColor = if (selectedField == "end") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
                                         disabledTextColor = textColor
                                     ),
                                     shape = RoundedCornerShape(16.dp),
@@ -393,14 +394,14 @@ fun ExportScreen(
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "vehicle") MockupGreen else MockupGreen
+                                        tint = if (selectedField == "vehicle") MotiumPrimary else MotiumPrimary
                                     )
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     unfocusedContainerColor = backgroundColor,
                                     focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "vehicle") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MockupGreen,
+                                    unfocusedBorderColor = if (selectedField == "vehicle") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumPrimary,
                                     unfocusedTextColor = textColor,
                                     focusedTextColor = textColor
                                 ),
@@ -466,14 +467,14 @@ fun ExportScreen(
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "tripType") MockupGreen else MockupGreen
+                                        tint = if (selectedField == "tripType") MotiumPrimary else MotiumPrimary
                                     )
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     unfocusedContainerColor = backgroundColor,
                                     focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "tripType") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MockupGreen,
+                                    unfocusedBorderColor = if (selectedField == "tripType") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumPrimary,
                                     unfocusedTextColor = textColor,
                                     focusedTextColor = textColor
                                 ),
@@ -550,14 +551,14 @@ fun ExportScreen(
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = if (selectedField == "expenseMode") MockupGreen else MockupGreen
+                                        tint = if (selectedField == "expenseMode") MotiumPrimary else MotiumPrimary
                                     )
                                 },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     unfocusedContainerColor = backgroundColor,
                                     focusedContainerColor = backgroundColor,
-                                    unfocusedBorderColor = if (selectedField == "expenseMode") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                    focusedBorderColor = MockupGreen,
+                                    unfocusedBorderColor = if (selectedField == "expenseMode") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                    focusedBorderColor = MotiumPrimary,
                                     unfocusedTextColor = textColor,
                                     focusedTextColor = textColor
                                 ),
@@ -630,14 +631,14 @@ fun ExportScreen(
                                         Icon(
                                             imageVector = Icons.Default.ArrowDropDown,
                                             contentDescription = null,
-                                            tint = if (selectedField == "includePhotos") MockupGreen else MockupGreen
+                                            tint = if (selectedField == "includePhotos") MotiumPrimary else MotiumPrimary
                                         )
                                     },
                                     colors = OutlinedTextFieldDefaults.colors(
                                         unfocusedContainerColor = backgroundColor,
                                         focusedContainerColor = backgroundColor,
-                                        unfocusedBorderColor = if (selectedField == "includePhotos") MockupGreen else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
-                                        focusedBorderColor = MockupGreen,
+                                        unfocusedBorderColor = if (selectedField == "includePhotos") MotiumPrimary else if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB),
+                                        focusedBorderColor = MotiumPrimary,
                                         unfocusedTextColor = textColor,
                                         focusedTextColor = textColor
                                     ),
@@ -793,28 +794,70 @@ fun ExportScreen(
                         color = textColor
                     )
 
+                    // Premium lock info for free users
+                    if (!isPremium) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFFF3CD)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = Color(0xFF856404),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    "L'export est réservé aux utilisateurs Premium",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF856404)
+                                )
+                            }
+                        }
+                    }
+
                     // CSV Export
                     Button(
                         onClick = {
-                            viewModel.exportToCSV(
-                                onSuccess = { file ->
-                                    snackbarMessage = "CSV exported successfully: ${file.name}"
-                                    showSnackbar = true
-                                },
-                                onError = { error ->
-                                    snackbarMessage = error
-                                    showSnackbar = true
-                                }
-                            )
+                            if (isPremium) {
+                                viewModel.exportToCSV(
+                                    onSuccess = { file ->
+                                        snackbarMessage = "CSV exported successfully: ${file.name}"
+                                        showSnackbar = true
+                                    },
+                                    onError = { error ->
+                                        snackbarMessage = error
+                                        showSnackbar = true
+                                    }
+                                )
+                            } else {
+                                showPremiumDialog = true
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MockupGreen
+                            containerColor = if (isPremium) MotiumPrimary else MotiumPrimary.copy(alpha = 0.5f)
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
+                        if (!isPremium) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = null,
@@ -832,16 +875,20 @@ fun ExportScreen(
                     // PDF Export
                     Button(
                         onClick = {
-                            viewModel.exportToPDF(
-                                onSuccess = { file ->
-                                    snackbarMessage = "PDF exported successfully: ${file.name}"
-                                    showSnackbar = true
-                                },
-                                onError = { error ->
-                                    snackbarMessage = error
-                                    showSnackbar = true
-                                }
-                            )
+                            if (isPremium) {
+                                viewModel.exportToPDF(
+                                    onSuccess = { file ->
+                                        snackbarMessage = "PDF exported successfully: ${file.name}"
+                                        showSnackbar = true
+                                    },
+                                    onError = { error ->
+                                        snackbarMessage = error
+                                        showSnackbar = true
+                                    }
+                                )
+                            } else {
+                                showPremiumDialog = true
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -851,6 +898,15 @@ fun ExportScreen(
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
+                        if (!isPremium) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (isDarkMode) Color.White else Color.Black,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = null,
@@ -868,16 +924,20 @@ fun ExportScreen(
                     // Excel Export
                     Button(
                         onClick = {
-                            viewModel.exportToExcel(
-                                onSuccess = { file ->
-                                    snackbarMessage = "Excel exported successfully: ${file.name}"
-                                    showSnackbar = true
-                                },
-                                onError = { error ->
-                                    snackbarMessage = error
-                                    showSnackbar = true
-                                }
-                            )
+                            if (isPremium) {
+                                viewModel.exportToExcel(
+                                    onSuccess = { file ->
+                                        snackbarMessage = "Excel exported successfully: ${file.name}"
+                                        showSnackbar = true
+                                    },
+                                    onError = { error ->
+                                        snackbarMessage = error
+                                        showSnackbar = true
+                                    }
+                                )
+                            } else {
+                                showPremiumDialog = true
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -887,6 +947,15 @@ fun ExportScreen(
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
+                        if (!isPremium) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (isDarkMode) Color.White else Color.Black,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = null,
@@ -993,8 +1062,8 @@ private fun CalendarGrid(
                                             .fillMaxWidth()
                                             .height(36.dp)
                                             .background(
-                                                if (isDarkMode) MockupGreen.copy(alpha = 0.2f)
-                                                else MockupGreen.copy(alpha = 0.15f)
+                                                if (isDarkMode) MotiumPrimary.copy(alpha = 0.2f)
+                                                else MotiumPrimary.copy(alpha = 0.15f)
                                             )
                                     )
                                 }
@@ -1005,7 +1074,7 @@ private fun CalendarGrid(
                                         .size(36.dp)
                                         .background(
                                             when {
-                                                isStartDay || isEndDay -> MockupGreen
+                                                isStartDay || isEndDay -> MotiumPrimary
                                                 else -> Color.Transparent
                                             },
                                             CircleShape

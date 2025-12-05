@@ -14,7 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.application.motium.domain.model.TrackingMode
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
  * Data class pour les options du dropdown
@@ -86,8 +86,8 @@ fun TrackingModeDropdown(
                     imageVector = selectedOption.icon,
                     contentDescription = null,
                     tint = when (selectedMode) {
-                        TrackingMode.ALWAYS -> MockupGreen
-                        TrackingMode.WORK_HOURS_ONLY -> MockupGreen
+                        TrackingMode.ALWAYS -> MotiumPrimary
+                        TrackingMode.WORK_HOURS_ONLY -> MotiumPrimary
                         TrackingMode.DISABLED -> Color.Gray
                     }
                 )
@@ -99,9 +99,9 @@ fun TrackingModeDropdown(
             enabled = enabled,
             colors = OutlinedTextFieldDefaults.colors(
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                focusedBorderColor = MockupGreen,
+                focusedBorderColor = MotiumPrimary,
                 unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                focusedLabelColor = MockupGreen
+                focusedLabelColor = MotiumPrimary
             )
         )
 
@@ -121,8 +121,8 @@ fun TrackingModeDropdown(
                                 contentDescription = null,
                                 modifier = Modifier.size(20.dp),
                                 tint = when (option.mode) {
-                                    TrackingMode.ALWAYS -> MockupGreen
-                                    TrackingMode.WORK_HOURS_ONLY -> MockupGreen
+                                    TrackingMode.ALWAYS -> MotiumPrimary
+                                    TrackingMode.WORK_HOURS_ONLY -> MotiumPrimary
                                     TrackingMode.DISABLED -> Color.Gray
                                 }
                             )

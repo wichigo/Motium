@@ -5,13 +5,20 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.application.motium.data.local.dao.CompanyLinkDao
+import com.application.motium.data.local.dao.ExpenseDao
 import com.application.motium.data.local.dao.TripDao
 import com.application.motium.data.local.dao.UserDao
 import com.application.motium.data.local.dao.VehicleDao
+import com.application.motium.data.local.dao.WorkScheduleDao
+import com.application.motium.data.local.entities.AutoTrackingSettingsEntity
+import com.application.motium.data.local.entities.CompanyLinkEntity
+import com.application.motium.data.local.entities.ExpenseEntity
 import com.application.motium.data.local.entities.TripConverters
 import com.application.motium.data.local.entities.TripEntity
 import com.application.motium.data.local.entities.UserEntity
 import com.application.motium.data.local.entities.VehicleEntity
+import com.application.motium.data.local.entities.WorkScheduleEntity
 
 /**
  * Main Room database for Motium app.
@@ -27,9 +34,13 @@ import com.application.motium.data.local.entities.VehicleEntity
     entities = [
         UserEntity::class,
         TripEntity::class,
-        VehicleEntity::class
+        VehicleEntity::class,
+        ExpenseEntity::class,
+        WorkScheduleEntity::class,
+        AutoTrackingSettingsEntity::class,
+        CompanyLinkEntity::class
     ],
-    version = 1,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)
@@ -38,6 +49,9 @@ abstract class MotiumDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
     abstract fun tripDao(): TripDao
     abstract fun vehicleDao(): VehicleDao
+    abstract fun expenseDao(): ExpenseDao
+    abstract fun workScheduleDao(): WorkScheduleDao
+    abstract fun companyLinkDao(): CompanyLinkDao
 
     companion object {
         private const val DATABASE_NAME = "motium_database"
@@ -77,6 +91,10 @@ abstract class MotiumDatabase : RoomDatabase() {
             db.userDao().deleteAllUsers()
             db.tripDao().deleteAllTrips()
             db.vehicleDao().deleteAllVehicles()
+            db.expenseDao().deleteAllExpenses()
+            db.workScheduleDao().deleteAllWorkSchedules()
+            db.workScheduleDao().deleteAllAutoTrackingSettings()
+            db.companyLinkDao().deleteAllCompanyLinks()
         }
     }
 }

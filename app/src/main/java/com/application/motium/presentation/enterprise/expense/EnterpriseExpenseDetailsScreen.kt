@@ -22,8 +22,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.application.motium.MotiumApplication
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.presentation.theme.*
 import kotlinx.coroutines.launch
@@ -38,7 +38,7 @@ fun EnterpriseExpenseDetailsScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val tripRepository = remember { TripRepository.getInstance(context) }
 
     var expenses by remember { mutableStateOf<List<Expense>>(emptyList()) }
@@ -99,16 +99,17 @@ fun EnterpriseExpenseDetailsScreen(
         }
     }
 
-    // Load all expenses for this day
+    // Load all expenses for this day from local cache (offline-first)
     LaunchedEffect(date) {
         coroutineScope.launch {
-            expenseRepository.getExpensesForDay(date).onSuccess { expenseList ->
+            try {
+                val expenseList = expenseRepository.getExpensesForDate(date)
                 expenses = expenseList
                 totalTTC = expenses.sumOf { it.amount }
                 totalHT = expenses.mapNotNull { it.amountHT }.sum()
                 MotiumApplication.logger.i("Loaded ${expenseList.size} expenses for $date", "EnterpriseExpenseDetailsScreen")
-            }.onFailure { error ->
-                MotiumApplication.logger.e("Failed to load expenses for date $date: ${error.message}", "EnterpriseExpenseDetailsScreen", error)
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Failed to load expenses for date $date: ${e.message}", "EnterpriseExpenseDetailsScreen", e)
             }
             isLoading = false
         }
@@ -171,7 +172,7 @@ fun EnterpriseExpenseDetailsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = MockupGreen.copy(alpha = 0.1f)
+                            containerColor = MotiumPrimary.copy(alpha = 0.1f)
                         ),
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                     ) {
@@ -204,7 +205,7 @@ fun EnterpriseExpenseDetailsScreen(
                                         style = MaterialTheme.typography.headlineSmall.copy(
                                             fontWeight = FontWeight.Bold
                                         ),
-                                        color = MockupGreen
+                                        color = MotiumPrimary
                                     )
                                 }
 
@@ -219,7 +220,7 @@ fun EnterpriseExpenseDetailsScreen(
                                         style = MaterialTheme.typography.headlineSmall.copy(
                                             fontWeight = FontWeight.Bold
                                         ),
-                                        color = MockupGreen
+                                        color = MotiumPrimary
                                     )
                                 }
                             }
@@ -324,7 +325,7 @@ fun ExpenseCard(
                     Icon(
                         Icons.Default.Receipt,
                         contentDescription = null,
-                        tint = MockupGreen,
+                        tint = MotiumPrimary,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -345,7 +346,7 @@ fun ExpenseCard(
                         Icon(
                             Icons.Default.CameraAlt,
                             contentDescription = "View photo",
-                            tint = MockupGreen,
+                            tint = MotiumPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -371,7 +372,7 @@ fun ExpenseCard(
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         ),
-                        color = MockupGreen
+                        color = MotiumPrimary
                     )
                 }
 

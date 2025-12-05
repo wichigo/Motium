@@ -26,8 +26,8 @@ class WorkScheduleViewModel(
     private val _schedules = MutableStateFlow<Map<Int, List<TimeSlot>>>(emptyMap())
     val schedules: StateFlow<Map<Int, List<TimeSlot>>> = _schedules.asStateFlow()
 
-    // Mode d'auto-tracking actuel
-    private val _trackingMode = MutableStateFlow(TrackingMode.DISABLED)
+    // Mode d'auto-tracking actuel - initialisé depuis le cache local pour éviter le flash
+    private val _trackingMode = MutableStateFlow(tripRepository.getTrackingMode())
     val trackingMode: StateFlow<TrackingMode> = _trackingMode.asStateFlow()
 
     // État de chargement
@@ -55,6 +55,7 @@ class WorkScheduleViewModel(
                         // User logged out, clear data
                         _schedules.value = emptyMap()
                         _trackingMode.value = TrackingMode.DISABLED
+                        tripRepository.setTrackingMode(TrackingMode.DISABLED)
                     }
                 }
             }
@@ -104,6 +105,8 @@ class WorkScheduleViewModel(
 
                 if (settings != null) {
                     _trackingMode.value = settings.trackingMode
+                    // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
+                    tripRepository.setTrackingMode(settings.trackingMode)
                     MotiumApplication.logger.i("Auto-tracking mode loaded: ${settings.trackingMode}", "WorkScheduleViewModel")
 
                     // Gérer le mode au démarrage de l'app
@@ -126,9 +129,8 @@ class WorkScheduleViewModel(
                         }
                     }
                 } else {
-                    // Pas de settings, créer des settings par défaut
-                    MotiumApplication.logger.i("No auto-tracking settings found, creating default", "WorkScheduleViewModel")
-                    _trackingMode.value = TrackingMode.DISABLED
+                    // Pas de settings, garder la valeur du cache local (ou DISABLED si pas de cache)
+                    MotiumApplication.logger.i("No auto-tracking settings found in Supabase, keeping local cache value: ${_trackingMode.value}", "WorkScheduleViewModel")
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error loading auto-tracking settings: ${e.message}", "WorkScheduleViewModel", e)
@@ -313,6 +315,8 @@ class WorkScheduleViewModel(
 
                 if (success) {
                     _trackingMode.value = newMode
+                    // Mettre à jour le cache local
+                    tripRepository.setTrackingMode(newMode)
 
                     // Synchroniser avec TripRepository pour compatibilité
                     syncWithTripRepository(newMode)

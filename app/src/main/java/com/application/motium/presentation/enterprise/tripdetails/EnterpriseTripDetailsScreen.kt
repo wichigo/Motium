@@ -25,14 +25,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.ExpenseRepository
+import com.application.motium.data.VehicleRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.domain.model.Vehicle
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.theme.*
+import com.application.motium.data.geocoding.NominatimService
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -48,8 +49,8 @@ fun EnterpriseTripDetailsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
-    val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }  // Room cache
 
     // Utiliser authState de authViewModel
     val authState by authViewModel.authState.collectAsState()
@@ -61,6 +62,11 @@ fun EnterpriseTripDetailsScreen(
     var isLoading by remember { mutableStateOf(true) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var selectedPhotoUri by remember { mutableStateOf<String?>(null) }
+
+    // Map matching: tracé "snap to road" pour affichage précis
+    var matchedRouteCoordinates by remember { mutableStateOf<List<List<Double>>?>(null) }
+    var isMapMatching by remember { mutableStateOf(false) }
+    val nominatimService = remember { NominatimService.getInstance() }
 
     // Charger le trip et les expenses au démarrage
     LaunchedEffect(tripId) {
@@ -81,12 +87,45 @@ fun EnterpriseTripDetailsScreen(
                 }
             }
 
-            // Load expenses for this trip
-            expenseRepository.getExpensesForTrip(tripId).onSuccess { expenseList ->
+            // Load expenses for this trip from local cache (offline-first)
+            try {
+                val expenseList = expenseRepository.getExpensesForTrip(tripId)
                 expenses = expenseList
                 MotiumApplication.logger.i("Loaded ${expenseList.size} expenses for trip $tripId", "TripDetailsScreen")
-            }.onFailure { error ->
-                MotiumApplication.logger.e("Failed to load expenses: ${error.message}", "TripDetailsScreen", error)
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Failed to load expenses: ${e.message}", "TripDetailsScreen", e)
+            }
+
+            // Map Matching: "Snap to Road" pour un tracé qui suit les vraies routes
+            trip?.let { currentTrip ->
+                if (currentTrip.locations.size >= 2) {
+                    isMapMatching = true
+                    try {
+                        val gpsPoints = currentTrip.locations.map { loc ->
+                            Pair(loc.latitude, loc.longitude)
+                        }
+                        val matched = nominatimService.matchRoute(gpsPoints)
+                        if (matched != null && matched.isNotEmpty()) {
+                            matchedRouteCoordinates = matched
+                            MotiumApplication.logger.i(
+                                "✅ Map matching: ${currentTrip.locations.size} GPS → ${matched.size} road points",
+                                "EnterpriseTripDetailsScreen"
+                            )
+                        } else {
+                            MotiumApplication.logger.w(
+                                "Map matching returned null, using raw GPS",
+                                "EnterpriseTripDetailsScreen"
+                            )
+                        }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w(
+                            "Map matching error: ${e.message}, using raw GPS",
+                            "EnterpriseTripDetailsScreen"
+                        )
+                    } finally {
+                        isMapMatching = false
+                    }
+                }
             }
 
             isLoading = false
@@ -188,10 +227,12 @@ fun EnterpriseTripDetailsScreen(
                             val firstLocation = currentTrip.locations.first()
                             val lastLocation = currentTrip.locations.last()
 
-                            // Convertir les locations en format [longitude, latitude] pour MiniMap
-                            val routeCoordinates = currentTrip.locations.map { location ->
-                                listOf(location.longitude, location.latitude)
-                            }
+                            // Utiliser les coordonnées "map matched" si disponibles,
+                            // sinon fallback vers les points GPS bruts
+                            val routeCoordinates = matchedRouteCoordinates
+                                ?: currentTrip.locations.map { location ->
+                                    listOf(location.longitude, location.latitude)
+                                }
 
                             MiniMap(
                                 startLatitude = firstLocation.latitude,

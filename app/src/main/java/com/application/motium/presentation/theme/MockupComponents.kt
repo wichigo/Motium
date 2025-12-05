@@ -54,10 +54,10 @@ fun MockupCard(
 }
 
 /**
- * Bouton principal vert proéminent
+ * Bouton principal avec couleur d'accent dynamique
  * - Coins très arrondis (28dp)
  * - Élévation légère (4dp)
- * - Couleur verte MockupGreen
+ * - Couleur primaire dynamique (MotiumPrimary)
  */
 @Composable
 fun MockupPrimaryButton(
@@ -67,12 +67,13 @@ fun MockupPrimaryButton(
     enabled: Boolean = true,
     height: Dp = 56.dp
 ) {
+    val primaryColor = MotiumPrimary
     Button(
         onClick = onClick,
         modifier = modifier.height(height),
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(
-            containerColor = MockupGreen,
+            containerColor = primaryColor,
             contentColor = Color.White,
             disabledContainerColor = MockupLightGray,
             disabledContentColor = MockupTextGray
@@ -91,7 +92,7 @@ fun MockupPrimaryButton(
 /**
  * Bouton secondaire avec bordure
  * - Coins arrondis (16dp)
- * - Transparent avec bordure verte
+ * - Transparent avec bordure de couleur primaire
  */
 @Composable
 fun MockupSecondaryButton(
@@ -101,12 +102,13 @@ fun MockupSecondaryButton(
     enabled: Boolean = true,
     height: Dp = 48.dp
 ) {
+    val primaryColor = MotiumPrimary
     OutlinedButton(
         onClick = onClick,
         modifier = modifier.height(height),
         enabled = enabled,
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = MockupGreen,
+            contentColor = primaryColor,
             disabledContentColor = MockupTextGray
         ),
         shape = RoundedCornerShape(16.dp),
@@ -121,7 +123,7 @@ fun MockupSecondaryButton(
 }
 
 /**
- * Switch moderne avec la couleur verte
+ * Switch moderne avec la couleur primaire dynamique
  */
 @Composable
 fun MockupSwitch(
@@ -130,6 +132,7 @@ fun MockupSwitch(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
+    val primaryColor = MotiumPrimary
     Switch(
         checked = checked,
         onCheckedChange = onCheckedChange,
@@ -137,7 +140,7 @@ fun MockupSwitch(
         enabled = enabled,
         colors = SwitchDefaults.colors(
             checkedThumbColor = Color.White,
-            checkedTrackColor = MockupGreen,
+            checkedTrackColor = primaryColor,
             uncheckedThumbColor = Color.White,
             uncheckedTrackColor = MockupLightGray,
             uncheckedBorderColor = Color.Transparent,
@@ -148,25 +151,29 @@ fun MockupSwitch(
 }
 
 /**
- * Chip/Badge moderne pour les tags
+ * Chip/Badge moderne pour les tags avec couleur primaire dynamique
  */
 @Composable
 fun MockupChip(
     text: String,
     modifier: Modifier = Modifier,
-    backgroundColor: Color = MockupGreen.copy(alpha = 0.1f),
-    textColor: Color = MockupGreen
+    backgroundColor: Color? = null,
+    textColor: Color? = null
 ) {
+    val primaryColor = MotiumPrimary
+    val bgColor = backgroundColor ?: primaryColor.copy(alpha = 0.1f)
+    val txtColor = textColor ?: primaryColor
+
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
-        color = backgroundColor
+        color = bgColor
     ) {
         Text(
             text = text,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = textColor,
+            color = txtColor,
             fontSize = 12.sp
         )
     }
@@ -188,7 +195,7 @@ fun MockupDivider(
 }
 
 /**
- * TextField moderne avec le nouveau style
+ * TextField moderne avec couleur primaire dynamique
  */
 @Composable
 fun MockupTextField(
@@ -203,6 +210,7 @@ fun MockupTextField(
     trailingIcon: @Composable (() -> Unit)? = null
 ) {
     val colors = getMockupColors(isDarkMode)
+    val primaryColor = MotiumPrimary
 
     OutlinedTextField(
         value = value,
@@ -215,13 +223,13 @@ fun MockupTextField(
         trailingIcon = trailingIcon,
         shape = RoundedCornerShape(12.dp),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MockupGreen,
+            focusedBorderColor = primaryColor,
             unfocusedBorderColor = colors.border,
-            focusedLabelColor = MockupGreen,
+            focusedLabelColor = primaryColor,
             unfocusedLabelColor = colors.textSecondary,
             focusedTextColor = colors.textPrimary,
             unfocusedTextColor = colors.textPrimary,
-            cursorColor = MockupGreen
+            cursorColor = primaryColor
         )
     )
 }

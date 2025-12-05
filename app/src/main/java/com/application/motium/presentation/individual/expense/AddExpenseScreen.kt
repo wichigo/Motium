@@ -32,11 +32,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.application.motium.MotiumApplication
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.TripRepository
-import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.service.ReceiptAnalysisService
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
@@ -53,7 +53,7 @@ fun AddExpenseScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val expenseRepository = remember { SupabaseExpenseRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val receiptAnalysisService = remember { ReceiptAnalysisService.getInstance(context) }
     val storageService = remember { com.application.motium.service.SupabaseStorageService.getInstance(context) }
 
@@ -223,14 +223,15 @@ fun AddExpenseScreen(
                                 )
 
                                 coroutineScope.launch {
-                                    try {
-                                        expenseRepository.saveExpenses(listOf(expense))
+                                    val result = expenseRepository.saveExpense(expense)
+                                    if (result.isSuccess) {
                                         MotiumApplication.logger.i("Expense saved: ${expense.id}", "AddExpenseScreen")
                                         Toast.makeText(context, "Expense saved successfully", Toast.LENGTH_SHORT).show()
                                         onExpenseSaved()
-                                    } catch (e: Exception) {
-                                        MotiumApplication.logger.e("Failed to save expense: ${e.message}", "AddExpenseScreen", e)
-                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        val error = result.exceptionOrNull()
+                                        MotiumApplication.logger.e("Failed to save expense: ${error?.message}", "AddExpenseScreen", error)
+                                        Toast.makeText(context, "Error: ${error?.message}", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             } catch (e: Exception) {
@@ -478,7 +479,7 @@ fun AmountField(
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Auto-detected",
-                        tint = MockupGreen,
+                        tint = MotiumPrimary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -508,11 +509,11 @@ fun AmountField(
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 unfocusedBorderColor = if (isAutoDetected)
-                    MockupGreen.copy(alpha = 0.5f)
+                    MotiumPrimary.copy(alpha = 0.5f)
                 else
                     MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                 focusedBorderColor = if (isAutoDetected)
-                    MockupGreen
+                    MotiumPrimary
                 else
                     MaterialTheme.colorScheme.primary
             )
@@ -547,7 +548,7 @@ fun PhotoSection(
                 Icon(
                     Icons.Default.Receipt,
                     contentDescription = null,
-                    tint = MockupGreen,
+                    tint = MotiumPrimary,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -571,7 +572,7 @@ fun PhotoSection(
                     CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp,
-                        color = MockupGreen
+                        color = MotiumPrimary
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
@@ -592,9 +593,9 @@ fun PhotoSection(
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MockupGreen
+                            contentColor = MotiumPrimary
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MockupGreen.copy(alpha = 0.5f))
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MotiumPrimary.copy(alpha = 0.5f))
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -604,7 +605,7 @@ fun PhotoSection(
                                 Icons.Default.CameraAlt,
                                 contentDescription = null,
                                 modifier = Modifier.size(28.dp),
-                                tint = MockupGreen
+                                tint = MotiumPrimary
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -626,9 +627,9 @@ fun PhotoSection(
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MockupGreen
+                            contentColor = MotiumPrimary
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MockupGreen.copy(alpha = 0.5f))
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MotiumPrimary.copy(alpha = 0.5f))
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -638,7 +639,7 @@ fun PhotoSection(
                                 Icons.Default.PhotoLibrary,
                                 contentDescription = null,
                                 modifier = Modifier.size(28.dp),
-                                tint = MockupGreen
+                                tint = MotiumPrimary
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -662,7 +663,7 @@ fun PhotoSection(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (isUploaded) MockupGreen.copy(alpha = 0.1f) else Color(0xFFFFF3CD)
+                            containerColor = if (isUploaded) MotiumPrimary.copy(alpha = 0.1f) else Color(0xFFFFF3CD)
                         )
                     ) {
                         Row(
@@ -687,7 +688,7 @@ fun PhotoSection(
                                         Icon(
                                             Icons.Default.CheckCircle,
                                             contentDescription = null,
-                                            tint = MockupGreen,
+                                            tint = MotiumPrimary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
@@ -695,7 +696,7 @@ fun PhotoSection(
                                             "Photo saved",
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = MockupGreen
+                                            color = MotiumPrimary
                                         )
                                     } else {
                                         CircularProgressIndicator(

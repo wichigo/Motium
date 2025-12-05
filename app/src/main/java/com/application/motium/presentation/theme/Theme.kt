@@ -80,9 +80,12 @@ fun MotiumTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    // Wrapper WithCustomColor pour propager la couleur primaire dynamique
+    WithCustomColor {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }

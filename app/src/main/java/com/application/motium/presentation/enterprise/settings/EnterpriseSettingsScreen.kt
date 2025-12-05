@@ -1,8 +1,11 @@
 package com.application.motium.presentation.enterprise.settings
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,7 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -265,7 +270,7 @@ fun EnterpriseSettingsScreen(
                                 unfocusedTextColor = textColor,
                                 focusedTextColor = textColor,
                                 unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                                focusedBorderColor = MockupGreen
+                                focusedBorderColor = MotiumPrimary
                             ),
                             singleLine = true
                         )
@@ -291,7 +296,7 @@ fun EnterpriseSettingsScreen(
                                 unfocusedTextColor = textColor,
                                 focusedTextColor = textColor,
                                 unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                                focusedBorderColor = MockupGreen
+                                focusedBorderColor = MotiumPrimary
                             ),
                             singleLine = true
                         )
@@ -309,7 +314,7 @@ fun EnterpriseSettingsScreen(
                         showEditProfileDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MockupGreen
+                        containerColor = MotiumPrimary
                     ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -320,7 +325,7 @@ fun EnterpriseSettingsScreen(
                 TextButton(
                     onClick = { showEditProfileDialog = false }
                 ) {
-                    Text("Cancel", color = MockupGreen)
+                    Text("Cancel", color = MotiumPrimary)
                 }
             },
             containerColor = surfaceColor
@@ -385,7 +390,7 @@ fun UserProfileSection(
                 .height(48.dp)
                 .widthIn(min = 160.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MockupGreen,
+                containerColor = MotiumPrimary,
                 contentColor = Color.White
             ),
             shape = RoundedCornerShape(24.dp)
@@ -451,7 +456,7 @@ fun ProfileInformationSection(
                             unfocusedTextColor = textColor,
                             focusedTextColor = textColor,
                             unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                            focusedBorderColor = MockupGreen
+                            focusedBorderColor = MotiumPrimary
                         ),
                         singleLine = true
                     )
@@ -484,7 +489,7 @@ fun ProfileInformationSection(
                             unfocusedTextColor = textColor,
                             focusedTextColor = textColor,
                             unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                            focusedBorderColor = MockupGreen
+                            focusedBorderColor = MotiumPrimary
                         ),
                         singleLine = true
                     )
@@ -550,7 +555,7 @@ fun CompanyLinkSection(
                         onCheckedChange = onLinkedToCompanyChange,
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
-                            checkedTrackColor = MockupGreen,
+                            checkedTrackColor = MotiumPrimary,
                             uncheckedThumbColor = Color.White,
                             uncheckedTrackColor = Color.Gray.copy(alpha = 0.4f)
                         )
@@ -589,7 +594,7 @@ fun CompanyLinkSection(
                                 checked = shareProfessionalTrips,
                                 onCheckedChange = onShareProfessionalTripsChange,
                                 colors = CheckboxDefaults.colors(
-                                    checkedColor = MockupGreen
+                                    checkedColor = MotiumPrimary
                                 )
                             )
                             Text(
@@ -610,7 +615,7 @@ fun CompanyLinkSection(
                                 checked = sharePersonalTrips,
                                 onCheckedChange = onSharePersonalTripsChange,
                                 colors = CheckboxDefaults.colors(
-                                    checkedColor = MockupGreen
+                                    checkedColor = MotiumPrimary
                                 )
                             )
                             Text(
@@ -631,7 +636,7 @@ fun CompanyLinkSection(
                                 checked = sharePersonalInfo,
                                 onCheckedChange = onSharePersonalInfoChange,
                                 colors = CheckboxDefaults.colors(
-                                    checkedColor = MockupGreen
+                                    checkedColor = MotiumPrimary
                                 )
                             )
                             Text(
@@ -655,15 +660,18 @@ fun AppAppearanceSection(
     textSecondaryColor: Color,
     themeManager: ThemeManager
 ) {
+    var isColorDropdownExpanded by remember { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
-    var showFavoriteColorPicker by remember { mutableStateOf(false) }
-    var selectedFavoriteIndex by remember { mutableStateOf(0) }
+    var editingColorIndex by remember { mutableStateOf(-1) }
     val primaryColor by themeManager.primaryColor.collectAsState()
     val favoriteColors by themeManager.favoriteColors.collectAsState()
 
+    // Couleur par défaut (fixe) + 4 couleurs personnalisables
+    val defaultColor = Color(0xFF10B981) // MotiumPrimary - non modifiable
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "App Appearance",
+            text = "Apparence",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -672,7 +680,9 @@ fun AppAppearanceSection(
         )
 
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { isColorDropdownExpanded = !isColorDropdownExpanded },
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
                 containerColor = surfaceColor
@@ -682,139 +692,183 @@ fun AppAppearanceSection(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(16.dp)
             ) {
-                // Color Customization
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // Logo de l'app avec fond de la couleur sélectionnée
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(56.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(primaryColor),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "🎨",
-                            fontSize = 24.sp
+                        Image(
+                            painter = painterResource(id = com.application.motium.R.drawable.ic_launcher_foreground),
+                            contentDescription = "Logo Motium",
+                            modifier = Modifier.size(48.dp),
+                            colorFilter = ColorFilter.tint(Color.White)
                         )
                     }
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "App Color",
+                            text = "Couleur de l'app",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
                             fontSize = 16.sp,
                             color = textColor
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Customize your app theme color",
+                            text = if (primaryColor == defaultColor) "Par défaut" else "Personnalisée",
                             style = MaterialTheme.typography.bodySmall,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             color = textSecondaryColor
                         )
                     }
-                }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { showColorPicker = true },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = primaryColor,
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Choose Color", fontSize = 14.sp)
-                    }
-
-                    OutlinedButton(
-                        onClick = { themeManager.resetToDefaultColor() },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = primaryColor
-                        )
-                    ) {
-                        Text("Reset", fontSize = 14.sp)
-                    }
-                }
-
-                // Color Favorites Section
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Color Favorites",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = FontWeight.Medium
-                        ),
-                        fontSize = 14.sp,
-                        color = textSecondaryColor
+                    // Icône dropdown
+                    Icon(
+                        imageVector = if (isColorDropdownExpanded)
+                            Icons.Default.KeyboardArrowUp
+                        else
+                            Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Ouvrir",
+                        tint = textSecondaryColor
                     )
+                }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                // Dropdown des couleurs
+                AnimatedVisibility(visible = isColorDropdownExpanded) {
+                    Column(
+                        modifier = Modifier.padding(top = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        favoriteColors.forEachIndexed { index, color ->
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .aspectRatio(1f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(color)
-                                    .clickable {
-                                        selectedFavoriteIndex = index
-                                        showFavoriteColorPicker = true
-                                    },
-                                contentAlignment = Alignment.Center
+                        HorizontalDivider(
+                            color = textSecondaryColor.copy(alpha = 0.2f),
+                            thickness = 1.dp
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            // Couleur 1 - Par défaut (non modifiable)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.clickable {
+                                    themeManager.setPrimaryColor(defaultColor)
+                                }
                             ) {
-                                // Empty box, just the color
+                                val isSelected = primaryColor == defaultColor
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(defaultColor)
+                                        .then(
+                                            if (isSelected) Modifier.border(
+                                                3.dp,
+                                                textColor,
+                                                CircleShape
+                                            ) else Modifier
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Sélectionné",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Défaut",
+                                    fontSize = 10.sp,
+                                    color = if (isSelected) primaryColor else textSecondaryColor,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+
+                            // Couleurs 2-5 - Personnalisables
+                            favoriteColors.forEachIndexed { index, color ->
+                                val isSelected = primaryColor == color && primaryColor != defaultColor
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.clickable {
+                                        // Appliquer la couleur
+                                        themeManager.setPrimaryColor(color)
+                                    }
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(CircleShape)
+                                            .background(color)
+                                            .then(
+                                                if (isSelected) Modifier.border(
+                                                    3.dp,
+                                                    textColor,
+                                                    CircleShape
+                                                ) else Modifier
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Sélectionné",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    // Bouton modifier sous chaque couleur personnalisable
+                                    Text(
+                                        text = "Modifier",
+                                        fontSize = 10.sp,
+                                        color = textSecondaryColor,
+                                        modifier = Modifier.clickable {
+                                            editingColorIndex = index
+                                            showColorPicker = true
+                                        }
+                                    )
+                                }
                             }
                         }
-                    }
 
-                    Text(
-                        text = "Tap a square to save your favorite colors",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 11.sp,
-                        color = textSecondaryColor.copy(alpha = 0.7f)
-                    )
+                        Text(
+                            text = "Cliquez sur une couleur pour l'appliquer, ou sur \"Modifier\" pour la personnaliser",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 11.sp,
+                            color = textSecondaryColor.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
                 }
             }
         }
     }
 
-    if (showColorPicker) {
+    // Color picker dialog
+    if (showColorPicker && editingColorIndex >= 0) {
         com.application.motium.presentation.components.ColorPickerDialog(
-            currentColor = primaryColor,
+            currentColor = favoriteColors.getOrNull(editingColorIndex) ?: defaultColor,
             onColorSelected = { color ->
-                themeManager.setPrimaryColor(color)
+                themeManager.setFavoriteColor(editingColorIndex, color)
+                themeManager.setPrimaryColor(color) // Appliquer immédiatement
             },
             onDismiss = { showColorPicker = false },
-            textColor = textColor,
-            surfaceColor = surfaceColor
-        )
-    }
-
-    if (showFavoriteColorPicker) {
-        com.application.motium.presentation.components.ColorPickerDialog(
-            currentColor = favoriteColors.getOrNull(selectedFavoriteIndex) ?: MockupGreen,
-            onColorSelected = { color ->
-                themeManager.setFavoriteColor(selectedFavoriteIndex, color)
-            },
-            onDismiss = { showFavoriteColorPicker = false },
             textColor = textColor,
             surfaceColor = surfaceColor
         )
@@ -847,7 +901,7 @@ fun MileageRatesSection(
         ) {
             MileageRateItemWithIcon(
                 icon = Icons.Default.DirectionsCar,
-                iconBackground = Color(0xFFD1FAE5),
+                iconBackground = MotiumPrimaryTint,
                 title = "Car",
                 rate = "0.585 €/km",
                 surfaceColor = surfaceColor,
@@ -871,7 +925,7 @@ fun MileageRatesSection(
         ) {
             MileageRateItemWithIcon(
                 icon = Icons.Default.TwoWheeler,
-                iconBackground = Color(0xFFD1FAE5),
+                iconBackground = MotiumPrimaryTint,
                 title = "Motorcycle",
                 rate = "0.25 €/km",
                 surfaceColor = surfaceColor,
@@ -895,7 +949,7 @@ fun MileageRatesSection(
         ) {
             MileageRateItemWithIcon(
                 icon = Icons.Default.PedalBike,
-                iconBackground = Color(0xFFD1FAE5),
+                iconBackground = MotiumPrimaryTint,
                 title = "Bicycle",
                 rate = "0.10 €/km",
                 surfaceColor = surfaceColor,
@@ -958,7 +1012,7 @@ fun MileageRateItemWithIcon(
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
-                            tint = MockupGreen,
+                            tint = MotiumPrimary,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -1322,7 +1376,7 @@ fun SubscriptionSection(
         else -> subscriptionType
     }
     val planIcon = if (isPremium) "👑" else "⭐"
-    val planColor = if (isPremium) Color(0xFFFFD700) else Color(0xFFD1FAE5)
+    val planColor = if (isPremium) Color(0xFFFFD700) else MotiumPrimaryTint
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -1390,7 +1444,7 @@ fun SubscriptionSection(
                     Button(
                         onClick = { /* Upgrade */ },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF10B981),
+                            containerColor = MotiumPrimary,
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(20.dp),

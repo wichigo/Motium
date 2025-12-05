@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.EnterpriseBottomNavigation
-import com.application.motium.presentation.theme.MockupGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.utils.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -104,7 +104,7 @@ fun EnterpriseHomeScreen(
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold
                             ),
-                            color = MockupGreen,
+                            color = MotiumPrimary,
                             fontSize = 18.sp
                         )
                         Text(
@@ -144,7 +144,7 @@ fun EnterpriseHomeScreen(
                         .fillMaxWidth()
                         .height(48.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MockupGreen
+                        containerColor = MotiumPrimary
                     ),
                     shape = RoundedCornerShape(16.dp)
                 ) {
@@ -215,7 +215,7 @@ fun StatCard(
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontWeight = FontWeight.Bold
                 ),
-                color = MockupGreen
+                color = MotiumPrimary
             )
             Text(
                 text = title,
