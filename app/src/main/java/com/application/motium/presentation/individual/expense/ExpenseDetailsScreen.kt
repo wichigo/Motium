@@ -42,7 +42,8 @@ private val MockupBackground = Color(0xFFF3F4F6)
 @Composable
 fun ExpenseDetailsScreen(
     date: String,  // MODIFIÉ: date au format YYYY-MM-DD au lieu de dateLabel + tripIds
-    onNavigateBack: () -> Unit = {}
+    onNavigateBack: () -> Unit = {},
+    onNavigateToEditExpense: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -299,6 +300,9 @@ fun ExpenseDetailsScreen(
                             onPhotoClick = { photoUri ->
                                 selectedPhotoUri = photoUri
                             },
+                            onClick = {
+                                onNavigateToEditExpense(expense.id)
+                            },
                             cardColor = cardColor,
                             textColor = textColor,
                             subTextColor = subTextColor
@@ -314,12 +318,15 @@ fun ExpenseDetailsScreen(
 fun ExpenseCard(
     expense: Expense,
     onPhotoClick: (String) -> Unit = {},
+    onClick: () -> Unit = {},
     cardColor: Color = Color.White,
     textColor: Color = MockupTextBlack,
     subTextColor: Color = MockupTextGray
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
@@ -327,31 +334,47 @@ fun ExpenseCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(IntrinsicSize.Min)
                 .padding(16.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Icon with colored background (similar to MiniMap in trips)
+            // Photo or Icon with colored background - height adapts to content
             Box(
                 modifier = Modifier
-                    .size(56.dp)
+                    .width(56.dp)
+                    .fillMaxHeight()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MotiumPrimary.copy(alpha = 0.15f)),
+                    .background(if (expense.photoUri == null) MotiumPrimary.copy(alpha = 0.15f) else Color.Transparent),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = when (expense.type.name) {
-                        "FUEL" -> Icons.Default.LocalGasStation
-                        "PARKING" -> Icons.Default.LocalParking
-                        "TOLL" -> Icons.Default.Toll
-                        "MAINTENANCE" -> Icons.Default.Build
-                        "INSURANCE" -> Icons.Default.Security
-                        "OTHER" -> Icons.Default.MoreHoriz
-                        else -> Icons.Default.Receipt
-                    },
-                    contentDescription = null,
-                    tint = MotiumPrimary,
-                    modifier = Modifier.size(28.dp)
-                )
+                if (expense.photoUri != null) {
+                    // Show receipt photo
+                    AsyncImage(
+                        model = Uri.parse(expense.photoUri),
+                        contentDescription = "Receipt photo",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onPhotoClick(expense.photoUri!!) },
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    // Show type icon
+                    Icon(
+                        imageVector = when (expense.type.name) {
+                            "FUEL" -> Icons.Default.LocalGasStation
+                            "PARKING" -> Icons.Default.LocalParking
+                            "TOLL" -> Icons.Default.Toll
+                            "MAINTENANCE" -> Icons.Default.Build
+                            "INSURANCE" -> Icons.Default.Security
+                            "OTHER" -> Icons.Default.MoreHoriz
+                            else -> Icons.Default.Receipt
+                        },
+                        contentDescription = null,
+                        tint = MotiumPrimary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(12.dp))
@@ -438,32 +461,6 @@ fun ExpenseCard(
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             color = MotiumPrimary
                         )
-                        if (expense.photoUri != null) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Surface(
-                                modifier = Modifier.clickable { onPhotoClick(expense.photoUri!!) },
-                                shape = RoundedCornerShape(8.dp),
-                                color = MotiumPrimary.copy(alpha = 0.1f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.CameraAlt,
-                                        contentDescription = "View photo",
-                                        tint = MotiumPrimary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        "Photo",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MotiumPrimary
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
             }

@@ -35,8 +35,9 @@ enum class LinkStatus {
 
 /**
  * Data class for updating sharing preferences for a company link.
+ * Note: This is separate from the Pro interface SharingPreferences in LinkedAccount.kt
  */
-data class SharingPreferences(
+data class CompanyLinkPreferences(
     val shareProfessionalTrips: Boolean,
     val sharePersonalTrips: Boolean,
     val sharePersonalInfo: Boolean

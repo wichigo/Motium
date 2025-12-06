@@ -16,7 +16,6 @@ data class ExpenseEntity(
     val id: String,
     val userId: String,
     val date: String,              // Date de la dépense (format YYYY-MM-DD)
-    val tripId: String?,           // Optionnel - lié à un trajet
     val type: String,              // ExpenseType enum stored as String
     val amount: Double,            // Montant TTC
     val amountHT: Double?,         // Montant HT
@@ -35,7 +34,6 @@ fun ExpenseEntity.toDomainModel(): Expense {
     return Expense(
         id = id,
         date = date,
-        tripId = tripId,
         type = ExpenseType.valueOf(type),
         amount = amount,
         amountHT = amountHT,
@@ -54,7 +52,6 @@ fun Expense.toEntity(userId: String, lastSyncedAt: Long? = null, needsSync: Bool
         id = id,
         userId = userId,
         date = date,
-        tripId = tripId,
         type = type.name,
         amount = amount,
         amountHT = amountHT,

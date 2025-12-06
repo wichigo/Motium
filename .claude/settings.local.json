@@ -12,7 +12,11 @@
       "Bash(timeout 30 adb shell:*)",
       "Bash(timeout 20 adb logcat:*)",
       "mcp__context7__resolve-library-id",
-      "mcp__context7__get-library-docs"
+      "mcp__context7__get-library-docs",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" :app:testDebugUnitTest --tests \"com.application.motium.utils.ExportManagerTest\")",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\settings\\ProSettingsScreen.kt\")",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\vehicles\\ProVehiclesScreen.kt\")",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" clean compileDebugKotlin -x test)"
     ],
     "deny": [],
     "ask": []

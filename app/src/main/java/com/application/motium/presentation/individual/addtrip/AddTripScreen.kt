@@ -385,27 +385,33 @@ fun AddTripScreen(
 
             // Notes section
             item {
-                Column {
-                    Text(
-                        text = "Notes",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    OutlinedTextField(
-                        value = notes,
-                        onValueChange = { notes = it },
-                        placeholder = { Text("Add any notes for this trip...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3,
-                        maxLines = 5,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Notes") },
+                    placeholder = {
+                        if (notes.isEmpty()) {
+                            Text("Add any notes for this trip...")
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Notes,
+                            contentDescription = null,
+                            tint = MotiumPrimary
                         )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 5,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary
                     )
-                }
+                )
             }
         }
     }
@@ -418,34 +424,28 @@ fun DateTimeField(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        OutlinedTextField(
-            value = value,
-            onValueChange = {},
-            readOnly = true,
-            leadingIcon = {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            },
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = MaterialTheme.typography.bodyMedium,
-            shape = RoundedCornerShape(16.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                disabledContainerColor = MaterialTheme.colorScheme.surface,
-                unfocusedBorderColor = Color.Transparent
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        readOnly = true,
+        label = { Text(label) },
+        leadingIcon = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MotiumPrimary
             )
+        },
+        modifier = modifier.fillMaxWidth(),
+        textStyle = MaterialTheme.typography.bodyMedium,
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            focusedLabelColor = MotiumPrimary,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+            focusedBorderColor = MotiumPrimary
         )
-    }
+    )
 }
 
 @Composable
@@ -455,35 +455,29 @@ fun ReadOnlyField(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp)
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        readOnly = true,
+        label = { Text(label) },
+        leadingIcon = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MotiumPrimary
+            )
+        },
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            focusedLabelColor = MotiumPrimary,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+            focusedBorderColor = MotiumPrimary,
+            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+            focusedTextColor = MaterialTheme.colorScheme.onSurface
         )
-        OutlinedTextField(
-            value = value,
-            onValueChange = {},
-            readOnly = true,
-            leadingIcon = {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                disabledBorderColor = Color.Transparent,
-                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-            ),
-            enabled = false
-        )
-    }
+    )
 }
 
 @Composable
@@ -494,29 +488,20 @@ fun LocationField(
     onValueChange: (String) -> Unit,
     onAddressSelected: (com.application.motium.data.geocoding.NominatimResult) -> Unit
 ) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        AddressAutocomplete(
-            label = "",
-            value = value,
-            onValueChange = onValueChange,
-            onAddressSelected = onAddressSelected,
-            placeholder = "Enter address",
-            leadingIcon = {
-                Icon(
-                    Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = iconColor
-                )
-            }
-        )
-    }
+    AddressAutocomplete(
+        label = label,
+        value = value,
+        onValueChange = onValueChange,
+        onAddressSelected = onAddressSelected,
+        placeholder = "Enter address",
+        leadingIcon = {
+            Icon(
+                Icons.Default.LocationOn,
+                contentDescription = null,
+                tint = iconColor
+            )
+        }
+    )
 }
 
 @Composable
@@ -566,85 +551,89 @@ fun VehicleSelectionField(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    Column {
-        Text(
-            text = "Vehicle",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            modifier = Modifier.padding(bottom = 4.dp)
+    if (availableVehicles.isEmpty()) {
+        OutlinedTextField(
+            value = "",
+            onValueChange = {},
+            readOnly = true,
+            enabled = false,
+            label = { Text("Vehicle") },
+            placeholder = { Text("No vehicles available") },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.DirectionsCar,
+                    contentDescription = null,
+                    tint = MotiumPrimary.copy(alpha = 0.5f)
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            )
         )
-
-        if (availableVehicles.isEmpty()) {
+    } else {
+        Box(modifier = Modifier.fillMaxWidth()) {
             OutlinedTextField(
-                value = "No vehicles available",
+                value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "",
                 onValueChange = {},
                 readOnly = true,
-                enabled = false,
+                label = { Text("Vehicle") },
+                placeholder = {
+                    if (selectedVehicleId == null) {
+                        Text("Select a vehicle")
+                    }
+                },
+                trailingIcon = {
+                    Icon(
+                        if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MotiumPrimary
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        tint = MotiumPrimary
+                    )
+                },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(12.dp),
+                enabled = false,
                 colors = OutlinedTextFieldDefaults.colors(
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                    disabledBorderColor = Color.Transparent,
-                    disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                    disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    disabledLeadingIconColor = MotiumPrimary,
+                    disabledTrailingIconColor = MotiumPrimary
                 )
             )
-        } else {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "Select a vehicle",
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Vehicle") },
-                    trailingIcon = {
-                        Icon(
-                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = MotiumPrimary
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.DirectionsCar,
-                            contentDescription = null,
-                            tint = MotiumPrimary
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    enabled = false,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                        disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        disabledLeadingIconColor = MotiumPrimary,
-                        disabledTrailingIconColor = MotiumPrimary
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { expanded = !expanded }
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp)
                     )
-                )
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .clickable { expanded = !expanded }
-                )
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                    modifier = Modifier
-                        .background(
-                            color = MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                ) {
-                    availableVehicles.forEach { vehicle ->
-                        DropdownMenuItem(
-                            text = { Text(vehicle.name, color = MaterialTheme.colorScheme.onSurface) },
-                            onClick = {
-                                onVehicleSelected(vehicle.id)
-                                expanded = false
-                            },
-                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                        )
-                    }
+            ) {
+                availableVehicles.forEach { vehicle ->
+                    DropdownMenuItem(
+                        text = { Text(vehicle.name, color = MaterialTheme.colorScheme.onSurface) },
+                        onClick = {
+                            onVehicleSelected(vehicle.id)
+                            expanded = false
+                        },
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                    )
                 }
             }
         }

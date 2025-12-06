@@ -618,4 +618,63 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         monthly_trip_count = monthlyTripCount,
         created_at = createdAt.toString(), updated_at = updatedAt.toString()
     )
+
+    /**
+     * Get the current user's Pro account ID if they are a Pro user.
+     * Returns null if the user is not a Pro user or not authenticated.
+     */
+    suspend fun getCurrentProAccountId(): String? {
+        return try {
+            val currentUser = _authState.value.user ?: return null
+
+            // Check if user is Enterprise/Pro role
+            if (currentUser.role != UserRole.ENTERPRISE) {
+                MotiumApplication.logger.d("User is not a Pro user", "SupabaseAuth")
+                return null
+            }
+
+            // Query pro_accounts table for this user
+            val proAccounts = postgres.from("pro_accounts")
+                .select {
+                    filter {
+                        eq("user_id", currentUser.id)
+                    }
+                }
+                .decodeList<ProAccountDto>()
+
+            val proAccountId = proAccounts.firstOrNull()?.id
+            MotiumApplication.logger.d("Pro account ID: $proAccountId", "SupabaseAuth")
+            proAccountId
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting Pro account ID: ${e.message}", "SupabaseAuth", e)
+            null
+        }
+    }
 }
+
+/**
+ * DTO for pro_accounts table
+ */
+@Serializable
+data class ProAccountDto(
+    val id: String,
+    @kotlinx.serialization.SerialName("user_id")
+    val userId: String,
+    @kotlinx.serialization.SerialName("company_name")
+    val companyName: String,
+    val siret: String? = null,
+    @kotlinx.serialization.SerialName("vat_number")
+    val vatNumber: String? = null,
+    @kotlinx.serialization.SerialName("legal_form")
+    val legalForm: String? = null,
+    @kotlinx.serialization.SerialName("billing_address")
+    val billingAddress: String? = null,
+    @kotlinx.serialization.SerialName("billing_email")
+    val billingEmail: String? = null,
+    @kotlinx.serialization.SerialName("stripe_customer_id")
+    val stripeCustomerId: String? = null,
+    @kotlinx.serialization.SerialName("created_at")
+    val createdAt: String,
+    @kotlinx.serialization.SerialName("updated_at")
+    val updatedAt: String
+)

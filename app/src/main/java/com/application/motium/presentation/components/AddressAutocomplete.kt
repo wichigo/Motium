@@ -101,11 +101,11 @@ fun AddressAutocomplete(
                 }
             },
             singleLine = true,
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                 focusedBorderColor = MotiumPrimary,
-                unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 focusedLabelColor = MotiumPrimary
             )
         )

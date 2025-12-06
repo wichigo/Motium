@@ -26,22 +26,6 @@ import com.application.motium.presentation.individual.expense.AddExpenseScreen
 import com.application.motium.presentation.individual.expense.ExpenseDetailsScreen
 import com.application.motium.presentation.debug.LogViewerScreen
 import com.application.motium.presentation.splash.SplashScreen
-import com.application.motium.presentation.enterprise.home.EnterpriseHomeScreen
-import com.application.motium.presentation.enterprise.home.EnterpriseNewHomeScreen
-import com.application.motium.presentation.enterprise.calendar.EnterpriseCalendarScreen
-import com.application.motium.presentation.enterprise.vehicles.EnterpriseVehiclesScreen
-import com.application.motium.presentation.enterprise.export.EnterpriseExportScreen
-import com.application.motium.presentation.enterprise.settings.EnterpriseSettingsScreen
-import com.application.motium.presentation.enterprise.addtrip.EnterpriseAddTripScreen
-import com.application.motium.presentation.enterprise.edittrip.EnterpriseEditTripScreen
-import com.application.motium.presentation.enterprise.tripdetails.EnterpriseTripDetailsScreen
-import com.application.motium.presentation.enterprise.expense.EnterpriseAddExpenseScreen
-import com.application.motium.presentation.enterprise.expense.EnterpriseExpenseDetailsScreen
-import com.application.motium.presentation.enterprise.employees.EmployeesManagementScreen
-import com.application.motium.presentation.enterprise.employees.EmployeeDetailsScreen
-import com.application.motium.presentation.enterprise.schedule.EmployeeScheduleScreen
-import com.application.motium.presentation.enterprise.export.EmployeeExportScreen
-import com.application.motium.presentation.enterprise.facturation.EmployeeFacturationScreen
 import androidx.compose.ui.platform.LocalContext
 import com.application.motium.data.TripRepository
 import com.application.motium.data.ExpenseRepository
@@ -74,7 +58,7 @@ fun MotiumNavHost(
                 // Check if there's a pending deep link to handle (company link invitation)
                 if (DeepLinkHandler.hasPendingLink()) {
                     val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
-                    val settingsRoute = if (isEnterprise) "enterprise_settings" else "settings"
+                    val settingsRoute = if (isEnterprise) "pro_settings" else "settings"
 
                     MotiumApplication.logger.i("🔗 Pending deep link detected - navigating to $settingsRoute", "Navigation")
 
@@ -240,13 +224,33 @@ fun MotiumNavHost(
         }
 
         composable(
+            route = "edit_expense/{expenseId}",
+            arguments = listOf(navArgument("expenseId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val expenseId = backStackEntry.arguments?.getString("expenseId") ?: ""
+            com.application.motium.presentation.individual.expense.EditExpenseScreen(
+                expenseId = expenseId,
+                onNavigateBack = { navController.popBackStack() },
+                onExpenseSaved = {
+                    navController.popBackStack()
+                },
+                onExpenseDeleted = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
             route = "expense_details/{date}",
             arguments = listOf(navArgument("date") { type = NavType.StringType })
         ) { backStackEntry ->
             val date = backStackEntry.arguments?.getString("date") ?: ""
             ExpenseDetailsScreen(
                 date = date,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToEditExpense = { expenseId ->
+                    navController.navigate("edit_expense/$expenseId")
+                }
             )
         }
 
@@ -325,172 +329,134 @@ fun MotiumNavHost(
             )
         }
 
-        // Enterprise/Professional interface screens
+        // ============================================
+        // PRO INTERFACE SCREENS
+        // ============================================
+
+        // Pro Home - Uses Individual NewHomeScreen with Pro navigation targets
+        // Pro users can access Pro-specific features via the expandable + menu
         composable("enterprise_home") {
-            EnterpriseNewHomeScreen(
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
+            NewHomeScreen(
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToCalendarPlanning = { navController.navigate("pro_calendar") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToExport = { navController.navigate("pro_export") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
                 onNavigateToTripDetails = { tripId ->
-                    navController.navigate("enterprise_trip_details/$tripId")
+                    navController.navigate("pro_trip_details/$tripId")
                 },
-                onNavigateToAddTrip = { navController.navigate("enterprise_add_trip") },
+                onNavigateToAddTrip = { navController.navigate("pro_add_trip") },
                 onNavigateToAddExpense = { date ->
-                    navController.navigate("enterprise_add_expense/$date")
+                    navController.navigate("pro_add_expense/$date")
                 },
                 onNavigateToExpenseDetails = { date ->
-                    navController.navigate("enterprise_expense_details/$date")
+                    navController.navigate("pro_expense_details/$date")
                 },
-                authViewModel = authViewModel
+                authViewModel = authViewModel,
+                // Pro-specific parameters
+                isPro = true,
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") }
             )
         }
 
-        composable("employees_management") {
-            EmployeesManagementScreen(
-                onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                onNavigateToSchedule = { navController.navigate("employee_schedule") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToEmployeeExport = { navController.navigate("employee_export") },
-                onNavigateToFacturation = { navController.navigate("employee_facturation") },
-                onNavigateToEmployeeDetails = { employeeId ->
-                    navController.navigate("employee_details/$employeeId")
-                },
-                authViewModel = authViewModel
-            )
-        }
-
-        composable(
-            route = "employee_details/{employeeId}",
-            arguments = listOf(navArgument("employeeId") { type = NavType.StringType })
-        ) { backStackEntry ->
-            val employeeId = backStackEntry.arguments?.getString("employeeId") ?: ""
-            EmployeeDetailsScreen(
-                employeeId = employeeId,
-                employeeName = "Employee Details",
-                onNavigateBack = { navController.popBackStack() },
-                authViewModel = authViewModel
-            )
-        }
-
-        composable("employee_schedule") {
-            EmployeeScheduleScreen(
-                onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                onNavigateToEmployees = { navController.navigate("employees_management") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToEmployeeExport = { navController.navigate("employee_export") },
-                onNavigateToFacturation = { navController.navigate("employee_facturation") },
-                authViewModel = authViewModel
-            )
-        }
-
-        composable("employee_export") {
-            EmployeeExportScreen(
-                onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                onNavigateToEmployees = { navController.navigate("employees_management") },
-                onNavigateToSchedule = { navController.navigate("employee_schedule") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToFacturation = { navController.navigate("employee_facturation") },
-                authViewModel = authViewModel
-            )
-        }
-
-        composable("employee_facturation") {
-            EmployeeFacturationScreen(
-                onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                onNavigateToEmployees = { navController.navigate("employees_management") },
-                onNavigateToSchedule = { navController.navigate("employee_schedule") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToEmployeeExport = { navController.navigate("employee_export") },
-                authViewModel = authViewModel
-            )
-        }
-
-        // Enterprise versions of screens with EnterpriseBottomNavigationSimple
-        composable("enterprise_calendar") {
-            EnterpriseCalendarScreen(
+        // Pro Calendar - Reuses Individual CalendarScreen
+        composable("pro_calendar") {
+            CalendarScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToExport = { navController.navigate("pro_export") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
                 onNavigateToTripDetails = { tripId ->
-                    navController.navigate("enterprise_trip_details/$tripId")
+                    navController.navigate("pro_trip_details/$tripId")
                 },
-                authViewModel = authViewModel
+                authViewModel = authViewModel,
+                // Pro-specific parameters
+                isPro = true,
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") }
             )
         }
 
-        composable("enterprise_vehicles") {
-            EnterpriseVehiclesScreen(
+        // Pro Vehicles - Reuses Individual VehiclesScreen
+        composable("pro_vehicles") {
+            VehiclesScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                authViewModel = authViewModel
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToExport = { navController.navigate("pro_export") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
+                authViewModel = authViewModel,
+                // Pro-specific parameters
+                isPro = true,
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") }
             )
         }
 
-        composable("enterprise_export") {
-            EnterpriseExportScreen(
+        // Pro Export (Standard) - Reuses Individual ExportScreen
+        composable("pro_export") {
+            ExportScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToSettings = { navController.navigate("enterprise_settings") },
-                authViewModel = authViewModel
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
+                authViewModel = authViewModel,
+                // Pro-specific parameters
+                isPro = true,
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") }
             )
         }
 
-        composable("enterprise_settings") {
-            EnterpriseSettingsScreen(
+        // Pro Settings - Reuses Individual SettingsScreen
+        composable("pro_settings") {
+            SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
-                onNavigateToCalendar = { navController.navigate("enterprise_calendar") },
-                onNavigateToVehicles = { navController.navigate("enterprise_vehicles") },
-                onNavigateToExport = { navController.navigate("enterprise_export") },
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToExport = { navController.navigate("pro_export") },
                 onNavigateToLogViewer = { navController.navigate("log_viewer") },
                 onNavigateToLogin = {
                     navController.navigate("login") {
                         popUpTo(0) { inclusive = true }
                     }
                 },
-                authViewModel = authViewModel
+                authViewModel = authViewModel,
+                // Pro-specific parameters
+                isPro = true,
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") }
             )
         }
 
-        // Enterprise versions of trip/expense screens
-        composable("enterprise_add_trip") {
+        // Pro Trip operations - Reuse Individual screens
+        composable("pro_add_trip") {
             val context = LocalContext.current
             val tripRepository = TripRepository.getInstance(context)
 
-            EnterpriseAddTripScreen(
+            AddTripScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onTripSaved = { trip ->
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
-                            MotiumApplication.logger.i("💾 Saving enterprise trip: ${trip.id}, distance=${trip.totalDistance}m, vehicle=${trip.vehicleId}, type=${trip.tripType}", "MotiumNavHost")
+                            MotiumApplication.logger.i("💾 Saving pro trip: ${trip.id}", "MotiumNavHost")
                             tripRepository.saveTrip(trip)
-                            MotiumApplication.logger.i("✅ Enterprise trip saved: ${trip.id}", "MotiumNavHost")
+                            MotiumApplication.logger.i("✅ Pro trip saved: ${trip.id}", "MotiumNavHost")
 
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
                                 navController.popBackStack()
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("❌ Failed to save enterprise trip: ${e.message}", "MotiumNavHost", e)
+                            MotiumApplication.logger.e("❌ Failed to save pro trip: ${e.message}", "MotiumNavHost", e)
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
                                 android.widget.Toast.makeText(
                                     context,
@@ -505,26 +471,26 @@ fun MotiumNavHost(
         }
 
         composable(
-            route = "enterprise_trip_details/{tripId}",
+            route = "pro_trip_details/{tripId}",
             arguments = listOf(navArgument("tripId") { type = NavType.StringType })
         ) { backStackEntry ->
             val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
-            EnterpriseTripDetailsScreen(
+            TripDetailsScreen(
                 tripId = tripId,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToEdit = { tripId ->
-                    navController.navigate("enterprise_edit_trip/$tripId")
+                    navController.navigate("pro_edit_trip/$tripId")
                 },
                 authViewModel = authViewModel
             )
         }
 
         composable(
-            route = "enterprise_edit_trip/{tripId}",
+            route = "pro_edit_trip/{tripId}",
             arguments = listOf(navArgument("tripId") { type = NavType.StringType })
         ) { backStackEntry ->
             val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
-            EnterpriseEditTripScreen(
+            EditTripScreen(
                 tripId = tripId,
                 onNavigateBack = { navController.popBackStack() },
                 onTripUpdated = {
@@ -534,11 +500,11 @@ fun MotiumNavHost(
         }
 
         composable(
-            route = "enterprise_add_expense/{date}",
+            route = "pro_add_expense/{date}",
             arguments = listOf(navArgument("date") { type = NavType.StringType })
         ) { backStackEntry ->
             val date = backStackEntry.arguments?.getString("date") ?: ""
-            EnterpriseAddExpenseScreen(
+            AddExpenseScreen(
                 date = date,
                 onNavigateBack = { navController.popBackStack() },
                 onExpenseSaved = {
@@ -548,13 +514,62 @@ fun MotiumNavHost(
         }
 
         composable(
-            route = "enterprise_expense_details/{date}",
+            route = "pro_expense_details/{date}",
             arguments = listOf(navArgument("date") { type = NavType.StringType })
         ) { backStackEntry ->
             val date = backStackEntry.arguments?.getString("date") ?: ""
-            EnterpriseExpenseDetailsScreen(
+            ExpenseDetailsScreen(
                 date = date,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToEditExpense = { expenseId ->
+                    navController.navigate("edit_expense/$expenseId")
+                }
+            )
+        }
+
+        // ============================================
+        // PRO-SPECIFIC SCREENS (from expandable menu)
+        // ============================================
+
+        // Linked Accounts Management
+        composable("pro_linked_accounts") {
+            com.application.motium.presentation.pro.accounts.LinkedAccountsScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToHome = { navController.navigate("enterprise_home") },
+                onNavigateToAccountDetails = { accountId ->
+                    navController.navigate("pro_account_details/$accountId")
+                },
+                authViewModel = authViewModel
+            )
+        }
+
+        composable(
+            route = "pro_account_details/{accountId}",
+            arguments = listOf(navArgument("accountId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val accountId = backStackEntry.arguments?.getString("accountId") ?: ""
+            com.application.motium.presentation.pro.accounts.AccountDetailsScreen(
+                accountId = accountId,
+                onNavigateBack = { navController.popBackStack() },
+                authViewModel = authViewModel
+            )
+        }
+
+        // Licenses Management
+        composable("pro_licenses") {
+            com.application.motium.presentation.pro.licenses.LicensesScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToHome = { navController.navigate("enterprise_home") },
+                authViewModel = authViewModel
+            )
+        }
+
+        // Pro Export Advanced (Multi-account export)
+        composable("pro_export_advanced") {
+            com.application.motium.presentation.pro.export.ProExportAdvancedScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToHome = { navController.navigate("enterprise_home") },
+                authViewModel = authViewModel
             )
         }
     }

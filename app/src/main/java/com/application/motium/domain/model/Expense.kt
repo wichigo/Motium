@@ -16,8 +16,7 @@ enum class ExpenseType {
 @Serializable
 data class Expense(
     val id: String,
-    val date: String,             // Date de la dépense (format YYYY-MM-DD) - NOUVEAU: lié à la journée
-    val tripId: String? = null,   // MODIFIÉ: Optionnel pour compatibilité (anciennement lié à un trip)
+    val date: String,             // Date de la dépense (format YYYY-MM-DD)
     val type: ExpenseType,
     val amount: Double,           // Montant TTC (Toutes Taxes Comprises)
     val amountHT: Double? = null, // Montant HT (Hors Taxes)

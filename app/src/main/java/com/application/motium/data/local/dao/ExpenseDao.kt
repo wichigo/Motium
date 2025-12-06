@@ -61,12 +61,6 @@ interface ExpenseDao {
     suspend fun getExpenseById(expenseId: String): ExpenseEntity?
 
     /**
-     * Get expenses for a specific trip.
-     */
-    @Query("SELECT * FROM expenses WHERE tripId = :tripId ORDER BY createdAt DESC")
-    suspend fun getExpensesForTrip(tripId: String): List<ExpenseEntity>
-
-    /**
      * Get expenses for a specific date.
      */
     @Query("SELECT * FROM expenses WHERE userId = :userId AND date = :date ORDER BY createdAt DESC")

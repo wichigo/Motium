@@ -31,6 +31,7 @@ import com.application.motium.domain.model.VehiclePower
 import com.application.motium.domain.model.VehicleType
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.MotiumPrimaryTint
@@ -44,7 +45,12 @@ fun VehiclesScreen(
     onNavigateToCalendar: () -> Unit = {},
     onNavigateToExport: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
-    authViewModel: com.application.motium.presentation.auth.AuthViewModel = viewModel()
+    authViewModel: com.application.motium.presentation.auth.AuthViewModel = viewModel(),
+    // Pro-specific parameters
+    isPro: Boolean = false,
+    onNavigateToLinkedAccounts: () -> Unit = {},
+    onNavigateToLicenses: () -> Unit = {},
+    onNavigateToExportAdvanced: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val viewModel: VehicleViewModel = viewModel { VehicleViewModel(context) }
@@ -202,22 +208,41 @@ fun VehiclesScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "vehicles",
-                isPremium = isPremium,
-                onNavigate = { route ->
-                    when (route) {
-                        "home" -> onNavigateToHome()
-                        "calendar" -> onNavigateToCalendar()
-                        "export" -> onNavigateToExport()
-                        "settings" -> onNavigateToSettings()
-                    }
-                },
-                onPremiumFeatureClick = {
-                    showPremiumDialog = true
-                },
-                isDarkMode = isDarkMode
-            )
+            if (isPro) {
+                ProBottomNavigation(
+                    currentRoute = "pro_vehicles",
+                    onNavigate = { route ->
+                        when (route) {
+                            "pro_home" -> onNavigateToHome()
+                            "pro_calendar" -> onNavigateToCalendar()
+                            "pro_vehicles" -> { /* Already on vehicles */ }
+                            "pro_export" -> onNavigateToExport()
+                            "pro_settings" -> onNavigateToSettings()
+                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
+                            "pro_licenses" -> onNavigateToLicenses()
+                            "pro_export_advanced" -> onNavigateToExportAdvanced()
+                        }
+                    },
+                    isDarkMode = isDarkMode
+                )
+            } else {
+                MotiumBottomNavigation(
+                    currentRoute = "vehicles",
+                    isPremium = isPremium,
+                    onNavigate = { route ->
+                        when (route) {
+                            "home" -> onNavigateToHome()
+                            "calendar" -> onNavigateToCalendar()
+                            "export" -> onNavigateToExport()
+                            "settings" -> onNavigateToSettings()
+                        }
+                    },
+                    onPremiumFeatureClick = {
+                        showPremiumDialog = true
+                    },
+                    isDarkMode = isDarkMode
+                )
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(

@@ -7,6 +7,7 @@ import com.application.motium.data.local.dao.ExpenseDao
 import com.application.motium.data.local.entities.ExpenseEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
@@ -25,6 +26,18 @@ class ExpenseRepository private constructor(private val context: Context) {
     private val expenseDao: ExpenseDao = database.expenseDao()
     private val authRepository = SupabaseAuthRepository.getInstance(context)
     private val supabaseExpenseRepository = SupabaseExpenseRepository.getInstance(context)
+    private val secureSessionStorage = SecureSessionStorage(context)
+
+    /**
+     * Get the current user ID from auth or secure storage.
+     */
+    private suspend fun getCurrentUserId(): String? {
+        // Try from Supabase auth first
+        authRepository.getCurrentAuthUser()?.id?.let { return it }
+
+        // Fallback to secure session storage
+        return secureSessionStorage.restoreSession()?.userId
+    }
 
     companion object {
         @Volatile
@@ -42,7 +55,7 @@ class ExpenseRepository private constructor(private val context: Context) {
      */
     suspend fun getExpensesForUser(): List<Expense> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id ?: return@withContext emptyList()
+            val userId = getCurrentUserId() ?: return@withContext emptyList()
             val entities = expenseDao.getExpensesForUser(userId)
             entities.map { it.toDomainModel() }
         } catch (e: Exception) {
@@ -73,43 +86,11 @@ class ExpenseRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Get expenses for a specific trip from local cache.
-     */
-    suspend fun getExpensesForTrip(tripId: String): List<Expense> = withContext(Dispatchers.IO) {
-        try {
-            expenseDao.getExpensesForTrip(tripId).map { it.toDomainModel() }
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting expenses for trip: ${e.message}", "ExpenseRepository", e)
-            emptyList()
-        }
-    }
-
-    /**
-     * Get expenses for multiple trips from local cache.
-     * Returns a map of tripId -> List<Expense>
-     */
-    suspend fun getExpensesForTrips(tripIds: List<String>): Result<Map<String, List<Expense>>> = withContext(Dispatchers.IO) {
-        try {
-            val result = mutableMapOf<String, List<Expense>>()
-            for (tripId in tripIds) {
-                val expenses = expenseDao.getExpensesForTrip(tripId).map { it.toDomainModel() }
-                if (expenses.isNotEmpty()) {
-                    result[tripId] = expenses
-                }
-            }
-            Result.success(result)
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting expenses for trips: ${e.message}", "ExpenseRepository", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
      * Get expenses for a specific date from local cache.
      */
     suspend fun getExpensesForDate(date: String): List<Expense> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id ?: return@withContext emptyList()
+            val userId = getCurrentUserId() ?: return@withContext emptyList()
             expenseDao.getExpensesForDate(userId, date).map { it.toDomainModel() }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting expenses for date: ${e.message}", "ExpenseRepository", e)
@@ -122,7 +103,7 @@ class ExpenseRepository private constructor(private val context: Context) {
      */
     suspend fun getExpensesBetweenDates(startDate: String, endDate: String): List<Expense> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id ?: return@withContext emptyList()
+            val userId = getCurrentUserId() ?: return@withContext emptyList()
             expenseDao.getExpensesBetweenDates(userId, startDate, endDate).map { it.toDomainModel() }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting expenses between dates: ${e.message}", "ExpenseRepository", e)
@@ -135,7 +116,7 @@ class ExpenseRepository private constructor(private val context: Context) {
      */
     suspend fun saveExpense(expense: Expense): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            val userId = getCurrentUserId()
                 ?: return@withContext Result.failure(Exception("User not authenticated"))
 
             // Save locally first (offline-first)
@@ -189,28 +170,61 @@ class ExpenseRepository private constructor(private val context: Context) {
      * Sync expenses from Supabase to local cache.
      * Call this when app starts or when user pulls to refresh.
      */
-    suspend fun syncFromSupabase(): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun syncFromSupabase(userId: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            val effectiveUserId = userId ?: getCurrentUserId()
                 ?: return@withContext Result.failure(Exception("User not authenticated"))
 
-            // Get local trips to fetch related expenses
-            val tripRepository = TripRepository.getInstance(context)
-            val trips = tripRepository.getAllTrips()
-            val tripIds = trips.map { it.id }
+            MotiumApplication.logger.i("🔄 Fetching expenses from Supabase for user: $effectiveUserId", "ExpenseRepository")
 
-            if (tripIds.isNotEmpty()) {
-                val result = supabaseExpenseRepository.getExpensesForTrips(tripIds)
-                if (result.isSuccess) {
-                    val expensesByTrip = result.getOrNull() ?: emptyMap()
-                    val allExpenses = expensesByTrip.values.flatten()
+            val result = supabaseExpenseRepository.getAllExpenses(effectiveUserId)
+            if (result.isSuccess) {
+                val supabaseExpenses = result.getOrNull() ?: emptyList()
+                MotiumApplication.logger.i("📥 Fetched ${supabaseExpenses.size} expenses from Supabase", "ExpenseRepository")
 
-                    // Insert all expenses into local cache
-                    val entities = allExpenses.map { it.toEntity(userId, lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
-                    expenseDao.insertExpenses(entities)
+                // Charger les expenses locales depuis Room
+                val localExpenseEntities = expenseDao.getExpensesForUser(effectiveUserId)
+                MotiumApplication.logger.i("📂 Found ${localExpenseEntities.size} local expenses in Room", "ExpenseRepository")
 
-                    MotiumApplication.logger.i("✅ Synced ${allExpenses.size} expenses from Supabase", "ExpenseRepository")
+                // Identifier les expenses Supabase par ID
+                val supabaseExpenseIds = supabaseExpenses.map { it.id }.toSet()
+
+                // Garder les expenses locales non encore synchronisées (needsSync = true)
+                val localOnlyExpensesToKeep = localExpenseEntities
+                    .filter { it.id !in supabaseExpenseIds && it.needsSync }
+
+                // Supprimer les expenses qui ont été supprimées sur Supabase
+                val expensesToDelete = localExpenseEntities
+                    .filter { it.id !in supabaseExpenseIds && !it.needsSync }
+
+                if (expensesToDelete.isNotEmpty()) {
+                    expensesToDelete.forEach { entity ->
+                        expenseDao.deleteExpenseById(entity.id)
+                    }
+                    MotiumApplication.logger.i(
+                        "🗑️ Deleted ${expensesToDelete.size} expenses that were removed from Supabase",
+                        "ExpenseRepository"
+                    )
                 }
+
+                // Convertir les expenses Supabase en entities Room
+                val supabaseEntities = supabaseExpenses.map { expense ->
+                    expense.toEntity(effectiveUserId, lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                }
+
+                // Sauvegarder dans Room: expenses Supabase + expenses locales non synchronisées
+                val allEntitiesToSave = supabaseEntities + localOnlyExpensesToKeep
+                MotiumApplication.logger.i(
+                    "💾 Saving ${allEntitiesToSave.size} expenses to Room (${supabaseEntities.size} from Supabase + ${localOnlyExpensesToKeep.size} local pending)",
+                    "ExpenseRepository"
+                )
+
+                if (allEntitiesToSave.isNotEmpty()) {
+                    expenseDao.insertExpenses(allEntitiesToSave)
+                    MotiumApplication.logger.i("✅ Successfully inserted ${allEntitiesToSave.size} expenses into Room", "ExpenseRepository")
+                }
+            } else {
+                MotiumApplication.logger.w("⚠️ Failed to fetch expenses from Supabase", "ExpenseRepository")
             }
 
             Result.success(Unit)
@@ -225,7 +239,7 @@ class ExpenseRepository private constructor(private val context: Context) {
      */
     suspend fun syncToSupabase(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            val userId = getCurrentUserId()
                 ?: return@withContext Result.failure(Exception("User not authenticated"))
 
             val expensesNeedingSync = expenseDao.getExpensesNeedingSync(userId)

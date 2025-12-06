@@ -7,8 +7,8 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.CompanyLinkRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.CompanyLink
+import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LinkStatus
-import com.application.motium.domain.model.SharingPreferences
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -147,7 +147,7 @@ class CompanyLinkViewModel(
     /**
      * Update sharing preferences for a company link.
      */
-    fun updateSharingPreferences(linkId: String, preferences: SharingPreferences) {
+    fun updateSharingPreferences(linkId: String, preferences: CompanyLinkPreferences) {
         viewModelScope.launch {
             val result = companyLinkRepository.updateSharingPreferences(linkId, preferences)
 

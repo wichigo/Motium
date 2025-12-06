@@ -137,6 +137,10 @@ dependencies {
     // PDF Generation
     implementation(libs.itextpdf)
 
+    // Excel Generation (Apache POI)
+    implementation("org.apache.poi:poi:5.2.5")
+    implementation("org.apache.poi:poi-ooxml:5.2.5")
+
     // Stripe Payments
     implementation("com.stripe:stripe-android:22.0.0")
 

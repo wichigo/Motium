@@ -23,8 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.application.motium.domain.model.CompanyLink
+import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LinkStatus
-import com.application.motium.domain.model.SharingPreferences
 import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
@@ -35,7 +35,7 @@ fun CompanyLinkCard(
     companyLink: CompanyLink,
     isExpanded: Boolean,
     onExpandChange: (Boolean) -> Unit,
-    onPreferencesChange: (SharingPreferences) -> Unit,
+    onPreferencesChange: (CompanyLinkPreferences) -> Unit,
     onUnlinkClick: () -> Unit,
     surfaceColor: Color,
     textColor: Color,
@@ -70,7 +70,7 @@ fun CompanyLinkCard(
                     HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
 
                     // Sharing preferences section
-                    SharingPreferencesSection(
+                    CompanyLinkPreferencesSection(
                         shareProfessionalTrips = companyLink.shareProfessionalTrips,
                         sharePersonalTrips = companyLink.sharePersonalTrips,
                         sharePersonalInfo = companyLink.sharePersonalInfo,
@@ -178,11 +178,11 @@ fun LinkStatusBadge(
 }
 
 @Composable
-private fun SharingPreferencesSection(
+private fun CompanyLinkPreferencesSection(
     shareProfessionalTrips: Boolean,
     sharePersonalTrips: Boolean,
     sharePersonalInfo: Boolean,
-    onPreferencesChange: (SharingPreferences) -> Unit,
+    onPreferencesChange: (CompanyLinkPreferences) -> Unit,
     enabled: Boolean,
     textColor: Color,
     textSecondaryColor: Color
@@ -209,7 +209,7 @@ private fun SharingPreferencesSection(
             checked = shareProfessionalTrips,
             onCheckedChange = { checked ->
                 onPreferencesChange(
-                    SharingPreferences(
+                    CompanyLinkPreferences(
                         shareProfessionalTrips = checked,
                         sharePersonalTrips = sharePersonalTrips,
                         sharePersonalInfo = sharePersonalInfo
@@ -226,7 +226,7 @@ private fun SharingPreferencesSection(
             checked = sharePersonalTrips,
             onCheckedChange = { checked ->
                 onPreferencesChange(
-                    SharingPreferences(
+                    CompanyLinkPreferences(
                         shareProfessionalTrips = shareProfessionalTrips,
                         sharePersonalTrips = checked,
                         sharePersonalInfo = sharePersonalInfo
@@ -243,7 +243,7 @@ private fun SharingPreferencesSection(
             checked = sharePersonalInfo,
             onCheckedChange = { checked ->
                 onPreferencesChange(
-                    SharingPreferences(
+                    CompanyLinkPreferences(
                         shareProfessionalTrips = shareProfessionalTrips,
                         sharePersonalTrips = sharePersonalTrips,
                         sharePersonalInfo = checked

@@ -2,8 +2,10 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
@@ -15,27 +17,12 @@ import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.*
 
-/**
- * MIGRATION SQL REQUIRED:
- * Exécutez ce script dans Supabase SQL Editor pour ajouter le champ date:
- *
- * -- Ajouter la colonne date
- * ALTER TABLE expenses_trips ADD COLUMN IF NOT EXISTS date DATE;
- *
- * -- Migrer les données existantes (extraire la date depuis les trips associés)
- * UPDATE expenses_trips e
- * SET date = DATE(t.start_time)
- * FROM trips t
- * WHERE e.trip_id = t.id AND e.date IS NULL;
- *
- * -- Rendre trip_id optionnel
- * ALTER TABLE expenses_trips ALTER COLUMN trip_id DROP NOT NULL;
- */
 class SupabaseExpenseRepository private constructor(private val context: Context) {
 
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
     private val json = Json { ignoreUnknownKeys = true }
+    private val secureSessionStorage = SecureSessionStorage(context)
 
     companion object {
         @Volatile
@@ -48,11 +35,21 @@ class SupabaseExpenseRepository private constructor(private val context: Context
         }
     }
 
+    /**
+     * Get the current user ID from auth or secure storage.
+     */
+    private suspend fun getCurrentUserId(): String? {
+        // Try from Supabase auth first
+        client.auth.currentUserOrNull()?.id?.let { return it }
+        // Fallback to secure session storage
+        return secureSessionStorage.restoreSession()?.userId
+    }
+
     @Serializable
     private data class SupabaseExpense(
         val id: String,
-        val date: String,               // NOUVEAU: Date au format YYYY-MM-DD
-        val trip_id: String? = null,    // MODIFIÉ: Optionnel
+        val user_id: String,            // REQUIRED: User ID for RLS
+        val date: String,               // Date au format YYYY-MM-DD
         val type: String,
         val amount: Double,
         val amount_ht: Double? = null,
@@ -67,7 +64,10 @@ class SupabaseExpenseRepository private constructor(private val context: Context
      */
     suspend fun saveExpense(expense: Expense): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("Saving expense to Supabase: ${expense.id}", "SupabaseExpenseRepository")
+            val userId = getCurrentUserId()
+                ?: return@withContext Result.failure(Exception("User not authenticated"))
+
+            MotiumApplication.logger.i("Saving expense to Supabase: ${expense.id} for user $userId", "SupabaseExpenseRepository")
 
             // Format timestamps
             val createdAtFormatted = formatInstant(expense.createdAt)
@@ -75,8 +75,8 @@ class SupabaseExpenseRepository private constructor(private val context: Context
 
             val supabaseExpense = SupabaseExpense(
                 id = expense.id,
-                date = expense.date,          // NOUVEAU: Date de la dépense
-                trip_id = expense.tripId,     // Maintenant optionnel
+                user_id = userId,             // REQUIRED: User ID for RLS
+                date = expense.date,          // Date de la dépense
                 type = expense.type.name,
                 amount = expense.amount,
                 amount_ht = expense.amountHT,
@@ -124,7 +124,7 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     }
 
     /**
-     * Save multiple expenses for a trip
+     * Save multiple expenses
      */
     suspend fun saveExpenses(expenses: List<Expense>): Result<Unit> = withContext(Dispatchers.IO) {
         try {
@@ -145,61 +145,27 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     }
 
     /**
-     * Get all expenses for a trip
+     * Get all expenses for a user from Supabase
      */
-    suspend fun getExpensesForTrip(tripId: String): Result<List<Expense>> = withContext(Dispatchers.IO) {
+    suspend fun getAllExpenses(userId: String): Result<List<Expense>> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("Fetching expenses for trip: $tripId", "SupabaseExpenseRepository")
+            MotiumApplication.logger.i("Fetching all expenses for user: $userId", "SupabaseExpenseRepository")
 
             val supabaseExpenses = postgres
                 .from("expenses_trips")
                 .select {
                     filter {
-                        eq("trip_id", tripId)
+                        eq("user_id", userId)
                     }
                 }
                 .decodeList<SupabaseExpense>()
 
             val expenses = supabaseExpenses.map { it.toExpense() }
 
-            MotiumApplication.logger.i("Fetched ${expenses.size} expenses for trip $tripId", "SupabaseExpenseRepository")
+            MotiumApplication.logger.i("Fetched ${expenses.size} expenses from Supabase", "SupabaseExpenseRepository")
             Result.success(expenses)
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error fetching expenses: ${e.message}", "SupabaseExpenseRepository", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Get all expenses for multiple trips in a single query (optimized for batch export)
-     */
-    suspend fun getExpensesForTrips(tripIds: List<String>): Result<Map<String, List<Expense>>> = withContext(Dispatchers.IO) {
-        try {
-            if (tripIds.isEmpty()) {
-                return@withContext Result.success(emptyMap())
-            }
-
-            MotiumApplication.logger.i("Fetching expenses for ${tripIds.size} trips in batch", "SupabaseExpenseRepository")
-
-            val supabaseExpenses = postgres
-                .from("expenses_trips")
-                .select {
-                    filter {
-                        isIn("trip_id", tripIds)
-                    }
-                }
-                .decodeList<SupabaseExpense>()
-
-            // Group expenses by trip_id (filter out null tripIds)
-            val expensesByTrip = supabaseExpenses
-                .map { it.toExpense() }
-                .filter { it.tripId != null }
-                .groupBy { it.tripId!! }
-
-            MotiumApplication.logger.i("Fetched ${supabaseExpenses.size} expenses for ${tripIds.size} trips in batch", "SupabaseExpenseRepository")
-            Result.success(expensesByTrip)
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error fetching expenses in batch: ${e.message}", "SupabaseExpenseRepository", e)
+            MotiumApplication.logger.e("Error fetching all expenses: ${e.message}", "SupabaseExpenseRepository", e)
             Result.failure(e)
         }
     }
@@ -338,8 +304,7 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     private fun SupabaseExpense.toExpense(): Expense {
         return Expense(
             id = id,
-            date = date,              // NOUVEAU: Date de la dépense
-            tripId = trip_id,         // Maintenant optionnel
+            date = date,
             type = ExpenseType.valueOf(type),
             amount = amount,
             amountHT = amount_ht,

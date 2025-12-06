@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.MotiumApplication
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
 import com.application.motium.data.VehicleRepository
@@ -38,6 +39,7 @@ import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.TrackingModeDropdown
 import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.AutoTrackingSettings
@@ -67,11 +69,17 @@ fun NewHomeScreen(
     onNavigateToAddTrip: () -> Unit = {},
     onNavigateToAddExpense: (String) -> Unit = {},
     onNavigateToExpenseDetails: (String) -> Unit = {},
-    authViewModel: AuthViewModel = viewModel()
+    authViewModel: AuthViewModel = viewModel(),
+    // Pro-specific parameters
+    isPro: Boolean = false,
+    onNavigateToLinkedAccounts: () -> Unit = {},
+    onNavigateToLicenses: () -> Unit = {},
+    onNavigateToExportAdvanced: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     val workScheduleRepository = remember { WorkScheduleRepository.getInstance(context) }
     val themeManager = remember { ThemeManager.getInstance(context) }
@@ -172,6 +180,7 @@ fun NewHomeScreen(
             if (authState.isAuthenticated) {
                 coroutineScope.launch(Dispatchers.IO) {
                     tripRepository.syncTripsFromSupabase()
+                    expenseRepository.syncFromSupabase()
                     // Recharger après synchro pour afficher les nouveaux trajets
                     val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
                     trips = syncedTrips
@@ -247,7 +256,10 @@ fun NewHomeScreen(
                             // 1. Sync trips depuis Supabase
                             tripRepository.syncTripsFromSupabase(userId)
 
-                            // 2. Sync véhicules (pour les kilométrages à jour)
+                            // 2. Sync expenses depuis Supabase
+                            expenseRepository.syncFromSupabase(userId)
+
+                            // 3. Sync véhicules (pour les kilométrages à jour)
                             vehicleRepository.syncVehiclesFromSupabase()
 
                             // 3. Sync horaires de travail
@@ -556,18 +568,37 @@ fun NewHomeScreen(
         }
 
         Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-            MotiumBottomNavigation(
-                currentRoute = "home",
-                onNavigate = { route ->
-                    when (route) {
-                        "calendar" -> onNavigateToCalendar()
-                        "vehicles" -> onNavigateToVehicles()
-                        "export" -> onNavigateToExport()
-                        "settings" -> onNavigateToSettings()
-                    }
-                },
-                isDarkMode = isDarkMode
-            )
+            if (isPro) {
+                ProBottomNavigation(
+                    currentRoute = "pro_home",
+                    onNavigate = { route ->
+                        when (route) {
+                            "pro_home" -> { /* Already on home */ }
+                            "pro_calendar" -> onNavigateToCalendar()
+                            "pro_vehicles" -> onNavigateToVehicles()
+                            "pro_export" -> onNavigateToExport()
+                            "pro_settings" -> onNavigateToSettings()
+                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
+                            "pro_licenses" -> onNavigateToLicenses()
+                            "pro_export_advanced" -> onNavigateToExportAdvanced()
+                        }
+                    },
+                    isDarkMode = isDarkMode
+                )
+            } else {
+                MotiumBottomNavigation(
+                    currentRoute = "home",
+                    onNavigate = { route ->
+                        when (route) {
+                            "calendar" -> onNavigateToCalendar()
+                            "vehicles" -> onNavigateToVehicles()
+                            "export" -> onNavigateToExport()
+                            "settings" -> onNavigateToSettings()
+                        }
+                    },
+                    isDarkMode = isDarkMode
+                )
+            }
         }
     }
 

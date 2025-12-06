@@ -26,6 +26,7 @@ import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.*
 import com.application.motium.presentation.theme.MotiumPrimary
@@ -41,7 +42,12 @@ fun ExportScreen(
     onNavigateToCalendar: () -> Unit = {},
     onNavigateToVehicles: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
-    authViewModel: AuthViewModel = viewModel()
+    authViewModel: AuthViewModel = viewModel(),
+    // Pro-specific parameters
+    isPro: Boolean = false,
+    onNavigateToLinkedAccounts: () -> Unit = {},
+    onNavigateToLicenses: () -> Unit = {},
+    onNavigateToExportAdvanced: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val themeManager = remember { ThemeManager.getInstance(context) }
@@ -112,22 +118,41 @@ fun ExportScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "export",
-                isPremium = isPremium,
-                onNavigate = { route ->
-                    when (route) {
-                        "home" -> onNavigateToHome()
-                        "calendar" -> onNavigateToCalendar()
-                        "vehicles" -> onNavigateToVehicles()
-                        "settings" -> onNavigateToSettings()
-                    }
-                },
-                onPremiumFeatureClick = {
-                    showPremiumDialog = true
-                },
-                isDarkMode = isDarkMode
-            )
+            if (isPro) {
+                ProBottomNavigation(
+                    currentRoute = "pro_export",
+                    onNavigate = { route ->
+                        when (route) {
+                            "pro_home" -> onNavigateToHome()
+                            "pro_calendar" -> onNavigateToCalendar()
+                            "pro_vehicles" -> onNavigateToVehicles()
+                            "pro_export" -> { /* Already on export */ }
+                            "pro_settings" -> onNavigateToSettings()
+                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
+                            "pro_licenses" -> onNavigateToLicenses()
+                            "pro_export_advanced" -> onNavigateToExportAdvanced()
+                        }
+                    },
+                    isDarkMode = isDarkMode
+                )
+            } else {
+                MotiumBottomNavigation(
+                    currentRoute = "export",
+                    isPremium = isPremium,
+                    onNavigate = { route ->
+                        when (route) {
+                            "home" -> onNavigateToHome()
+                            "calendar" -> onNavigateToCalendar()
+                            "vehicles" -> onNavigateToVehicles()
+                            "settings" -> onNavigateToSettings()
+                        }
+                    },
+                    onPremiumFeatureClick = {
+                        showPremiumDialog = true
+                    },
+                    isDarkMode = isDarkMode
+                )
+            }
         },
         containerColor = backgroundColor
     ) { paddingValues ->

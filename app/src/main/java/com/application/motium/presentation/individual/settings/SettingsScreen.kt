@@ -29,8 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.CompanyLink
+import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LinkStatus
-import com.application.motium.domain.model.SharingPreferences
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
@@ -38,6 +38,7 @@ import com.application.motium.presentation.components.CompanyLinkCard
 import com.application.motium.presentation.components.LinkActivationDialog
 import com.application.motium.presentation.components.LinkActivationSuccessDialog
 import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.NoCompanyLinksCard
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.components.UnlinkConfirmationDialog
@@ -67,7 +68,12 @@ fun SettingsScreen(
     onNavigateToLogViewer: () -> Unit = {},
     onNavigateToLogin: () -> Unit = {},
     pendingLinkToken: String? = null,
-    authViewModel: AuthViewModel = viewModel()
+    authViewModel: AuthViewModel = viewModel(),
+    // Pro-specific parameters
+    isPro: Boolean = false,
+    onNavigateToLinkedAccounts: () -> Unit = {},
+    onNavigateToLicenses: () -> Unit = {},
+    onNavigateToExportAdvanced: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val themeManager = remember { ThemeManager.getInstance(context) }
@@ -135,22 +141,41 @@ fun SettingsScreen(
             )
         },
         bottomBar = {
-            MotiumBottomNavigation(
-                currentRoute = "settings",
-                isPremium = isPremium,
-                onNavigate = { route ->
-                    when (route) {
-                        "home" -> onNavigateToHome()
-                        "calendar" -> onNavigateToCalendar()
-                        "vehicles" -> onNavigateToVehicles()
-                        "export" -> onNavigateToExport()
-                    }
-                },
-                onPremiumFeatureClick = {
-                    showPremiumDialog = true
-                },
-                isDarkMode = isDarkMode
-            )
+            if (isPro) {
+                ProBottomNavigation(
+                    currentRoute = "pro_settings",
+                    onNavigate = { route ->
+                        when (route) {
+                            "pro_home" -> onNavigateToHome()
+                            "pro_calendar" -> onNavigateToCalendar()
+                            "pro_vehicles" -> onNavigateToVehicles()
+                            "pro_export" -> onNavigateToExport()
+                            "pro_settings" -> { /* Already on settings */ }
+                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
+                            "pro_licenses" -> onNavigateToLicenses()
+                            "pro_export_advanced" -> onNavigateToExportAdvanced()
+                        }
+                    },
+                    isDarkMode = isDarkMode
+                )
+            } else {
+                MotiumBottomNavigation(
+                    currentRoute = "settings",
+                    isPremium = isPremium,
+                    onNavigate = { route ->
+                        when (route) {
+                            "home" -> onNavigateToHome()
+                            "calendar" -> onNavigateToCalendar()
+                            "vehicles" -> onNavigateToVehicles()
+                            "export" -> onNavigateToExport()
+                        }
+                    },
+                    onPremiumFeatureClick = {
+                        showPremiumDialog = true
+                    },
+                    isDarkMode = isDarkMode
+                )
+            }
         },
         containerColor = backgroundColor
     ) { paddingValues ->
@@ -269,95 +294,22 @@ fun SettingsScreen(
 
     // Edit Profile Dialog
     if (showEditProfileDialog) {
-        AlertDialog(
-            onDismissRequest = { showEditProfileDialog = false },
-            title = {
-                Text(
-                    "Edit Profile",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = textColor
+        EditProfileDialog(
+            phoneNumber = phoneNumber,
+            address = address,
+            onPhoneChange = { phoneNumber = it },
+            onAddressChange = { address = it },
+            onSave = {
+                MotiumApplication.logger.i(
+                    "Profile updated: Phone=$phoneNumber, Address=$address",
+                    "SettingsScreen"
                 )
+                showEditProfileDialog = false
             },
-            text = {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    OutlinedTextField(
-                        value = phoneNumber,
-                        onValueChange = { phoneNumber = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Phone Number") },
-                        placeholder = { Text("+1 (555) 123-4567") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Phone,
-                                contentDescription = null,
-                                tint = MotiumPrimary
-                            )
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            focusedBorderColor = MotiumPrimary,
-                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            focusedLabelColor = MotiumPrimary
-                        ),
-                        singleLine = true
-                    )
-
-                    OutlinedTextField(
-                        value = address,
-                        onValueChange = { address = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Address") },
-                        placeholder = { Text("123 Main St, Anytown, USA") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Home,
-                                contentDescription = null,
-                                tint = MotiumPrimary
-                            )
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            focusedBorderColor = MotiumPrimary,
-                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            focusedLabelColor = MotiumPrimary
-                        ),
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        // Here you would save the profile changes to the backend
-                        MotiumApplication.logger.i(
-                            "Profile updated: Phone=$phoneNumber, Address=$address",
-                            "SettingsScreen"
-                        )
-                        showEditProfileDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MotiumPrimary
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Save", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showEditProfileDialog = false }
-                ) {
-                    Text("Cancel", color = MotiumPrimary)
-                }
-            },
-            containerColor = surfaceColor
+            onDismiss = { showEditProfileDialog = false },
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor
         )
     }
 
@@ -502,68 +454,71 @@ fun ProfileInformationSection(
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 // Phone Number
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        "Phone Number",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = textSecondaryColor,
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = phoneNumber,
-                        onValueChange = onPhoneChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("+1 (555) 123-4567") },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedTextColor = textColor,
-                            focusedTextColor = textColor,
-                            unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                            focusedBorderColor = MotiumPrimary
-                        ),
-                        singleLine = true
-                    )
-                }
-
-                HorizontalDivider(
-                    color = textSecondaryColor.copy(alpha = 0.1f)
+                OutlinedTextField(
+                    value = phoneNumber,
+                    onValueChange = onPhoneChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Phone Number") },
+                    placeholder = {
+                        if (phoneNumber.isEmpty()) {
+                            Text("+1 (555) 123-4567")
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Phone,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor,
+                        unfocusedLabelColor = textSecondaryColor,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary
+                    ),
+                    singleLine = true
                 )
 
                 // Address
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        "Address",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = textSecondaryColor,
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = address,
-                        onValueChange = onAddressChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("123 Main St, Anytown, USA") },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedTextColor = textColor,
-                            focusedTextColor = textColor,
-                            unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                            focusedBorderColor = MotiumPrimary
-                        ),
-                        singleLine = true
-                    )
-                }
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = onAddressChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Address") },
+                    placeholder = {
+                        if (address.isEmpty()) {
+                            Text("123 Main St, Anytown, USA")
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Home,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor,
+                        unfocusedLabelColor = textSecondaryColor,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary
+                    ),
+                    singleLine = true
+                )
             }
         }
     }
@@ -579,7 +534,7 @@ fun CompanyLinkSectionNew(
     surfaceColor: Color,
     textColor: Color,
     textSecondaryColor: Color,
-    onPreferencesChange: (String, SharingPreferences) -> Unit,
+    onPreferencesChange: (String, CompanyLinkPreferences) -> Unit,
     onUnlinkClick: (CompanyLink) -> Unit
 ) {
     // Track which card is expanded
@@ -1925,5 +1880,169 @@ fun LogoutSection(
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp
         )
+    }
+}
+
+@Composable
+fun EditProfileDialog(
+    phoneNumber: String,
+    address: String,
+    onPhoneChange: (String) -> Unit,
+    onAddressChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = surfaceColor,
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Icon header
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(MotiumPrimaryTint),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(36.dp),
+                        tint = MotiumPrimary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Title
+                Text(
+                    text = "Modifier le profil",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Subtitle
+                Text(
+                    text = "Mettez à jour vos informations",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Phone Number Field
+                OutlinedTextField(
+                    value = phoneNumber,
+                    onValueChange = onPhoneChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Numéro de téléphone") },
+                    placeholder = {
+                        if (phoneNumber.isEmpty()) {
+                            Text("+33 6 12 34 56 78")
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Phone,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedBorderColor = MotiumPrimary
+                    ),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Address Field
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = onAddressChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Adresse") },
+                    placeholder = {
+                        if (address.isEmpty()) {
+                            Text("123 Rue de la Paix, Paris")
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Home,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedBorderColor = MotiumPrimary
+                    ),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                // Buttons
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onSave,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MotiumPrimary,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "Enregistrer",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Annuler",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
     }
 }

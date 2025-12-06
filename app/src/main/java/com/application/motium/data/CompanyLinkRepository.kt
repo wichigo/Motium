@@ -9,8 +9,8 @@ import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
 import com.application.motium.data.supabase.SupabaseClient
 import com.application.motium.domain.model.CompanyLink
+import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LinkStatus
-import com.application.motium.domain.model.SharingPreferences
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
@@ -225,7 +225,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
      */
     suspend fun updateSharingPreferences(
         linkId: String,
-        preferences: SharingPreferences
+        preferences: CompanyLinkPreferences
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()

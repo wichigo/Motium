@@ -129,6 +129,7 @@ class ExportViewModel(private val context: Context) : ViewModel() {
 
         var filtered = trips.filter { trip ->
             trip.endTime != null &&
+            trip.isValidated &&  // Seulement les trajets validés
             trip.startTime >= currentFilters.startDate &&
             trip.startTime <= currentFilters.endDate
         }
