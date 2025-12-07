@@ -5,9 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.LinkedAccountRepository
+import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.domain.model.LinkedAccount
-import com.application.motium.domain.model.LinkedAccountStatus
+import com.application.motium.domain.model.LinkStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
  */
 data class LinkedAccountsUiState(
     val isLoading: Boolean = true,
-    val linkedAccounts: List<LinkedAccount> = emptyList(),
+    val linkedUsers: List<LinkedUserDto> = emptyList(),
     val error: String? = null,
     val successMessage: String? = null,
     val showInviteDialog: Boolean = false,
@@ -39,13 +39,13 @@ class LinkedAccountsViewModel(
     val uiState: StateFlow<LinkedAccountsUiState> = _uiState.asStateFlow()
 
     init {
-        loadLinkedAccounts()
+        loadLinkedUsers()
     }
 
     /**
-     * Load all linked accounts for the current Pro user
+     * Load all linked users for the current Pro account
      */
-    fun loadLinkedAccounts() {
+    fun loadLinkedUsers() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
@@ -59,16 +59,16 @@ class LinkedAccountsViewModel(
                     return@launch
                 }
 
-                val result = linkedAccountRepository.getLinkedAccounts(proAccountId)
+                val result = linkedAccountRepository.getLinkedUsers(proAccountId)
                 result.fold(
-                    onSuccess = { accounts ->
+                    onSuccess = { users ->
                         _uiState.update { it.copy(
                             isLoading = false,
-                            linkedAccounts = accounts.sortedByDescending { a -> a.createdAt }
+                            linkedUsers = users
                         )}
                     },
                     onFailure = { e ->
-                        MotiumApplication.logger.e("Failed to load linked accounts: ${e.message}", "LinkedAccountsVM", e)
+                        MotiumApplication.logger.e("Failed to load linked users: ${e.message}", "LinkedAccountsVM", e)
                         _uiState.update { it.copy(
                             isLoading = false,
                             error = "Erreur lors du chargement: ${e.message}"
@@ -76,7 +76,7 @@ class LinkedAccountsViewModel(
                     }
                 )
             } catch (e: Exception) {
-                MotiumApplication.logger.e("Error loading linked accounts: ${e.message}", "LinkedAccountsVM", e)
+                MotiumApplication.logger.e("Error loading linked users: ${e.message}", "LinkedAccountsVM", e)
                 _uiState.update { it.copy(
                     isLoading = false,
                     error = "Erreur: ${e.message}"
@@ -100,9 +100,9 @@ class LinkedAccountsViewModel(
     }
 
     /**
-     * Send an invitation to link an account
+     * Send an invitation to link a user
      */
-    fun inviteAccount(email: String) {
+    fun inviteUser(email: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isInviting = true) }
 
@@ -116,18 +116,23 @@ class LinkedAccountsViewModel(
                     return@launch
                 }
 
-                val result = linkedAccountRepository.inviteAccount(proAccountId, email)
+                val result = linkedAccountRepository.inviteUser(proAccountId, email)
                 result.fold(
-                    onSuccess = {
+                    onSuccess = { userId ->
+                        val message = if (userId != null) {
+                            "Invitation envoyée à $email"
+                        } else {
+                            "Utilisateur non trouvé. L'invitation sera envoyée par email."
+                        }
                         _uiState.update { it.copy(
                             isInviting = false,
                             showInviteDialog = false,
-                            successMessage = "Invitation envoyée à $email"
+                            successMessage = message
                         )}
-                        loadLinkedAccounts()
+                        loadLinkedUsers()
                     },
                     onFailure = { e ->
-                        MotiumApplication.logger.e("Failed to invite account: ${e.message}", "LinkedAccountsVM", e)
+                        MotiumApplication.logger.e("Failed to invite user: ${e.message}", "LinkedAccountsVM", e)
                         _uiState.update { it.copy(
                             isInviting = false,
                             error = "Erreur: ${e.message}"
@@ -144,18 +149,18 @@ class LinkedAccountsViewModel(
     }
 
     /**
-     * Revoke access for a linked account
+     * Revoke access for a linked user
      */
-    fun revokeAccount(accountId: String) {
+    fun revokeUser(userId: String) {
         viewModelScope.launch {
             try {
-                val result = linkedAccountRepository.revokeAccount(accountId)
+                val result = linkedAccountRepository.revokeUser(userId)
                 result.fold(
                     onSuccess = {
                         _uiState.update { it.copy(
                             successMessage = "Accès révoqué"
                         )}
-                        loadLinkedAccounts()
+                        loadLinkedUsers()
                     },
                     onFailure = { e ->
                         _uiState.update { it.copy(
@@ -184,8 +189,8 @@ class LinkedAccountsViewModel(
     }
 
     /**
-     * Get count of accounts by status
+     * Get count of users by status
      */
-    fun getActiveCount(): Int = _uiState.value.linkedAccounts.count { it.status == LinkedAccountStatus.ACTIVE }
-    fun getPendingCount(): Int = _uiState.value.linkedAccounts.count { it.status == LinkedAccountStatus.PENDING }
+    fun getActiveCount(): Int = _uiState.value.linkedUsers.count { it.status == LinkStatus.ACTIVE }
+    fun getPendingCount(): Int = _uiState.value.linkedUsers.count { it.status == LinkStatus.PENDING }
 }

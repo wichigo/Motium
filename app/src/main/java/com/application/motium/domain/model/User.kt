@@ -13,13 +13,35 @@ data class User(
     val monthlyTripCount: Int = 0,
     val phoneNumber: String = "",
     val address: String = "",
-    val linkedToCompany: Boolean = false,
-    val shareProfessionalTrips: Boolean = true,
-    val sharePersonalTrips: Boolean = false,
-    val sharePersonalInfo: Boolean = true,
+
+    // Liaison avec un compte Pro (pour les utilisateurs Individual)
+    val linkedProAccountId: String? = null,  // ID du compte Pro auquel l'utilisateur est lié
+    val linkStatus: LinkStatus? = null,      // pending/active/revoked
+    val invitationToken: String? = null,     // Token d'invitation (si pending)
+    val invitedAt: Instant? = null,          // Date d'invitation
+    val linkActivatedAt: Instant? = null,    // Date d'activation du lien
+
+    // Préférences de partage (contrôlées par l'utilisateur Individual)
+    val shareProfessionalTrips: Boolean = true,  // Pro voit les trajets pro
+    val sharePersonalTrips: Boolean = false,     // Pro ne voit PAS les trajets perso par défaut
+    val shareVehicleInfo: Boolean = true,        // Pro voit les véhicules
+    val shareExpenses: Boolean = false,          // Pro ne voit PAS les dépenses par défaut
+
     val createdAt: Instant,
     val updatedAt: Instant
-)
+) {
+    /** L'utilisateur est-il lié à un compte Pro ? */
+    val isLinkedToCompany: Boolean
+        get() = linkedProAccountId != null && linkStatus == LinkStatus.ACTIVE
+}
+
+/** Statut de la liaison avec un compte Pro */
+enum class LinkStatus {
+    PENDING,   // Invitation envoyée, en attente d'acceptation
+    ACTIVE,    // Liaison active, compte lié et fonctionnel
+    UNLINKED,  // Utilisateur s'est délié (conserve contact mais perd accès aux trajets)
+    REVOKED    // Liaison révoquée par le Pro
+}
 
 data class Subscription(
     val type: SubscriptionType,

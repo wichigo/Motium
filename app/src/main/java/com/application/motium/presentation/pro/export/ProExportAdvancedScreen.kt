@@ -20,14 +20,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.application.motium.domain.model.LinkedAccount
-import com.application.motium.domain.model.LinkedAccountStatus
+import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
 import kotlinx.datetime.*
-import java.time.format.TextStyle
-import java.util.*
 
 /**
  * Pro Export Advanced Screen - Multi-account export
@@ -236,7 +233,7 @@ fun ProExportAdvancedScreen(
                 }
 
                 // Account list
-                if (uiState.linkedAccounts.isEmpty()) {
+                if (uiState.linkedUsers.isEmpty()) {
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -257,11 +254,11 @@ fun ProExportAdvancedScreen(
                         }
                     }
                 } else {
-                    items(uiState.linkedAccounts) { account ->
-                        AccountSelectionItem(
-                            account = account,
-                            isSelected = uiState.selectedAccountIds.contains(account.id),
-                            onToggle = { viewModel.toggleAccountSelection(account.id) },
+                    items(uiState.linkedUsers) { user ->
+                        UserSelectionItem(
+                            user = user,
+                            isSelected = uiState.selectedUserIds.contains(user.userId),
+                            onToggle = { viewModel.toggleUserSelection(user.userId) },
                             cardColor = cardColor,
                             textColor = textColor,
                             textSecondaryColor = textSecondaryColor
@@ -398,7 +395,7 @@ fun ProExportAdvancedScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
-                        enabled = uiState.selectedAccountIds.isNotEmpty() && !uiState.isExporting,
+                        enabled = uiState.selectedUserIds.isNotEmpty() && !uiState.isExporting,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MotiumPrimary
                         ),
@@ -487,8 +484,8 @@ fun ProExportAdvancedScreen(
 }
 
 @Composable
-private fun AccountSelectionItem(
-    account: LinkedAccount,
+private fun UserSelectionItem(
+    user: LinkedUserDto,
     isSelected: Boolean,
     onToggle: () -> Unit,
     cardColor: Color,
@@ -529,7 +526,7 @@ private fun AccountSelectionItem(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = account.displayName.firstOrNull()?.uppercase() ?: "?",
+                    text = user.displayName.firstOrNull()?.uppercase() ?: "?",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MotiumPrimary
@@ -540,13 +537,13 @@ private fun AccountSelectionItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = account.displayName,
+                    text = user.displayName,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = textColor
                 )
                 Text(
-                    text = account.userEmail,
+                    text = user.userEmail,
                     style = MaterialTheme.typography.bodySmall,
                     color = textSecondaryColor
                 )

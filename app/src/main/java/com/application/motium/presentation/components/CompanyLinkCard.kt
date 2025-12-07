@@ -160,6 +160,7 @@ fun LinkStatusBadge(
         LinkStatus.ACTIVE -> "Actif" to Color(0xFF10B981)
         LinkStatus.PENDING -> "En attente" to Color(0xFFF59E0B)
         LinkStatus.UNLINKED -> "Délié" to Color(0xFF6B7280)
+        LinkStatus.REVOKED -> "Révoqué" to Color(0xFFEF4444)
     }
 
     Surface(

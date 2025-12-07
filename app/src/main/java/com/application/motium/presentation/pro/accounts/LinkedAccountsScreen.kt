@@ -21,15 +21,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.application.motium.domain.model.LinkedAccount
-import com.application.motium.domain.model.LinkedAccountStatus
+import com.application.motium.data.supabase.LinkedUserDto
+import com.application.motium.domain.model.LinkStatus
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
 
 /**
  * Screen for managing linked accounts (Pro feature)
- * Displays list of accounts linked to the Pro user with their status
+ * Displays list of users linked to the Pro account with their status
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,7 +113,7 @@ fun LinkedAccountsScreen(
             ) {
                 CircularProgressIndicator(color = MotiumPrimary)
             }
-        } else if (uiState.linkedAccounts.isEmpty()) {
+        } else if (uiState.linkedUsers.isEmpty()) {
             // Empty state
             Box(
                 modifier = Modifier
@@ -165,7 +165,7 @@ fun LinkedAccountsScreen(
                 // Summary card
                 item {
                     SummaryCard(
-                        totalAccounts = uiState.linkedAccounts.size,
+                        totalAccounts = uiState.linkedUsers.size,
                         activeAccounts = viewModel.getActiveCount(),
                         pendingAccounts = viewModel.getPendingCount(),
                         cardColor = cardColor,
@@ -184,11 +184,11 @@ fun LinkedAccountsScreen(
                     )
                 }
 
-                items(uiState.linkedAccounts) { account ->
-                    LinkedAccountCard(
-                        account = account,
-                        onClick = { onNavigateToAccountDetails(account.id) },
-                        onRevoke = { viewModel.revokeAccount(account.id) },
+                items(uiState.linkedUsers) { user ->
+                    LinkedUserCard(
+                        user = user,
+                        onClick = { onNavigateToAccountDetails(user.userId) },
+                        onRevoke = { viewModel.revokeUser(user.userId) },
                         cardColor = cardColor,
                         textColor = textColor,
                         textSecondaryColor = textSecondaryColor
@@ -206,7 +206,7 @@ fun LinkedAccountsScreen(
     if (uiState.showInviteDialog) {
         InviteAccountDialog(
             onDismiss = { viewModel.hideInviteDialog() },
-            onInvite = { email -> viewModel.inviteAccount(email) },
+            onInvite = { email -> viewModel.inviteUser(email) },
             isLoading = uiState.isInviting
         )
     }
@@ -278,8 +278,8 @@ private fun StatItem(
 }
 
 @Composable
-private fun LinkedAccountCard(
-    account: LinkedAccount,
+private fun LinkedUserCard(
+    user: LinkedUserDto,
     onClick: () -> Unit,
     onRevoke: () -> Unit,
     cardColor: Color,
@@ -309,7 +309,7 @@ private fun LinkedAccountCard(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = account.displayName.firstOrNull()?.uppercase() ?: "?",
+                    text = user.displayName.firstOrNull()?.uppercase() ?: "?",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MotiumPrimary
@@ -321,7 +321,7 @@ private fun LinkedAccountCard(
             // Info
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = account.displayName,
+                    text = user.displayName,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = textColor,
@@ -329,7 +329,7 @@ private fun LinkedAccountCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = account.userEmail,
+                    text = user.userEmail,
                     style = MaterialTheme.typography.bodySmall,
                     color = textSecondaryColor,
                     maxLines = 1,
@@ -340,7 +340,7 @@ private fun LinkedAccountCard(
             Spacer(modifier = Modifier.width(8.dp))
 
             // Status badge
-            StatusBadge(status = account.status)
+            StatusBadge(status = user.status)
 
             // More options
             var showMenu by remember { mutableStateOf(false) }
@@ -366,7 +366,7 @@ private fun LinkedAccountCard(
                             Icon(Icons.Outlined.Visibility, contentDescription = null)
                         }
                     )
-                    if (account.status == LinkedAccountStatus.ACTIVE) {
+                    if (user.status == LinkStatus.ACTIVE) {
                         DropdownMenuItem(
                             text = { Text("Révoquer l'accès", color = ErrorRed) },
                             onClick = {
@@ -389,19 +389,24 @@ private fun LinkedAccountCard(
 }
 
 @Composable
-private fun StatusBadge(status: LinkedAccountStatus) {
+private fun StatusBadge(status: LinkStatus) {
     val (backgroundColor, textColor, text) = when (status) {
-        LinkedAccountStatus.ACTIVE -> Triple(
+        LinkStatus.ACTIVE -> Triple(
             ValidatedGreen.copy(alpha = 0.15f),
             ValidatedGreen,
             "Actif"
         )
-        LinkedAccountStatus.PENDING -> Triple(
+        LinkStatus.PENDING -> Triple(
             PendingOrange.copy(alpha = 0.15f),
             PendingOrange,
             "En attente"
         )
-        LinkedAccountStatus.REVOKED -> Triple(
+        LinkStatus.UNLINKED -> Triple(
+            TextSecondaryDark.copy(alpha = 0.15f),
+            TextSecondaryDark,
+            "Délié"
+        )
+        LinkStatus.REVOKED -> Triple(
             ErrorRed.copy(alpha = 0.15f),
             ErrorRed,
             "Révoqué"

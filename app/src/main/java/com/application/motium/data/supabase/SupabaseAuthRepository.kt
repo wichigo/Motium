@@ -5,7 +5,16 @@ import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.data.sync.SyncScheduler
-import com.application.motium.domain.model.*
+import com.application.motium.domain.model.AuthResult
+import com.application.motium.domain.model.AuthState
+import com.application.motium.domain.model.AuthUser
+import com.application.motium.domain.model.LinkStatus
+import com.application.motium.domain.model.LoginRequest
+import com.application.motium.domain.model.RegisterRequest
+import com.application.motium.domain.model.Subscription
+import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.domain.model.User
+import com.application.motium.domain.model.UserRole
 import com.application.motium.domain.repository.AuthRepository
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
@@ -67,6 +76,17 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val stripe_customer_id: String? = null,
         val stripe_subscription_id: String? = null,
         val monthly_trip_count: Int = 0,
+        // Pro link fields
+        val linked_pro_account_id: String? = null,
+        val link_status: String? = null,
+        val invitation_token: String? = null,
+        val invited_at: String? = null,
+        val link_activated_at: String? = null,
+        // Sharing preferences
+        val share_professional_trips: Boolean = true,
+        val share_personal_trips: Boolean = false,
+        val share_vehicle_info: Boolean = true,
+        val share_expenses: Boolean = false,
         val created_at: String,
         val updated_at: String
     )
@@ -605,6 +625,17 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             stripeSubscriptionId = stripe_subscription_id
         ),
         monthlyTripCount = monthly_trip_count,
+        // Pro link fields
+        linkedProAccountId = linked_pro_account_id,
+        linkStatus = link_status?.let { LinkStatus.valueOf(it.uppercase()) },
+        invitationToken = invitation_token,
+        invitedAt = invited_at?.let { Instant.parse(it) },
+        linkActivatedAt = link_activated_at?.let { Instant.parse(it) },
+        // Sharing preferences
+        shareProfessionalTrips = share_professional_trips,
+        sharePersonalTrips = share_personal_trips,
+        shareVehicleInfo = share_vehicle_info,
+        shareExpenses = share_expenses,
         createdAt = Instant.parse(created_at), updatedAt = Instant.parse(updated_at)
     )
 
@@ -616,6 +647,17 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         stripe_customer_id = subscription.stripeCustomerId,
         stripe_subscription_id = subscription.stripeSubscriptionId,
         monthly_trip_count = monthlyTripCount,
+        // Pro link fields
+        linked_pro_account_id = linkedProAccountId,
+        link_status = linkStatus?.name?.lowercase(),
+        invitation_token = invitationToken,
+        invited_at = invitedAt?.toString(),
+        link_activated_at = linkActivatedAt?.toString(),
+        // Sharing preferences
+        share_professional_trips = shareProfessionalTrips,
+        share_personal_trips = sharePersonalTrips,
+        share_vehicle_info = shareVehicleInfo,
+        share_expenses = shareExpenses,
         created_at = createdAt.toString(), updated_at = updatedAt.toString()
     )
 

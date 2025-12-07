@@ -25,10 +25,17 @@ data class UserEntity(
     val monthlyTripCount: Int,
     val phoneNumber: String,
     val address: String,
-    val linkedToCompany: Boolean,
+    // Pro link fields
+    val linkedProAccountId: String? = null,
+    val linkStatus: String? = null, // LinkStatus enum stored as String
+    val invitationToken: String? = null,
+    val invitedAt: String? = null,
+    val linkActivatedAt: String? = null,
+    // Sharing preferences
     val shareProfessionalTrips: Boolean,
     val sharePersonalTrips: Boolean,
-    val sharePersonalInfo: Boolean,
+    val shareVehicleInfo: Boolean,
+    val shareExpenses: Boolean,
     val createdAt: String, // Instant stored as ISO-8601 string
     val updatedAt: String, // Instant stored as ISO-8601 string
     val lastSyncedAt: Long? = null, // Timestamp of last sync with Supabase
@@ -55,10 +62,15 @@ fun UserEntity.toDomainModel(): User {
         monthlyTripCount = monthlyTripCount,
         phoneNumber = phoneNumber,
         address = address,
-        linkedToCompany = linkedToCompany,
+        linkedProAccountId = linkedProAccountId,
+        linkStatus = linkStatus?.let { LinkStatus.valueOf(it) },
+        invitationToken = invitationToken,
+        invitedAt = invitedAt?.let { Instant.parse(it) },
+        linkActivatedAt = linkActivatedAt?.let { Instant.parse(it) },
         shareProfessionalTrips = shareProfessionalTrips,
         sharePersonalTrips = sharePersonalTrips,
-        sharePersonalInfo = sharePersonalInfo,
+        shareVehicleInfo = shareVehicleInfo,
+        shareExpenses = shareExpenses,
         createdAt = Instant.parse(createdAt),
         updatedAt = Instant.parse(updatedAt)
     )
@@ -82,10 +94,15 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         monthlyTripCount = monthlyTripCount,
         phoneNumber = phoneNumber,
         address = address,
-        linkedToCompany = linkedToCompany,
+        linkedProAccountId = linkedProAccountId,
+        linkStatus = linkStatus?.name,
+        invitationToken = invitationToken,
+        invitedAt = invitedAt?.toString(),
+        linkActivatedAt = linkActivatedAt?.toString(),
         shareProfessionalTrips = shareProfessionalTrips,
         sharePersonalTrips = sharePersonalTrips,
-        sharePersonalInfo = sharePersonalInfo,
+        shareVehicleInfo = shareVehicleInfo,
+        shareExpenses = shareExpenses,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
         lastSyncedAt = lastSyncedAt,

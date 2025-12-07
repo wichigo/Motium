@@ -5,9 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.LinkedAccountRepository
+import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.domain.model.LinkedAccount
-import com.application.motium.domain.model.LinkedAccountStatus
+import com.application.motium.domain.model.LinkStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,8 +20,8 @@ import kotlinx.datetime.Instant
  */
 data class ProExportAdvancedUiState(
     val isLoading: Boolean = true,
-    val linkedAccounts: List<LinkedAccount> = emptyList(),
-    val selectedAccountIds: Set<String> = emptySet(),
+    val linkedUsers: List<LinkedUserDto> = emptyList(),
+    val selectedUserIds: Set<String> = emptySet(),
     val startDate: Instant = Instant.fromEpochMilliseconds(System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000),
     val endDate: Instant = Instant.fromEpochMilliseconds(System.currentTimeMillis()),
     val exportFormat: ExportFormatOption = ExportFormatOption.CSV,
@@ -33,7 +33,7 @@ data class ProExportAdvancedUiState(
     val successMessage: String? = null
 ) {
     val allSelected: Boolean
-        get() = linkedAccounts.isNotEmpty() && selectedAccountIds.size == linkedAccounts.size
+        get() = linkedUsers.isNotEmpty() && selectedUserIds.size == linkedUsers.size
 }
 
 /**
@@ -49,13 +49,13 @@ class ProExportAdvancedViewModel(
     val uiState: StateFlow<ProExportAdvancedUiState> = _uiState.asStateFlow()
 
     init {
-        loadLinkedAccounts()
+        loadLinkedUsers()
     }
 
     /**
-     * Load all active linked accounts
+     * Load all active linked users
      */
-    private fun loadLinkedAccounts() {
+    private fun loadLinkedUsers() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
@@ -69,14 +69,14 @@ class ProExportAdvancedViewModel(
                     return@launch
                 }
 
-                val result = linkedAccountRepository.getLinkedAccounts(proAccountId)
+                val result = linkedAccountRepository.getLinkedUsers(proAccountId)
                 result.fold(
-                    onSuccess = { accounts ->
-                        val activeAccounts = accounts.filter { it.status == LinkedAccountStatus.ACTIVE }
+                    onSuccess = { users ->
+                        val activeUsers = users.filter { it.status == LinkStatus.ACTIVE }
                         _uiState.update { it.copy(
                             isLoading = false,
-                            linkedAccounts = activeAccounts,
-                            selectedAccountIds = activeAccounts.map { a -> a.id }.toSet()
+                            linkedUsers = activeUsers,
+                            selectedUserIds = activeUsers.map { u -> u.userId }.toSet()
                         )}
                     },
                     onFailure = { e ->
@@ -96,28 +96,28 @@ class ProExportAdvancedViewModel(
     }
 
     /**
-     * Toggle selection for an account
+     * Toggle selection for a user
      */
-    fun toggleAccountSelection(accountId: String) {
+    fun toggleUserSelection(userId: String) {
         _uiState.update { state ->
-            val newSelection = if (state.selectedAccountIds.contains(accountId)) {
-                state.selectedAccountIds - accountId
+            val newSelection = if (state.selectedUserIds.contains(userId)) {
+                state.selectedUserIds - userId
             } else {
-                state.selectedAccountIds + accountId
+                state.selectedUserIds + userId
             }
-            state.copy(selectedAccountIds = newSelection)
+            state.copy(selectedUserIds = newSelection)
         }
     }
 
     /**
-     * Toggle select all accounts
+     * Toggle select all users
      */
     fun toggleSelectAll() {
         _uiState.update { state ->
             if (state.allSelected) {
-                state.copy(selectedAccountIds = emptySet())
+                state.copy(selectedUserIds = emptySet())
             } else {
-                state.copy(selectedAccountIds = state.linkedAccounts.map { it.id }.toSet())
+                state.copy(selectedUserIds = state.linkedUsers.map { it.userId }.toSet())
             }
         }
     }
@@ -174,7 +174,7 @@ class ProExportAdvancedViewModel(
             try {
                 val state = _uiState.value
 
-                if (state.selectedAccountIds.isEmpty()) {
+                if (state.selectedUserIds.isEmpty()) {
                     _uiState.update { it.copy(
                         isExporting = false,
                         error = "Sélectionnez au moins un compte"
@@ -184,7 +184,7 @@ class ProExportAdvancedViewModel(
 
                 // TODO: Implement actual export logic
                 // This would involve:
-                // 1. Fetch trips from all selected accounts
+                // 1. Fetch trips from all selected users
                 // 2. Filter by date range and trip types
                 // 3. Generate file in selected format
                 // 4. Save/share file
@@ -194,10 +194,10 @@ class ProExportAdvancedViewModel(
 
                 _uiState.update { it.copy(
                     isExporting = false,
-                    successMessage = "Export réussi! ${state.selectedAccountIds.size} compte(s) exporté(s)"
+                    successMessage = "Export réussi! ${state.selectedUserIds.size} compte(s) exporté(s)"
                 )}
 
-                MotiumApplication.logger.i("Pro export completed for ${state.selectedAccountIds.size} accounts", "ProExportVM")
+                MotiumApplication.logger.i("Pro export completed for ${state.selectedUserIds.size} users", "ProExportVM")
             } catch (e: Exception) {
                 _uiState.update { it.copy(
                     isExporting = false,

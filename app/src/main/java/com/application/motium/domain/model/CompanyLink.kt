@@ -21,17 +21,7 @@ data class CompanyLink(
     val updatedAt: Instant
 )
 
-/**
- * Status of a company link.
- */
-enum class LinkStatus {
-    /** Invitation received, awaiting user activation */
-    PENDING,
-    /** Currently linked and sharing data */
-    ACTIVE,
-    /** Previously linked, company retains contact info but loses access to trips */
-    UNLINKED
-}
+// LinkStatus is defined in User.kt and imported where needed
 
 /**
  * Data class for updating sharing preferences for a company link.

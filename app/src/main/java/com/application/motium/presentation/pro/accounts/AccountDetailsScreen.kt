@@ -3,7 +3,6 @@ package com.application.motium.presentation.pro.accounts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,21 +19,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.LinkedAccountRepository
-import com.application.motium.domain.model.LinkedAccount
-import com.application.motium.domain.model.LinkedAccountStatus
-import com.application.motium.domain.model.Trip
-import com.application.motium.domain.model.TripType
+import com.application.motium.data.supabase.LinkedUserDto
+import com.application.motium.domain.model.LinkStatus
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
-import kotlinx.coroutines.launch
-import kotlinx.datetime.Instant
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 
 /**
- * Screen displaying details of a linked account
- * Shows shared trips, vehicles, and expenses based on sharing preferences
+ * Screen displaying details of a linked user
+ * Shows sharing preferences and shared data access
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,7 +39,6 @@ fun AccountDetailsScreen(
     val context = LocalContext.current
     val themeManager = remember { ThemeManager.getInstance(context) }
     val repository = remember { LinkedAccountRepository.getInstance(context) }
-    val scope = rememberCoroutineScope()
 
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
@@ -56,26 +48,18 @@ fun AccountDetailsScreen(
     val textSecondaryColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
 
     // State
-    var account by remember { mutableStateOf<LinkedAccount?>(null) }
-    var sharedTrips by remember { mutableStateOf<List<Trip>>(emptyList()) }
+    var user by remember { mutableStateOf<LinkedUserDto?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // Load account details
+    // Load user details
     LaunchedEffect(accountId) {
         isLoading = true
         try {
-            val result = repository.getLinkedAccountById(accountId)
+            val result = repository.getLinkedUserById(accountId)
             result.fold(
-                onSuccess = { acc ->
-                    account = acc
-                    // Load shared data based on preferences
-                    if (acc.sharingPreferences.shareProfessionalTrips || acc.sharingPreferences.sharePersonalTrips) {
-                        val tripsResult = repository.getSharedTrips(accountId)
-                        tripsResult.onSuccess { trips ->
-                            sharedTrips = trips
-                        }
-                    }
+                onSuccess = { linkedUser ->
+                    user = linkedUser
                 },
                 onFailure = { e ->
                     error = e.message
@@ -93,7 +77,7 @@ fun AccountDetailsScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        account?.displayName ?: "Détails du compte",
+                        user?.displayName ?: "Détails du compte",
                         fontWeight = FontWeight.Bold,
                         color = textColor
                     )
@@ -147,7 +131,7 @@ fun AccountDetailsScreen(
                     }
                 }
             }
-            account != null -> {
+            user != null -> {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -159,7 +143,7 @@ fun AccountDetailsScreen(
                     // Profile header
                     item {
                         ProfileHeader(
-                            account = account!!,
+                            user = user!!,
                             cardColor = cardColor,
                             textColor = textColor,
                             textSecondaryColor = textSecondaryColor
@@ -169,68 +153,21 @@ fun AccountDetailsScreen(
                     // Sharing preferences
                     item {
                         SharingPreferencesCard(
-                            account = account!!,
+                            user = user!!,
                             cardColor = cardColor,
                             textColor = textColor,
                             textSecondaryColor = textSecondaryColor
                         )
                     }
 
-                    // Shared trips section
-                    if (account!!.sharingPreferences.shareProfessionalTrips || account!!.sharingPreferences.sharePersonalTrips) {
-                        item {
-                            Text(
-                                "Trajets partagés",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = textColor
-                            )
-                        }
-
-                        if (sharedTrips.isEmpty()) {
-                            item {
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(containerColor = cardColor),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(32.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            "Aucun trajet partagé",
-                                            color = textSecondaryColor
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            items(sharedTrips.take(10)) { trip ->
-                                SharedTripCard(
-                                    trip = trip,
-                                    cardColor = cardColor,
-                                    textColor = textColor,
-                                    textSecondaryColor = textSecondaryColor
-                                )
-                            }
-
-                            if (sharedTrips.size > 10) {
-                                item {
-                                    TextButton(
-                                        onClick = { /* Show all trips */ },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            "Voir tous les trajets (${sharedTrips.size})",
-                                            color = MotiumPrimary
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    // Shared data info
+                    item {
+                        SharedDataInfoCard(
+                            user = user!!,
+                            cardColor = cardColor,
+                            textColor = textColor,
+                            textSecondaryColor = textSecondaryColor
+                        )
                     }
                 }
             }
@@ -240,7 +177,7 @@ fun AccountDetailsScreen(
 
 @Composable
 private fun ProfileHeader(
-    account: LinkedAccount,
+    user: LinkedUserDto,
     cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color
@@ -265,7 +202,7 @@ private fun ProfileHeader(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = account.displayName.firstOrNull()?.uppercase() ?: "?",
+                    text = user.displayName.firstOrNull()?.uppercase() ?: "?",
                     style = MaterialTheme.typography.headlineLarge,
                     fontWeight = FontWeight.Bold,
                     color = MotiumPrimary
@@ -275,14 +212,14 @@ private fun ProfileHeader(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = account.displayName,
+                text = user.displayName,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = textColor
             )
 
             Text(
-                text = account.userEmail,
+                text = user.userEmail,
                 style = MaterialTheme.typography.bodyMedium,
                 color = textSecondaryColor
             )
@@ -290,10 +227,11 @@ private fun ProfileHeader(
             Spacer(modifier = Modifier.height(12.dp))
 
             // Status badge
-            val (statusColor, statusText) = when (account.status) {
-                LinkedAccountStatus.ACTIVE -> ValidatedGreen to "Actif"
-                LinkedAccountStatus.PENDING -> PendingOrange to "En attente"
-                LinkedAccountStatus.REVOKED -> ErrorRed to "Révoqué"
+            val (statusColor, statusText) = when (user.status) {
+                LinkStatus.ACTIVE -> ValidatedGreen to "Actif"
+                LinkStatus.PENDING -> PendingOrange to "En attente"
+                LinkStatus.UNLINKED -> TextSecondaryDark to "Délié"
+                LinkStatus.REVOKED -> ErrorRed to "Révoqué"
             }
 
             Surface(
@@ -314,7 +252,7 @@ private fun ProfileHeader(
 
 @Composable
 private fun SharingPreferencesCard(
-    account: LinkedAccount,
+    user: LinkedUserDto,
     cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color
@@ -338,11 +276,10 @@ private fun SharingPreferencesCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            val prefs = account.sharingPreferences
-            SharingItem("Trajets professionnels", prefs.shareProfessionalTrips, textSecondaryColor)
-            SharingItem("Trajets personnels", prefs.sharePersonalTrips, textSecondaryColor)
-            SharingItem("Véhicules", prefs.shareVehicleInfo, textSecondaryColor)
-            SharingItem("Dépenses", prefs.shareExpenses, textSecondaryColor)
+            SharingItem("Trajets professionnels", user.shareProfessionalTrips, textSecondaryColor)
+            SharingItem("Trajets personnels", user.sharePersonalTrips, textSecondaryColor)
+            SharingItem("Véhicules", user.shareVehicleInfo, textSecondaryColor)
+            SharingItem("Dépenses", user.shareExpenses, textSecondaryColor)
         }
     }
 }
@@ -371,8 +308,8 @@ private fun SharingItem(label: String, isShared: Boolean, textSecondaryColor: Co
 }
 
 @Composable
-private fun SharedTripCard(
-    trip: Trip,
+private fun SharedDataInfoCard(
+    user: LinkedUserDto,
     cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color
@@ -382,81 +319,31 @@ private fun SharedTripCard(
         colors = CardDefaults.cardColors(containerColor = cardColor),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Trip type icon
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(
-                        if (trip.type == TripType.PROFESSIONAL)
-                            MotiumPrimary.copy(alpha = 0.1f)
-                        else
-                            ProfessionalBlue.copy(alpha = 0.1f)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = if (trip.type == TripType.PROFESSIONAL)
-                        Icons.Default.Work else Icons.Default.Person,
-                    contentDescription = null,
-                    tint = if (trip.type == TripType.PROFESSIONAL)
-                        MotiumPrimary else ProfessionalBlue,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            Icon(
+                Icons.Outlined.Info,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = textSecondaryColor
+            )
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = trip.startAddress ?: "Départ inconnu",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = textColor,
-                    maxLines = 1
-                )
-                Text(
-                    text = "→ ${trip.endAddress ?: "Arrivée inconnue"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = textSecondaryColor,
-                    maxLines = 1
-                )
-                Text(
-                    text = formatTripDate(trip.startTime),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = textSecondaryColor
-                )
-            }
-
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = String.format("%.1f km", trip.distanceKm),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MotiumPrimary
-                )
-            }
+            Text(
+                text = if (user.isActive) {
+                    "Les données partagées par cet utilisateur sont visibles dans vos exports."
+                } else {
+                    "L'utilisateur doit accepter l'invitation pour partager ses données."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = textSecondaryColor,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
         }
     }
-}
-
-private fun formatTripDate(instant: Instant): String {
-    val dateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-    val dayName = when (dateTime.dayOfWeek) {
-        kotlinx.datetime.DayOfWeek.MONDAY -> "Lun"
-        kotlinx.datetime.DayOfWeek.TUESDAY -> "Mar"
-        kotlinx.datetime.DayOfWeek.WEDNESDAY -> "Mer"
-        kotlinx.datetime.DayOfWeek.THURSDAY -> "Jeu"
-        kotlinx.datetime.DayOfWeek.FRIDAY -> "Ven"
-        kotlinx.datetime.DayOfWeek.SATURDAY -> "Sam"
-        kotlinx.datetime.DayOfWeek.SUNDAY -> "Dim"
-        else -> ""
-    }
-    return "$dayName ${dateTime.dayOfMonth}/${dateTime.monthNumber} - ${String.format("%02d:%02d", dateTime.hour, dateTime.minute)}"
 }

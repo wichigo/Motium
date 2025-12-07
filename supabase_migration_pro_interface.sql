@@ -1,7 +1,7 @@
 -- =============================================================================
 -- MOTIUM PRO INTERFACE - SUPABASE MIGRATION
 -- =============================================================================
--- This migration creates the necessary tables and RLS policies for the Pro interface.
+-- This migration creates the necessary tables and columns for the Pro interface.
 -- Run this in the Supabase SQL Editor.
 -- =============================================================================
 
@@ -46,93 +46,67 @@ CREATE POLICY "Pro users can insert own account" ON pro_accounts
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 -- =============================================================================
--- 2. LINKED_ACCOUNTS TABLE
+-- 2. ADD PRO LINK COLUMNS TO USERS TABLE
 -- =============================================================================
--- Links Individual accounts to Pro accounts
+-- These columns link Individual users to Pro accounts
+-- (No separate linked_accounts table needed - data is directly on the user)
 
-CREATE TABLE IF NOT EXISTS linked_accounts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    pro_account_id UUID NOT NULL REFERENCES pro_accounts(id) ON DELETE CASCADE,
-    individual_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
-    email TEXT NOT NULL,
-    name TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'revoked')),
-    invitation_token TEXT,
-    invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    activated_at TIMESTAMPTZ,
+-- Link to Pro account
+ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_pro_account_id UUID REFERENCES pro_accounts(id) ON DELETE SET NULL;
 
-    -- Sharing preferences (controlled by the Individual user)
-    share_professional_trips BOOLEAN NOT NULL DEFAULT true,
-    share_personal_trips BOOLEAN NOT NULL DEFAULT false,
-    share_vehicle_info BOOLEAN NOT NULL DEFAULT true,
-    share_expenses BOOLEAN NOT NULL DEFAULT false,
+-- Link status: pending, active, revoked
+ALTER TABLE users ADD COLUMN IF NOT EXISTS link_status TEXT CHECK (link_status IN ('pending', 'active', 'revoked'));
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+-- Invitation management
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invitation_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS link_activated_at TIMESTAMPTZ;
 
-    CONSTRAINT unique_pro_individual_link UNIQUE (pro_account_id, email)
-);
+-- Sharing preferences (Individual controls what Pro can see)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS share_professional_trips BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS share_personal_trips BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS share_vehicle_info BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS share_expenses BOOLEAN DEFAULT false;
 
 -- Indexes for faster lookups
-CREATE INDEX IF NOT EXISTS idx_linked_accounts_pro_account_id ON linked_accounts(pro_account_id);
-CREATE INDEX IF NOT EXISTS idx_linked_accounts_individual_user_id ON linked_accounts(individual_user_id);
-CREATE INDEX IF NOT EXISTS idx_linked_accounts_email ON linked_accounts(email);
-CREATE INDEX IF NOT EXISTS idx_linked_accounts_invitation_token ON linked_accounts(invitation_token);
-CREATE INDEX IF NOT EXISTS idx_linked_accounts_status ON linked_accounts(status);
-
--- RLS Policies for linked_accounts
-ALTER TABLE linked_accounts ENABLE ROW LEVEL SECURITY;
-
--- Pro users can read linked accounts for their pro_account
-CREATE POLICY "Pro users can read linked accounts" ON linked_accounts
-    FOR SELECT USING (
-        pro_account_id IN (
-            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
-        )
-    );
-
--- Pro users can insert linked accounts for their pro_account
-CREATE POLICY "Pro users can insert linked accounts" ON linked_accounts
-    FOR INSERT WITH CHECK (
-        pro_account_id IN (
-            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
-        )
-    );
-
--- Pro users can update linked accounts for their pro_account
-CREATE POLICY "Pro users can update linked accounts" ON linked_accounts
-    FOR UPDATE USING (
-        pro_account_id IN (
-            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
-        )
-    );
-
--- Pro users can delete linked accounts for their pro_account
-CREATE POLICY "Pro users can delete linked accounts" ON linked_accounts
-    FOR DELETE USING (
-        pro_account_id IN (
-            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
-        )
-    );
-
--- Individual users can read their own linked accounts
-CREATE POLICY "Individual users can read own links" ON linked_accounts
-    FOR SELECT USING (individual_user_id = auth.uid());
-
--- Individual users can update sharing preferences for their own links
-CREATE POLICY "Individual users can update own link preferences" ON linked_accounts
-    FOR UPDATE USING (individual_user_id = auth.uid())
-    WITH CHECK (individual_user_id = auth.uid());
+CREATE INDEX IF NOT EXISTS idx_users_linked_pro_account_id ON users(linked_pro_account_id);
+CREATE INDEX IF NOT EXISTS idx_users_link_status ON users(link_status);
+CREATE INDEX IF NOT EXISTS idx_users_invitation_token ON users(invitation_token);
 
 -- =============================================================================
--- 3. LICENSES TABLE
+-- 3. RLS POLICIES FOR LINKED USERS
+-- =============================================================================
+
+-- Pro users can read linked users (users linked to their pro_account)
+CREATE POLICY "Pro can read linked users" ON users
+    FOR SELECT USING (
+        linked_pro_account_id IN (
+            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
+        )
+    );
+
+-- Pro users can update link_status for users linked to them
+CREATE POLICY "Pro can update linked users status" ON users
+    FOR UPDATE USING (
+        linked_pro_account_id IN (
+            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
+        )
+    )
+    WITH CHECK (
+        linked_pro_account_id IN (
+            SELECT id FROM pro_accounts WHERE user_id = auth.uid()
+        )
+    );
+
+-- =============================================================================
+-- 4. LICENSES TABLE
 -- =============================================================================
 -- Manages licenses purchased by Pro accounts
 
 CREATE TABLE IF NOT EXISTS licenses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pro_account_id UUID NOT NULL REFERENCES pro_accounts(id) ON DELETE CASCADE,
-    linked_account_id UUID REFERENCES linked_accounts(id) ON DELETE SET NULL,
+    assigned_user_id UUID REFERENCES users(id) ON DELETE SET NULL,  -- User who has this license
 
     -- Pricing (in EUR)
     price_monthly_ht DECIMAL(10, 2) NOT NULL DEFAULT 5.00,
@@ -153,7 +127,7 @@ CREATE TABLE IF NOT EXISTS licenses (
 
 -- Indexes for faster lookups
 CREATE INDEX IF NOT EXISTS idx_licenses_pro_account_id ON licenses(pro_account_id);
-CREATE INDEX IF NOT EXISTS idx_licenses_linked_account_id ON licenses(linked_account_id);
+CREATE INDEX IF NOT EXISTS idx_licenses_assigned_user_id ON licenses(assigned_user_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
 CREATE INDEX IF NOT EXISTS idx_licenses_stripe_subscription_id ON licenses(stripe_subscription_id);
 
@@ -185,7 +159,7 @@ CREATE POLICY "Pro users can update licenses" ON licenses
     );
 
 -- =============================================================================
--- 4. AUTO-UPDATE TRIGGER FOR updated_at
+-- 5. AUTO-UPDATE TRIGGER FOR updated_at
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -203,13 +177,6 @@ CREATE TRIGGER update_pro_accounts_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Apply trigger to linked_accounts
-DROP TRIGGER IF EXISTS update_linked_accounts_updated_at ON linked_accounts;
-CREATE TRIGGER update_linked_accounts_updated_at
-    BEFORE UPDATE ON linked_accounts
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
 -- Apply trigger to licenses
 DROP TRIGGER IF EXISTS update_licenses_updated_at ON licenses;
 CREATE TRIGGER update_licenses_updated_at
@@ -218,7 +185,7 @@ CREATE TRIGGER update_licenses_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- =============================================================================
--- 5. HELPER FUNCTIONS
+-- 6. HELPER FUNCTIONS
 -- =============================================================================
 
 -- Function to generate a unique invitation token
@@ -229,12 +196,66 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Function to invite a user by email (creates or updates user link)
+CREATE OR REPLACE FUNCTION invite_user_to_pro(
+    p_pro_account_id UUID,
+    p_email TEXT
+)
+RETURNS UUID AS $$
+DECLARE
+    v_user_id UUID;
+    v_token TEXT;
+BEGIN
+    -- Generate invitation token
+    v_token := generate_invitation_token();
+
+    -- Check if user exists
+    SELECT id INTO v_user_id FROM users WHERE email = p_email;
+
+    IF v_user_id IS NOT NULL THEN
+        -- User exists - update with invitation
+        UPDATE users SET
+            linked_pro_account_id = p_pro_account_id,
+            link_status = 'pending',
+            invitation_token = v_token,
+            invited_at = NOW(),
+            link_activated_at = NULL
+        WHERE id = v_user_id;
+    END IF;
+
+    -- Return user_id if found, NULL otherwise (invitation will be sent by email)
+    RETURN v_user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Function to accept an invitation
+CREATE OR REPLACE FUNCTION accept_invitation(p_token TEXT)
+RETURNS BOOLEAN AS $$
+DECLARE
+    v_updated BOOLEAN := FALSE;
+BEGIN
+    UPDATE users SET
+        link_status = 'active',
+        invitation_token = NULL,
+        link_activated_at = NOW()
+    WHERE invitation_token = p_token
+      AND link_status = 'pending';
+
+    IF FOUND THEN
+        v_updated := TRUE;
+    END IF;
+
+    RETURN v_updated;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- Function to get license summary for a Pro account
 CREATE OR REPLACE FUNCTION get_license_summary(p_pro_account_id UUID)
 RETURNS TABLE (
     total_licenses BIGINT,
     active_licenses BIGINT,
     pending_licenses BIGINT,
+    assigned_licenses BIGINT,
     available_licenses BIGINT,
     monthly_cost_ht DECIMAL,
     monthly_cost_ttc DECIMAL
@@ -245,7 +266,8 @@ BEGIN
         COUNT(*)::BIGINT as total_licenses,
         COUNT(*) FILTER (WHERE status = 'active')::BIGINT as active_licenses,
         COUNT(*) FILTER (WHERE status = 'pending')::BIGINT as pending_licenses,
-        COUNT(*) FILTER (WHERE status IN ('active', 'pending') AND linked_account_id IS NULL)::BIGINT as available_licenses,
+        COUNT(*) FILTER (WHERE assigned_user_id IS NOT NULL AND status IN ('active', 'pending'))::BIGINT as assigned_licenses,
+        COUNT(*) FILTER (WHERE assigned_user_id IS NULL AND status IN ('active', 'pending'))::BIGINT as available_licenses,
         COALESCE(SUM(price_monthly_ht) FILTER (WHERE status IN ('active', 'pending')), 0) as monthly_cost_ht,
         COALESCE(SUM(price_monthly_ht * (1 + vat_rate)) FILTER (WHERE status IN ('active', 'pending')), 0) as monthly_cost_ttc
     FROM licenses
@@ -253,41 +275,59 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- =============================================================================
--- 6. SAMPLE DATA (OPTIONAL - FOR TESTING)
--- =============================================================================
--- Uncomment below to insert sample data for testing
-
-/*
--- Insert a sample Pro account (replace 'your-user-id' with an actual user ID)
-INSERT INTO pro_accounts (user_id, company_name, siret, legal_form, billing_email)
-VALUES ('your-user-id', 'Test Company SARL', '12345678901234', 'SARL', 'billing@testcompany.com');
-
--- Insert sample linked accounts
-INSERT INTO linked_accounts (pro_account_id, email, name, status)
-SELECT id, 'employee1@test.com', 'John Doe', 'active'
-FROM pro_accounts WHERE company_name = 'Test Company SARL';
-
-INSERT INTO linked_accounts (pro_account_id, email, name, status, invitation_token)
-SELECT id, 'employee2@test.com', 'Jane Smith', 'pending', generate_invitation_token()
-FROM pro_accounts WHERE company_name = 'Test Company SARL';
-
--- Insert sample licenses
-INSERT INTO licenses (pro_account_id, status, price_monthly_ht, vat_rate)
-SELECT id, 'active', 5.00, 0.20
-FROM pro_accounts WHERE company_name = 'Test Company SARL';
-
-INSERT INTO licenses (pro_account_id, status, price_monthly_ht, vat_rate)
-SELECT id, 'pending', 5.00, 0.20
-FROM pro_accounts WHERE company_name = 'Test Company SARL';
-*/
+-- Function to get linked users for a Pro account
+CREATE OR REPLACE FUNCTION get_linked_users(p_pro_account_id UUID)
+RETURNS TABLE (
+    user_id UUID,
+    user_name TEXT,
+    user_email TEXT,
+    link_status TEXT,
+    invited_at TIMESTAMPTZ,
+    link_activated_at TIMESTAMPTZ,
+    share_professional_trips BOOLEAN,
+    share_personal_trips BOOLEAN,
+    share_vehicle_info BOOLEAN,
+    share_expenses BOOLEAN
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.link_status,
+        u.invited_at,
+        u.link_activated_at,
+        u.share_professional_trips,
+        u.share_personal_trips,
+        u.share_vehicle_info,
+        u.share_expenses
+    FROM users u
+    WHERE u.linked_pro_account_id = p_pro_account_id
+    ORDER BY u.link_status, u.name;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- =============================================================================
 -- MIGRATION COMPLETE
 -- =============================================================================
 -- Run this SQL in your Supabase SQL Editor.
--- After running, verify the tables exist:
---   SELECT * FROM pro_accounts;
---   SELECT * FROM linked_accounts;
---   SELECT * FROM licenses;
+--
+-- Tables created:
+--   - pro_accounts: Pro company information
+--   - licenses: License management with Stripe integration
+--
+-- Columns added to users:
+--   - linked_pro_account_id: Link to Pro account
+--   - link_status: pending/active/revoked
+--   - invitation_token: For pending invitations
+--   - invited_at, link_activated_at: Timestamps
+--   - share_*: Sharing preferences
+--
+-- Functions created:
+--   - generate_invitation_token()
+--   - invite_user_to_pro(pro_account_id, email)
+--   - accept_invitation(token)
+--   - get_license_summary(pro_account_id)
+--   - get_linked_users(pro_account_id)
 -- =============================================================================

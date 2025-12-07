@@ -2,22 +2,20 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
-import com.application.motium.domain.model.LinkedAccount
-import com.application.motium.domain.model.LinkedAccountStatus
+import com.application.motium.domain.model.LinkStatus
 import com.application.motium.domain.model.SharingPreferences
-import com.application.motium.domain.model.Trip
+import com.application.motium.domain.model.User
 import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import java.util.UUID
-import kotlin.time.Duration.Companion.days
 
 /**
- * Repository for managing linked accounts in Supabase
+ * Repository for managing linked users (Individual users linked to Pro accounts)
+ * Data is stored directly on the users table (no separate linked_accounts table)
  */
 class LinkedAccountRepository private constructor(
     @Suppress("UNUSED_PARAMETER") context: Context
@@ -36,156 +34,121 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Get all linked accounts for a Pro account
+     * Get all users linked to a Pro account
+     * Queries users table directly with linked_pro_account_id filter
      */
-    suspend fun getLinkedAccounts(proAccountId: String): Result<List<LinkedAccount>> = withContext(Dispatchers.IO) {
+    suspend fun getLinkedUsers(proAccountId: String): Result<List<LinkedUserDto>> = withContext(Dispatchers.IO) {
         try {
-            val response = supabaseClient.from("linked_accounts")
-                .select()
-                .decodeList<LinkedAccountDto>()
-
-            val accounts = response
-                .filter { it.proAccountId == proAccountId }
-                .map { it.toDomain() }
-
-            Result.success(accounts)
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting linked accounts: ${e.message}", "LinkedAccountRepo", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Get a linked account by ID
-     */
-    suspend fun getLinkedAccountById(accountId: String): Result<LinkedAccount> = withContext(Dispatchers.IO) {
-        try {
-            val response = supabaseClient.from("linked_accounts")
+            val response = supabaseClient.from("users")
                 .select() {
                     filter {
-                        eq("id", accountId)
+                        eq("linked_pro_account_id", proAccountId)
                     }
                 }
-                .decodeSingle<LinkedAccountDto>()
+                .decodeList<UserDto>()
+                .map { it.toLinkedUserDto() }
 
-            Result.success(response.toDomain())
+            MotiumApplication.logger.i("Found ${response.size} linked users for Pro account", "LinkedAccountRepo")
+            Result.success(response)
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting linked account: ${e.message}", "LinkedAccountRepo", e)
+            MotiumApplication.logger.e("Error getting linked users: ${e.message}", "LinkedAccountRepo", e)
             Result.failure(e)
         }
     }
 
     /**
-     * Invite a new account by email
+     * Get a linked user by ID
      */
-    suspend fun inviteAccount(proAccountId: String, email: String): Result<LinkedAccount> = withContext(Dispatchers.IO) {
+    suspend fun getLinkedUserById(userId: String): Result<LinkedUserDto> = withContext(Dispatchers.IO) {
         try {
-            val invitationToken = UUID.randomUUID().toString()
-            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
-            val expiresAt = now.plus(7.days) // 7 days to accept
+            val response = supabaseClient.from("users")
+                .select() {
+                    filter {
+                        eq("id", userId)
+                    }
+                }
+                .decodeSingle<UserDto>()
 
-            val dto = LinkedAccountDto(
-                id = UUID.randomUUID().toString(),
-                proAccountId = proAccountId,
-                userId = null,
-                userEmail = email,
-                userName = null,
-                status = "pending",
-                sharingPreferences = SharingPreferencesDto(),
-                invitationToken = invitationToken,
-                invitationExpiresAt = expiresAt.toString(),
-                invitedEmail = email,
-                createdAt = now.toString(),
-                updatedAt = now.toString()
-            )
+            Result.success(response.toLinkedUserDto())
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting linked user: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
 
-            supabaseClient.from("linked_accounts")
-                .insert(dto)
+    /**
+     * Invite a user by email - updates the user's link fields
+     */
+    suspend fun inviteUser(proAccountId: String, email: String): Result<String?> = withContext(Dispatchers.IO) {
+        try {
+            // Generate invitation token
+            val invitationToken = java.util.UUID.randomUUID().toString()
+            val now = java.time.Instant.now().toString()
+
+            // Update user with invitation
+            supabaseClient.from("users")
+                .update({
+                    set("linked_pro_account_id", proAccountId)
+                    set("link_status", "pending")
+                    set("invitation_token", invitationToken)
+                    set("invited_at", now)
+                }) {
+                    filter {
+                        eq("email", email)
+                    }
+                }
 
             MotiumApplication.logger.i("Invitation sent to $email", "LinkedAccountRepo")
-            Result.success(dto.toDomain())
+            Result.success(invitationToken)
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error inviting account: ${e.message}", "LinkedAccountRepo", e)
+            MotiumApplication.logger.e("Error inviting user: ${e.message}", "LinkedAccountRepo", e)
             Result.failure(e)
         }
     }
 
     /**
-     * Revoke access for a linked account
+     * Revoke access for a linked user
      */
-    suspend fun revokeAccount(accountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun revokeUser(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            supabaseClient.from("linked_accounts")
+            supabaseClient.from("users")
                 .update({
-                    set("status", "revoked")
-                    set("updated_at", Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString())
+                    set("link_status", "revoked")
                 }) {
                     filter {
-                        eq("id", accountId)
+                        eq("id", userId)
                     }
                 }
 
-            MotiumApplication.logger.i("Account $accountId revoked", "LinkedAccountRepo")
+            MotiumApplication.logger.i("User $userId access revoked", "LinkedAccountRepo")
             Result.success(Unit)
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error revoking account: ${e.message}", "LinkedAccountRepo", e)
+            MotiumApplication.logger.e("Error revoking user: ${e.message}", "LinkedAccountRepo", e)
             Result.failure(e)
         }
     }
 
     /**
-     * Get shared trips from a linked account
+     * Accept an invitation - updates the user's link status
      */
-    suspend fun getSharedTrips(linkedAccountId: String): Result<List<Trip>> = withContext(Dispatchers.IO) {
+    suspend fun acceptInvitation(token: String): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            // Get the linked account to check sharing preferences
-            val accountResult = getLinkedAccountById(linkedAccountId)
-            val account = accountResult.getOrNull() ?: return@withContext Result.failure(
-                Exception("Linked account not found")
-            )
+            val now = java.time.Instant.now().toString()
 
-            if (account.userId == null) {
-                return@withContext Result.success(emptyList())
-            }
-
-            // Get trips based on sharing preferences
-            val prefs = account.sharingPreferences
-            val tripTypes = mutableListOf<String>()
-            if (prefs.shareProfessionalTrips) tripTypes.add("PROFESSIONAL")
-            if (prefs.sharePersonalTrips) tripTypes.add("PERSONAL")
-
-            if (tripTypes.isEmpty()) {
-                return@withContext Result.success(emptyList())
-            }
-
-            // For now, return empty list - actual implementation would query trips table
-            // This would require a proper trips query with user filtering
-            Result.success(emptyList())
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting shared trips: ${e.message}", "LinkedAccountRepo", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Accept an invitation (called by the invited user)
-     */
-    suspend fun acceptInvitation(invitationToken: String, userId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            supabaseClient.from("linked_accounts")
+            supabaseClient.from("users")
                 .update({
-                    set("user_id", userId)
-                    set("status", "active")
+                    set("link_status", "active")
                     set("invitation_token", null as String?)
-                    set("updated_at", Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString())
+                    set("link_activated_at", now)
                 }) {
                     filter {
-                        eq("invitation_token", invitationToken)
+                        eq("invitation_token", token)
+                        eq("link_status", "pending")
                     }
                 }
 
-            MotiumApplication.logger.i("Invitation accepted by user $userId", "LinkedAccountRepo")
-            Result.success(Unit)
+            MotiumApplication.logger.i("Invitation accepted", "LinkedAccountRepo")
+            Result.success(true)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error accepting invitation: ${e.message}", "LinkedAccountRepo", e)
             Result.failure(e)
@@ -193,90 +156,77 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Update sharing preferences (called by the linked user)
+     * Update sharing preferences for the current user
      */
     suspend fun updateSharingPreferences(
-        accountId: String,
+        userId: String,
         preferences: SharingPreferences
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val prefsDto = SharingPreferencesDto(
-                shareProfessionalTrips = preferences.shareProfessionalTrips,
-                sharePersonalTrips = preferences.sharePersonalTrips,
-                shareVehicleInfo = preferences.shareVehicleInfo,
-                shareExpenses = preferences.shareExpenses
-            )
-
-            supabaseClient.from("linked_accounts")
+            supabaseClient.from("users")
                 .update({
-                    set("sharing_preferences", prefsDto)
-                    set("updated_at", Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString())
+                    set("share_professional_trips", preferences.shareProfessionalTrips)
+                    set("share_personal_trips", preferences.sharePersonalTrips)
+                    set("share_vehicle_info", preferences.shareVehicleInfo)
+                    set("share_expenses", preferences.shareExpenses)
                 }) {
                     filter {
-                        eq("id", accountId)
+                        eq("id", userId)
                     }
                 }
 
+            MotiumApplication.logger.i("Sharing preferences updated for user $userId", "LinkedAccountRepo")
             Result.success(Unit)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error updating sharing preferences: ${e.message}", "LinkedAccountRepo", e)
             Result.failure(e)
         }
     }
-}
 
-/**
- * DTO for linked_accounts table
- */
-@Serializable
-data class LinkedAccountDto(
-    val id: String,
-    @SerialName("pro_account_id")
-    val proAccountId: String,
-    @SerialName("user_id")
-    val userId: String? = null,
-    @SerialName("user_email")
-    val userEmail: String,
-    @SerialName("user_name")
-    val userName: String? = null,
-    val status: String = "pending",
-    @SerialName("sharing_preferences")
-    val sharingPreferences: SharingPreferencesDto = SharingPreferencesDto(),
-    @SerialName("invitation_token")
-    val invitationToken: String? = null,
-    @SerialName("invitation_expires_at")
-    val invitationExpiresAt: String? = null,
-    @SerialName("invited_email")
-    val invitedEmail: String? = null,
-    @SerialName("created_at")
-    val createdAt: String,
-    @SerialName("updated_at")
-    val updatedAt: String
-) {
-    fun toDomain(): LinkedAccount {
-        return LinkedAccount(
-            id = id,
-            proAccountId = proAccountId,
-            userId = userId,
-            userEmail = userEmail,
-            userName = userName,
-            status = when (status) {
-                "active" -> LinkedAccountStatus.ACTIVE
-                "revoked" -> LinkedAccountStatus.REVOKED
-                else -> LinkedAccountStatus.PENDING
-            },
-            sharingPreferences = sharingPreferences.toDomain(),
-            invitationToken = invitationToken,
-            invitationExpiresAt = invitationExpiresAt?.let { parseInstant(it) },
-            invitedEmail = invitedEmail,
-            createdAt = parseInstant(createdAt),
-            updatedAt = parseInstant(updatedAt)
-        )
+    /**
+     * Unlink user from Pro account (user-initiated)
+     */
+    suspend fun unlinkFromPro(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            supabaseClient.from("users")
+                .update({
+                    set("linked_pro_account_id", null as String?)
+                    set("link_status", null as String?)
+                    set("invitation_token", null as String?)
+                    set("invited_at", null as String?)
+                    set("link_activated_at", null as String?)
+                }) {
+                    filter {
+                        eq("id", userId)
+                    }
+                }
+
+            MotiumApplication.logger.i("User $userId unlinked from Pro", "LinkedAccountRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error unlinking user: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
     }
 }
 
+/**
+ * DTO returned by the get_linked_users RPC function
+ */
 @Serializable
-data class SharingPreferencesDto(
+data class LinkedUserDto(
+    @SerialName("user_id")
+    val userId: String,
+    @SerialName("user_name")
+    val userName: String?,
+    @SerialName("user_email")
+    val userEmail: String,
+    @SerialName("link_status")
+    val linkStatus: String?,
+    @SerialName("invited_at")
+    val invitedAt: String?,
+    @SerialName("link_activated_at")
+    val linkActivatedAt: String?,
     @SerialName("share_professional_trips")
     val shareProfessionalTrips: Boolean = true,
     @SerialName("share_personal_trips")
@@ -286,20 +236,60 @@ data class SharingPreferencesDto(
     @SerialName("share_expenses")
     val shareExpenses: Boolean = false
 ) {
-    fun toDomain(): SharingPreferences {
-        return SharingPreferences(
-            shareProfessionalTrips = shareProfessionalTrips,
-            sharePersonalTrips = sharePersonalTrips,
-            shareVehicleInfo = shareVehicleInfo,
-            shareExpenses = shareExpenses
-        )
-    }
+    val displayName: String
+        get() = userName ?: userEmail
+
+    val status: LinkStatus
+        get() = linkStatus?.let {
+            try { LinkStatus.valueOf(it.uppercase()) } catch (e: Exception) { LinkStatus.PENDING }
+        } ?: LinkStatus.PENDING
+
+    val isActive: Boolean
+        get() = status == LinkStatus.ACTIVE
+
+    fun toSharingPreferences(): SharingPreferences = SharingPreferences(
+        shareProfessionalTrips = shareProfessionalTrips,
+        sharePersonalTrips = sharePersonalTrips,
+        shareVehicleInfo = shareVehicleInfo,
+        shareExpenses = shareExpenses
+    )
 }
 
-private fun parseInstant(value: String): Instant {
-    return try {
-        Instant.parse(value)
-    } catch (e: Exception) {
-        Instant.fromEpochMilliseconds(System.currentTimeMillis())
-    }
+/**
+ * Minimal DTO for users table queries
+ */
+@Serializable
+data class UserDto(
+    val id: String,
+    val name: String?,
+    val email: String,
+    @SerialName("linked_pro_account_id")
+    val linkedProAccountId: String? = null,
+    @SerialName("link_status")
+    val linkStatus: String? = null,
+    @SerialName("invited_at")
+    val invitedAt: String? = null,
+    @SerialName("link_activated_at")
+    val linkActivatedAt: String? = null,
+    @SerialName("share_professional_trips")
+    val shareProfessionalTrips: Boolean = true,
+    @SerialName("share_personal_trips")
+    val sharePersonalTrips: Boolean = false,
+    @SerialName("share_vehicle_info")
+    val shareVehicleInfo: Boolean = true,
+    @SerialName("share_expenses")
+    val shareExpenses: Boolean = false
+) {
+    fun toLinkedUserDto(): LinkedUserDto = LinkedUserDto(
+        userId = id,
+        userName = name,
+        userEmail = email,
+        linkStatus = linkStatus,
+        invitedAt = invitedAt,
+        linkActivatedAt = linkActivatedAt,
+        shareProfessionalTrips = shareProfessionalTrips,
+        sharePersonalTrips = sharePersonalTrips,
+        shareVehicleInfo = shareVehicleInfo,
+        shareExpenses = shareExpenses
+    )
 }
