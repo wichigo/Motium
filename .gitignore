@@ -29,3 +29,10 @@ replay_pid*.log
 
 # Windows reserved names
 nul
+
+# Database files
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+motium_db*
