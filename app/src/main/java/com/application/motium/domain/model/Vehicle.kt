@@ -15,6 +15,7 @@ data class Vehicle(
     val isDefault: Boolean = false,
     @Transient val totalMileagePerso: Double = 0.0,
     @Transient val totalMileagePro: Double = 0.0,
+    @Transient val totalMileageWorkHome: Double = 0.0, // Distance travail-maison (pour calcul indemnités perso)
     val createdAt: Instant,
     val updatedAt: Instant
 )

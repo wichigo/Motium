@@ -162,6 +162,79 @@ class AuthViewModel(
         }
     }
 
+    /**
+     * Met à jour le profil utilisateur
+     */
+    fun updateUserProfile(
+        user: User,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val result = authRepository.updateUserProfile(user)
+            when (result) {
+                is AuthResult.Success -> {
+                    MotiumApplication.logger.i("✅ User profile updated successfully", "AuthViewModel")
+                    onSuccess()
+                }
+                is AuthResult.Error -> {
+                    MotiumApplication.logger.e("❌ Failed to update profile: ${result.message}", "AuthViewModel")
+                    onError(result.message)
+                }
+                AuthResult.Loading -> { /* ignore */ }
+            }
+        }
+    }
+
+    /**
+     * Met à jour l'email de l'utilisateur
+     * Note: Supabase enverra un email de confirmation
+     */
+    fun updateEmail(
+        newEmail: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val result = authRepository.updateEmail(newEmail)
+            when (result) {
+                is AuthResult.Success -> {
+                    MotiumApplication.logger.i("✅ Email update request sent", "AuthViewModel")
+                    onSuccess()
+                }
+                is AuthResult.Error -> {
+                    MotiumApplication.logger.e("❌ Failed to update email: ${result.message}", "AuthViewModel")
+                    onError(result.message)
+                }
+                AuthResult.Loading -> { /* ignore */ }
+            }
+        }
+    }
+
+    /**
+     * Met à jour le mot de passe de l'utilisateur
+     */
+    fun updatePassword(
+        newPassword: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val result = authRepository.updatePassword(newPassword)
+            when (result) {
+                is AuthResult.Success -> {
+                    MotiumApplication.logger.i("✅ Password updated successfully", "AuthViewModel")
+                    onSuccess()
+                }
+                is AuthResult.Error -> {
+                    MotiumApplication.logger.e("❌ Failed to update password: ${result.message}", "AuthViewModel")
+                    onError(result.message)
+                }
+                AuthResult.Loading -> { /* ignore */ }
+            }
+        }
+    }
+
     fun clearLoginError() {
         _loginState.value = _loginState.value.copy(error = null)
     }

@@ -70,11 +70,61 @@ class VehicleRepository private constructor(context: Context) {
     }
 
     /**
+     * Calculate work-home mileage with daily cap of 80km (40km each way).
+     * Only considers personal trips with isWorkHomeTrip = true.
+     *
+     * @param vehicleId The vehicle to calculate mileage for
+     * @param applyDailyCap If true, apply 80km daily cap. If false (user has considerFullDistance), no cap.
+     * @return Total work-home mileage in kilometers
+     */
+    suspend fun calculateWorkHomeMileage(vehicleId: String, applyDailyCap: Boolean = true): Double {
+        return try {
+            val startOfYear = getStartOfYearMillis()
+            val trips = tripDao.getWorkHomeTripsForVehicle(vehicleId, startOfYear)
+
+            if (!applyDailyCap) {
+                // No cap - just sum all distances
+                val totalMeters = trips.sumOf { it.totalDistance }
+                return totalMeters / 1000.0
+            }
+
+            // Apply daily cap of 80km (80000 meters)
+            val dailyCap = 80000.0 // 80 km in meters
+
+            // Group trips by day and cap each day's total
+            val calendar = Calendar.getInstance()
+            val tripsByDay = trips.groupBy { trip ->
+                calendar.timeInMillis = trip.startTime
+                Triple(
+                    calendar.get(Calendar.YEAR),
+                    calendar.get(Calendar.MONTH),
+                    calendar.get(Calendar.DAY_OF_MONTH)
+                )
+            }
+
+            var totalMileage = 0.0
+            tripsByDay.forEach { (_, dayTrips) ->
+                val dayTotal = dayTrips.sumOf { it.totalDistance }
+                // Cap at 80km per day
+                totalMileage += minOf(dayTotal, dailyCap)
+            }
+
+            totalMileage / 1000.0 // Convert to km
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error calculating work-home mileage: ${e.message}", "VehicleRepository", e)
+            0.0
+        }
+    }
+
+    /**
      * OFFLINE-FIRST: Récupère tous les véhicules de l'utilisateur depuis Room Database.
      * Fonctionne en mode offline.
      * IMPORTANT: Mileage values are recalculated from local trips to ensure accuracy.
+     *
+     * @param userId The user ID
+     * @param applyWorkHomeDailyCap If true, apply 80km daily cap for work-home mileage
      */
-    suspend fun getAllVehiclesForUser(userId: String): List<Vehicle> = withContext(Dispatchers.IO) {
+    suspend fun getAllVehiclesForUser(userId: String, applyWorkHomeDailyCap: Boolean = true): List<Vehicle> = withContext(Dispatchers.IO) {
         try {
             val vehicleEntities = vehicleDao.getVehiclesForUser(userId)
 
@@ -84,10 +134,12 @@ class VehicleRepository private constructor(context: Context) {
                 val baseDomain = entity.toDomainModel()
                 val proMileage = calculateLocalMileage(entity.id, "PROFESSIONAL")
                 val persoMileage = calculateLocalMileage(entity.id, "PERSONAL")
+                val workHomeMileage = calculateWorkHomeMileage(entity.id, applyWorkHomeDailyCap)
 
                 baseDomain.copy(
                     totalMileagePro = proMileage,
-                    totalMileagePerso = persoMileage
+                    totalMileagePerso = persoMileage,
+                    totalMileageWorkHome = workHomeMileage
                 )
             }
 
@@ -105,8 +157,11 @@ class VehicleRepository private constructor(context: Context) {
     /**
      * OFFLINE-FIRST: Récupère un véhicule par son ID depuis Room Database.
      * Mileage values are recalculated from local trips.
+     *
+     * @param vehicleId The vehicle ID
+     * @param applyWorkHomeDailyCap If true, apply 80km daily cap for work-home mileage
      */
-    suspend fun getVehicleById(vehicleId: String): Vehicle? = withContext(Dispatchers.IO) {
+    suspend fun getVehicleById(vehicleId: String, applyWorkHomeDailyCap: Boolean = true): Vehicle? = withContext(Dispatchers.IO) {
         try {
             val entity = vehicleDao.getVehicleById(vehicleId) ?: return@withContext null
             val baseDomain = entity.toDomainModel()
@@ -114,10 +169,12 @@ class VehicleRepository private constructor(context: Context) {
             // Recalculate mileage from local trips
             val proMileage = calculateLocalMileage(vehicleId, "PROFESSIONAL")
             val persoMileage = calculateLocalMileage(vehicleId, "PERSONAL")
+            val workHomeMileage = calculateWorkHomeMileage(vehicleId, applyWorkHomeDailyCap)
 
             baseDomain.copy(
                 totalMileagePro = proMileage,
-                totalMileagePerso = persoMileage
+                totalMileagePerso = persoMileage,
+                totalMileageWorkHome = workHomeMileage
             )
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting vehicle by ID: ${e.message}", "VehicleRepository", e)
@@ -128,8 +185,11 @@ class VehicleRepository private constructor(context: Context) {
     /**
      * OFFLINE-FIRST: Récupère le véhicule par défaut de l'utilisateur depuis Room Database.
      * Mileage values are recalculated from local trips.
+     *
+     * @param userId The user ID
+     * @param applyWorkHomeDailyCap If true, apply 80km daily cap for work-home mileage
      */
-    suspend fun getDefaultVehicle(userId: String): Vehicle? = withContext(Dispatchers.IO) {
+    suspend fun getDefaultVehicle(userId: String, applyWorkHomeDailyCap: Boolean = true): Vehicle? = withContext(Dispatchers.IO) {
         try {
             val entity = vehicleDao.getDefaultVehicle(userId) ?: return@withContext null
             val baseDomain = entity.toDomainModel()
@@ -137,10 +197,12 @@ class VehicleRepository private constructor(context: Context) {
             // Recalculate mileage from local trips
             val proMileage = calculateLocalMileage(entity.id, "PROFESSIONAL")
             val persoMileage = calculateLocalMileage(entity.id, "PERSONAL")
+            val workHomeMileage = calculateWorkHomeMileage(entity.id, applyWorkHomeDailyCap)
 
             baseDomain.copy(
                 totalMileagePro = proMileage,
-                totalMileagePerso = persoMileage
+                totalMileagePerso = persoMileage,
+                totalMileageWorkHome = workHomeMileage
             )
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting default vehicle: ${e.message}", "VehicleRepository", e)
@@ -379,6 +441,57 @@ class VehicleRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error deleting all vehicles for user: ${e.message}", "VehicleRepository", e)
             throw e
+        }
+    }
+
+    /**
+     * Recalcule et met à jour le kilométrage d'un véhicule à partir des trajets.
+     * Appelé automatiquement lorsqu'un trajet est créé, modifié ou supprimé.
+     *
+     * @param vehicleId L'ID du véhicule à mettre à jour
+     */
+    suspend fun recalculateAndUpdateVehicleMileage(vehicleId: String) = withContext(Dispatchers.IO) {
+        try {
+            if (vehicleId.isBlank()) {
+                MotiumApplication.logger.d("Skipping mileage update - no vehicle ID", "VehicleRepository")
+                return@withContext
+            }
+
+            // Vérifier que le véhicule existe
+            val vehicle = vehicleDao.getVehicleById(vehicleId)
+            if (vehicle == null) {
+                MotiumApplication.logger.w("Cannot update mileage - vehicle not found: $vehicleId", "VehicleRepository")
+                return@withContext
+            }
+
+            // Recalculer le kilométrage depuis les trajets
+            val proMileage = calculateLocalMileage(vehicleId, "PROFESSIONAL")
+            val persoMileage = calculateLocalMileage(vehicleId, "PERSONAL")
+
+            // Mettre à jour dans Room Database
+            vehicleDao.updateVehicleMileage(vehicleId, persoMileage, proMileage)
+
+            MotiumApplication.logger.i(
+                "✅ Vehicle mileage updated: $vehicleId (Pro: ${"%.1f".format(proMileage)} km, Perso: ${"%.1f".format(persoMileage)} km)",
+                "VehicleRepository"
+            )
+
+            // Marquer le véhicule comme nécessitant une sync
+            vehicleDao.markVehicleAsNeedingSync(vehicleId)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error updating vehicle mileage: ${e.message}", "VehicleRepository", e)
+        }
+    }
+
+    /**
+     * Met à jour le kilométrage pour plusieurs véhicules.
+     * Utilisé lorsqu'un trajet change de véhicule (ancien + nouveau véhicule à mettre à jour).
+     *
+     * @param vehicleIds Liste des IDs de véhicules à mettre à jour
+     */
+    suspend fun recalculateAndUpdateMultipleVehiclesMileage(vehicleIds: List<String>) = withContext(Dispatchers.IO) {
+        vehicleIds.filter { it.isNotBlank() }.distinct().forEach { vehicleId ->
+            recalculateAndUpdateVehicleMileage(vehicleId)
         }
     }
 }

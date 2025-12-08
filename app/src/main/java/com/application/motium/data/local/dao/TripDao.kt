@@ -121,4 +121,61 @@ interface TripDao {
         AND startTime >= :startOfYearMillis
     """)
     suspend fun getAnnualMileageForVehicle(vehicleId: String, tripType: String, startOfYearMillis: Long): Double
+
+    /**
+     * Get all validated trips for a specific vehicle and trip type from start of year.
+     * Used for recalculating reimbursements when vehicle bracket changes.
+     *
+     * @param vehicleId The vehicle to get trips for
+     * @param tripType The type of trip ("PROFESSIONAL" or "PERSONAL")
+     * @param startOfYearMillis Timestamp for the start of the current year
+     * @return List of trips sorted by start time ascending
+     */
+    @Query("""
+        SELECT * FROM trips
+        WHERE vehicleId = :vehicleId
+        AND isValidated = 1
+        AND tripType = :tripType
+        AND startTime >= :startOfYearMillis
+        ORDER BY startTime ASC
+    """)
+    suspend fun getTripsForVehicleAndType(vehicleId: String, tripType: String, startOfYearMillis: Long): List<TripEntity>
+
+    /**
+     * Get all validated work-home trips for a specific vehicle from start of year.
+     * Work-home trips are personal trips that count towards fiscal mileage allowance.
+     *
+     * @param vehicleId The vehicle to get trips for
+     * @param startOfYearMillis Timestamp for the start of the current year
+     * @return List of work-home trips sorted by start time ascending
+     */
+    @Query("""
+        SELECT * FROM trips
+        WHERE vehicleId = :vehicleId
+        AND isValidated = 1
+        AND tripType = 'PERSONAL'
+        AND isWorkHomeTrip = 1
+        AND startTime >= :startOfYearMillis
+        ORDER BY startTime ASC
+    """)
+    suspend fun getWorkHomeTripsForVehicle(vehicleId: String, startOfYearMillis: Long): List<TripEntity>
+
+    /**
+     * Calculate total work-home mileage for a vehicle (without daily cap).
+     * The daily cap of 80km should be applied in the repository logic.
+     *
+     * @param vehicleId The vehicle to calculate mileage for
+     * @param startOfYearMillis Timestamp for the start of the current year
+     * @return Sum of totalDistance in meters (divide by 1000 for km)
+     */
+    @Query("""
+        SELECT COALESCE(SUM(totalDistance), 0.0)
+        FROM trips
+        WHERE vehicleId = :vehicleId
+        AND isValidated = 1
+        AND tripType = 'PERSONAL'
+        AND isWorkHomeTrip = 1
+        AND startTime >= :startOfYearMillis
+    """)
+    suspend fun getWorkHomeMileageForVehicle(vehicleId: String, startOfYearMillis: Long): Double
 }

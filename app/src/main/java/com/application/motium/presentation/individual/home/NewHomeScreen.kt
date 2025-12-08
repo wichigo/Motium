@@ -113,7 +113,7 @@ fun NewHomeScreen(
     }
 
     val todayDistance = remember(todayTrips) { todayTrips.sumOf { it.totalDistance } }
-    val todayIndemnities = remember(todayTrips) { todayTrips.sumOf { it.totalDistance * 0.20 } }
+    val todayIndemnities = remember(todayTrips) { todayTrips.sumOf { it.reimbursementAmount ?: 0.0 } }
 
     // Grouper les trips par date
     val groupedTrips = remember(trips) {
@@ -208,6 +208,22 @@ fun NewHomeScreen(
             if (autoTrackingEnabled) {
                 MotiumApplication.logger.i("Auto tracking is enabled, ensuring service is running", "HomeScreen")
                 ActivityRecognitionService.startService(context)
+            }
+        }
+    }
+
+    // Re-sync when auth state changes to authenticated (handles delayed session restoration)
+    LaunchedEffect(authState.isAuthenticated) {
+        if (authState.isAuthenticated && currentUser != null) {
+            MotiumApplication.logger.i("🔄 Auth state changed to authenticated, syncing trips from Supabase", "HomeScreen")
+            coroutineScope.launch(Dispatchers.IO) {
+                tripRepository.syncTripsFromSupabase(currentUser.id)
+                expenseRepository.syncFromSupabase(currentUser.id)
+                // Recharger après synchro pour afficher les nouveaux trajets
+                val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
+                trips = syncedTrips
+                currentOffset = syncedTrips.size
+                hasMoreTrips = syncedTrips.size >= 10
             }
         }
     }
@@ -853,7 +869,7 @@ fun NewHomeTripCard(
                 ) {
                     // Indemnités
                     Text(
-                        text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
+                        text = String.format("%.2f €", trip.reimbursementAmount ?: 0.0),
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                         color = MotiumPrimary
                     )

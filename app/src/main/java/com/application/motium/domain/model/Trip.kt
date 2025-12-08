@@ -23,6 +23,8 @@ data class Trip(
     val type: TripType,
     val isValidated: Boolean = false,
     val cost: Double,
+    val reimbursementAmount: Double? = null, // Stored mileage reimbursement calculated at save time
+    val isWorkHomeTrip: Boolean = false, // Trajet travail-maison (uniquement pour trajets perso, donne droit aux indemnités)
     val tracePoints: List<LocationPoint>?,
     val createdAt: Instant,
     val updatedAt: Instant

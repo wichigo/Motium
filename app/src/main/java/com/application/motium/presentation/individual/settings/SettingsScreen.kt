@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,10 +29,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.application.motium.data.supabase.ProAccountDto
+import com.application.motium.data.supabase.ProAccountRepository
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
+import com.application.motium.domain.model.LegalForm
 import com.application.motium.domain.model.LinkStatus
 import com.application.motium.domain.model.User
+import com.application.motium.domain.model.UserRole
 import com.application.motium.domain.model.isPremium
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.CompanyLinkCard
@@ -50,6 +55,7 @@ import com.application.motium.utils.ThemeManager
 import com.application.motium.utils.LogcatCapture
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.MotiumApplication
+import com.application.motium.data.local.LocalUserRepository
 import android.content.Intent
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -113,8 +119,86 @@ fun SettingsScreen(
 
     // Edit Profile dialog state
     var showEditProfileDialog by remember { mutableStateOf(false) }
+    var editName by remember { mutableStateOf("") }
     var phoneNumber by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
+    var isSavingProfile by remember { mutableStateOf(false) }
+    var profileSaveError by remember { mutableStateOf<String?>(null) }
+
+    // Change Email dialog state
+    var showChangeEmailDialog by remember { mutableStateOf(false) }
+    var newEmail by remember { mutableStateOf("") }
+    var isChangingEmail by remember { mutableStateOf(false) }
+    var emailChangeError by remember { mutableStateOf<String?>(null) }
+
+    // Change Password dialog state
+    var showChangePasswordDialog by remember { mutableStateOf(false) }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var isChangingPassword by remember { mutableStateOf(false) }
+    var passwordChangeError by remember { mutableStateOf<String?>(null) }
+
+    // Initialize form fields with current user data
+    LaunchedEffect(currentUser) {
+        currentUser?.let { user ->
+            editName = user.name
+            phoneNumber = user.phoneNumber
+            address = user.address
+        }
+    }
+
+    // Work-Home Trip Settings state
+    val localUserRepository = remember { LocalUserRepository.getInstance(context) }
+    var considerFullDistance by remember { mutableStateOf(false) }
+    var showConsiderFullDistanceConfirmDialog by remember { mutableStateOf(false) }
+    var pendingConsiderFullDistanceValue by remember { mutableStateOf(false) }
+
+    // Load considerFullDistance from user settings
+    LaunchedEffect(currentUser?.id) {
+        if (currentUser?.id?.isNotEmpty() == true) {
+            try {
+                val user = localUserRepository.getLoggedInUser()
+                considerFullDistance = user?.considerFullDistance ?: false
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Could not load considerFullDistance: ${e.message}", "SettingsScreen")
+            }
+        }
+    }
+
+    // Pro Company Info state (for ENTERPRISE users)
+    val proAccountRepository = remember { ProAccountRepository.getInstance(context) }
+    var proAccount by remember { mutableStateOf<ProAccountDto?>(null) }
+    var isLoadingProAccount by remember { mutableStateOf(false) }
+    var proCompanyName by remember { mutableStateOf("") }
+    var proSiret by remember { mutableStateOf("") }
+    var proVatNumber by remember { mutableStateOf("") }
+    var proLegalForm by remember { mutableStateOf<LegalForm?>(null) }
+    var proBillingAddress by remember { mutableStateOf("") }
+    var proBillingEmail by remember { mutableStateOf("") }
+    var showProInfoDialog by remember { mutableStateOf(false) }
+    var isSavingProAccount by remember { mutableStateOf(false) }
+
+    // Load Pro account data for ENTERPRISE users
+    LaunchedEffect(currentUser?.id, currentUser?.role) {
+        if (currentUser?.role == UserRole.ENTERPRISE && currentUser.id.isNotEmpty()) {
+            isLoadingProAccount = true
+            val result = proAccountRepository.getProAccount(currentUser.id)
+            result.onSuccess { account ->
+                proAccount = account
+                account?.let {
+                    proCompanyName = it.companyName
+                    proSiret = it.siret ?: ""
+                    proVatNumber = it.vatNumber ?: ""
+                    proLegalForm = it.legalForm?.let { form ->
+                        try { LegalForm.valueOf(form) } catch (e: Exception) { null }
+                    }
+                    proBillingAddress = it.billingAddress ?: ""
+                    proBillingEmail = it.billingEmail ?: ""
+                }
+            }
+            isLoadingProAccount = false
+        }
+    }
 
     val backgroundColor = if (isDarkMode) BackgroundDark else BackgroundLight
     val surfaceColor = if (isDarkMode) SurfaceDark else SurfaceLight
@@ -210,6 +294,26 @@ fun SettingsScreen(
                 )
             }
 
+            // Pro Company Info Section (only for ENTERPRISE users)
+            if (currentUser?.role == UserRole.ENTERPRISE) {
+                item {
+                    ProCompanyInfoSection(
+                        proAccount = proAccount,
+                        isLoading = isLoadingProAccount,
+                        companyName = proCompanyName,
+                        siret = proSiret,
+                        vatNumber = proVatNumber,
+                        legalForm = proLegalForm,
+                        billingAddress = proBillingAddress,
+                        billingEmail = proBillingEmail,
+                        surfaceColor = surfaceColor,
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor,
+                        onEditClick = { showProInfoDialog = true }
+                    )
+                }
+            }
+
             // Company Link Section
             item {
                 CompanyLinkSectionNew(
@@ -240,6 +344,38 @@ fun SettingsScreen(
             // Mileage Rates Section
             item {
                 MileageRatesSection(
+                    surfaceColor = surfaceColor,
+                    textColor = textColor,
+                    textSecondaryColor = textSecondaryColor
+                )
+            }
+
+            // Work-Home Trip Settings Section
+            item {
+                WorkHomeTripSettingsSection(
+                    considerFullDistance = considerFullDistance,
+                    onToggle = { newValue ->
+                        if (newValue) {
+                            // Show confirmation dialog when enabling
+                            pendingConsiderFullDistanceValue = true
+                            showConsiderFullDistanceConfirmDialog = true
+                        } else {
+                            // Disable directly without confirmation
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    val user = localUserRepository.getLoggedInUser()
+                                    if (user != null) {
+                                        val updatedUser = user.copy(considerFullDistance = false)
+                                        localUserRepository.updateUser(updatedUser)
+                                        MotiumApplication.logger.i("considerFullDistance set to false", "SettingsScreen")
+                                    }
+                                } catch (e: Exception) {
+                                    MotiumApplication.logger.e("Error updating considerFullDistance: ${e.message}", "SettingsScreen", e)
+                                }
+                            }
+                            considerFullDistance = false
+                        }
+                    },
                     surfaceColor = surfaceColor,
                     textColor = textColor,
                     textSecondaryColor = textSecondaryColor
@@ -292,21 +428,165 @@ fun SettingsScreen(
         )
     }
 
+    // Consider Full Distance Confirmation Dialog
+    if (showConsiderFullDistanceConfirmDialog) {
+        ConsiderFullDistanceConfirmDialog(
+            onConfirm = {
+                // Save the setting
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val user = localUserRepository.getLoggedInUser()
+                        if (user != null) {
+                            val updatedUser = user.copy(considerFullDistance = true)
+                            localUserRepository.updateUser(updatedUser)
+                            MotiumApplication.logger.i("considerFullDistance set to true", "SettingsScreen")
+                        }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.e("Error updating considerFullDistance: ${e.message}", "SettingsScreen", e)
+                    }
+                }
+                considerFullDistance = true
+                showConsiderFullDistanceConfirmDialog = false
+            },
+            onDismiss = {
+                // Cancel - don't change the setting
+                showConsiderFullDistanceConfirmDialog = false
+            },
+            surfaceColor = surfaceColor,
+            textColor = textColor
+        )
+    }
+
     // Edit Profile Dialog
     if (showEditProfileDialog) {
         EditProfileDialog(
+            name = editName,
             phoneNumber = phoneNumber,
             address = address,
+            onNameChange = { editName = it },
             onPhoneChange = { phoneNumber = it },
             onAddressChange = { address = it },
+            isSaving = isSavingProfile,
+            errorMessage = profileSaveError,
             onSave = {
-                MotiumApplication.logger.i(
-                    "Profile updated: Phone=$phoneNumber, Address=$address",
-                    "SettingsScreen"
-                )
-                showEditProfileDialog = false
+                currentUser?.let { user ->
+                    isSavingProfile = true
+                    profileSaveError = null
+                    val updatedUser = user.copy(
+                        name = editName,
+                        phoneNumber = phoneNumber,
+                        address = address
+                    )
+                    authViewModel.updateUserProfile(
+                        user = updatedUser,
+                        onSuccess = {
+                            isSavingProfile = false
+                            showEditProfileDialog = false
+                            Toast.makeText(context, "Profil mis à jour", Toast.LENGTH_SHORT).show()
+                        },
+                        onError = { error ->
+                            isSavingProfile = false
+                            profileSaveError = error
+                        }
+                    )
+                }
             },
-            onDismiss = { showEditProfileDialog = false },
+            onDismiss = {
+                showEditProfileDialog = false
+                profileSaveError = null
+            },
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor,
+            onChangeEmailClick = {
+                showEditProfileDialog = false
+                newEmail = currentUser?.email ?: ""
+                showChangeEmailDialog = true
+            },
+            onChangePasswordClick = {
+                showEditProfileDialog = false
+                newPassword = ""
+                confirmPassword = ""
+                showChangePasswordDialog = true
+            }
+        )
+    }
+
+    // Change Email Dialog
+    if (showChangeEmailDialog) {
+        ChangeEmailDialog(
+            currentEmail = currentUser?.email ?: "",
+            newEmail = newEmail,
+            onNewEmailChange = { newEmail = it },
+            isLoading = isChangingEmail,
+            errorMessage = emailChangeError,
+            onSave = {
+                if (newEmail.isNotBlank() && newEmail != currentUser?.email) {
+                    isChangingEmail = true
+                    emailChangeError = null
+                    authViewModel.updateEmail(
+                        newEmail = newEmail,
+                        onSuccess = {
+                            isChangingEmail = false
+                            showChangeEmailDialog = false
+                            Toast.makeText(
+                                context,
+                                "Un email de confirmation a été envoyé à $newEmail",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        },
+                        onError = { error ->
+                            isChangingEmail = false
+                            emailChangeError = error
+                        }
+                    )
+                }
+            },
+            onDismiss = {
+                showChangeEmailDialog = false
+                emailChangeError = null
+            },
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor
+        )
+    }
+
+    // Change Password Dialog
+    if (showChangePasswordDialog) {
+        ChangePasswordDialog(
+            newPassword = newPassword,
+            confirmPassword = confirmPassword,
+            onNewPasswordChange = { newPassword = it },
+            onConfirmPasswordChange = { confirmPassword = it },
+            isLoading = isChangingPassword,
+            errorMessage = passwordChangeError,
+            onSave = {
+                if (newPassword.length >= 6 && newPassword == confirmPassword) {
+                    isChangingPassword = true
+                    passwordChangeError = null
+                    authViewModel.updatePassword(
+                        newPassword = newPassword,
+                        onSuccess = {
+                            isChangingPassword = false
+                            showChangePasswordDialog = false
+                            Toast.makeText(context, "Mot de passe mis à jour", Toast.LENGTH_SHORT).show()
+                        },
+                        onError = { error ->
+                            isChangingPassword = false
+                            passwordChangeError = error
+                        }
+                    )
+                } else if (newPassword.length < 6) {
+                    passwordChangeError = "Le mot de passe doit contenir au moins 6 caractères"
+                } else {
+                    passwordChangeError = "Les mots de passe ne correspondent pas"
+                }
+            },
+            onDismiss = {
+                showChangePasswordDialog = false
+                passwordChangeError = null
+            },
             surfaceColor = surfaceColor,
             textColor = textColor,
             textSecondaryColor = textSecondaryColor
@@ -352,6 +632,51 @@ fun SettingsScreen(
             )
         }
         null -> { /* No result to show */ }
+    }
+
+    // Pro Company Info Dialog
+    if (showProInfoDialog && currentUser?.role == UserRole.ENTERPRISE) {
+        EditProInfoDialog(
+            companyName = proCompanyName,
+            siret = proSiret,
+            vatNumber = proVatNumber,
+            legalForm = proLegalForm,
+            billingAddress = proBillingAddress,
+            billingEmail = proBillingEmail,
+            onCompanyNameChange = { proCompanyName = it },
+            onSiretChange = { proSiret = it },
+            onVatNumberChange = { proVatNumber = it },
+            onLegalFormChange = { proLegalForm = it },
+            onBillingAddressChange = { proBillingAddress = it },
+            onBillingEmailChange = { proBillingEmail = it },
+            isSaving = isSavingProAccount,
+            onSave = {
+                isSavingProAccount = true
+                kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
+                    val result = proAccountRepository.saveProAccount(
+                        userId = currentUser.id,
+                        companyName = proCompanyName,
+                        siret = proSiret.ifEmpty { null },
+                        vatNumber = proVatNumber.ifEmpty { null },
+                        legalForm = proLegalForm?.name,
+                        billingAddress = proBillingAddress.ifEmpty { null },
+                        billingEmail = proBillingEmail.ifEmpty { null }
+                    )
+                    result.onSuccess { updated ->
+                        proAccount = updated
+                        showProInfoDialog = false
+                        MotiumApplication.logger.i("Pro account saved", "SettingsScreen")
+                    }.onFailure { e ->
+                        MotiumApplication.logger.e("Failed to save pro account: ${e.message}", "SettingsScreen", e)
+                    }
+                    isSavingProAccount = false
+                }
+            },
+            onDismiss = { showProInfoDialog = false },
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor
+        )
     }
     }
 }
@@ -768,6 +1093,7 @@ fun AppAppearanceSection(
     var editingColorIndex by remember { mutableStateOf(-1) }
     val primaryColor by themeManager.primaryColor.collectAsState()
     val favoriteColors by themeManager.favoriteColors.collectAsState()
+    val selectedColorIndex by themeManager.selectedColorIndex.collectAsState()
 
     // Couleur par défaut (fixe) + 4 couleurs personnalisables
     val defaultColor = Color(0xFF10B981) // MotiumPrimary - non modifiable
@@ -783,9 +1109,7 @@ fun AppAppearanceSection(
         )
 
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { isColorDropdownExpanded = !isColorDropdownExpanded },
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
                 containerColor = surfaceColor
@@ -797,9 +1121,13 @@ fun AppAppearanceSection(
                     .fillMaxWidth()
                     .padding(16.dp)
             ) {
+                // Header row - only this part is clickable to toggle dropdown
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { isColorDropdownExpanded = !isColorDropdownExpanded }
                 ) {
                     // Logo de l'app avec fond de la couleur sélectionnée
                     Box(
@@ -864,17 +1192,18 @@ fun AppAppearanceSection(
                         ) {
                             // Couleur 1 - Par défaut (non modifiable)
                             Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.clickable {
-                                    themeManager.setPrimaryColor(defaultColor)
-                                }
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                val isSelected = primaryColor == defaultColor
+                                val isSelected = selectedColorIndex == -1
+                                // Cercle de couleur - clickable pour appliquer
                                 Box(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
                                         .background(defaultColor)
+                                        .clickable {
+                                            themeManager.selectDefaultColor()
+                                        }
                                         .then(
                                             if (isSelected) Modifier.border(
                                                 3.dp,
@@ -904,19 +1233,20 @@ fun AppAppearanceSection(
 
                             // Couleurs 2-5 - Personnalisables
                             favoriteColors.forEachIndexed { index, color ->
-                                val isSelected = primaryColor == color && primaryColor != defaultColor
+                                val isSelected = selectedColorIndex == index
                                 Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable {
-                                        // Appliquer la couleur
-                                        themeManager.setPrimaryColor(color)
-                                    }
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
+                                    // Cercle de couleur - clickable pour appliquer
                                     Box(
                                         modifier = Modifier
                                             .size(48.dp)
                                             .clip(CircleShape)
                                             .background(color)
+                                            .clickable {
+                                                // Appliquer la couleur par index
+                                                themeManager.selectFavoriteColor(index)
+                                            }
                                             .then(
                                                 if (isSelected) Modifier.border(
                                                     3.dp,
@@ -941,10 +1271,13 @@ fun AppAppearanceSection(
                                         text = "Modifier",
                                         fontSize = 10.sp,
                                         color = textSecondaryColor,
-                                        modifier = Modifier.clickable {
-                                            editingColorIndex = index
-                                            showColorPicker = true
-                                        }
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                editingColorIndex = index
+                                                showColorPicker = true
+                                            }
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
                                     )
                                 }
                             }
@@ -969,7 +1302,7 @@ fun AppAppearanceSection(
             currentColor = favoriteColors.getOrNull(editingColorIndex) ?: defaultColor,
             onColorSelected = { color ->
                 themeManager.setFavoriteColor(editingColorIndex, color)
-                themeManager.setPrimaryColor(color) // Appliquer immédiatement
+                themeManager.selectFavoriteColor(editingColorIndex) // Appliquer et sélectionner par index
             },
             onDismiss = { showColorPicker = false },
             textColor = textColor,
@@ -1068,6 +1401,149 @@ fun MileageRatesSection(
             )
         }
     }
+}
+
+/**
+ * Work-Home Trip Settings Section with the considerFullDistance toggle.
+ */
+@Composable
+fun WorkHomeTripSettingsSection(
+    considerFullDistance: Boolean,
+    onToggle: (Boolean) -> Unit,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            text = "Trajets travail-maison",
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.Bold
+            ),
+            fontSize = 20.sp,
+            color = textColor
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = surfaceColor
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Prendre en compte toute la distance",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = textColor
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Par défaut, les trajets travail-maison sont plafonnés à 40 km. Activez cette option si vous bénéficiez d'une dérogation.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = textSecondaryColor
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Switch(
+                        checked = considerFullDistance,
+                        onCheckedChange = onToggle,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = MotiumPrimary
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Confirmation dialog when enabling considerFullDistance.
+ */
+@Composable
+fun ConsiderFullDistanceConfirmDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    surfaceColor: Color,
+    textColor: Color
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = surfaceColor,
+        title = {
+            Text(
+                "Prendre en compte toute la distance",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold
+                ),
+                color = textColor
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Cette option permet de comptabiliser l'intégralité de vos trajets travail-maison sans le plafond de 40 km.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = textColor
+                )
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFFF3E0)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFE65100),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Attention : Cette dérogation est réservée aux cas exceptionnels prévus par l'administration fiscale (handicap, horaires atypiques, etc.). Vous devez pouvoir justifier votre situation en cas de contrôle.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE65100)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MotiumPrimary
+                )
+            ) {
+                Text("Je confirme", color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler", color = textColor)
+            }
+        }
+    )
 }
 
 @Composable
@@ -1885,17 +2361,23 @@ fun LogoutSection(
 
 @Composable
 fun EditProfileDialog(
+    name: String,
     phoneNumber: String,
     address: String,
+    onNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
     onAddressChange: (String) -> Unit,
+    isSaving: Boolean = false,
+    errorMessage: String? = null,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
     surfaceColor: Color,
     textColor: Color,
-    textSecondaryColor: Color
+    textSecondaryColor: Color,
+    onChangeEmailClick: () -> Unit = {},
+    onChangePasswordClick: () -> Unit = {}
 ) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = { if (!isSaving) onDismiss() }) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1934,7 +2416,8 @@ fun EditProfileDialog(
                     text = "Modifier le profil",
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
-                    )
+                    ),
+                    color = textColor
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1943,10 +2426,43 @@ fun EditProfileDialog(
                 Text(
                     text = "Mettez à jour vos informations",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = textSecondaryColor
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                // Name Field
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = onNameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Nom") },
+                    placeholder = {
+                        if (name.isEmpty()) {
+                            Text("Votre nom")
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = textSecondaryColor,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor
+                    ),
+                    singleLine = true,
+                    enabled = !isSaving
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Phone Number Field
                 OutlinedTextField(
@@ -1968,12 +2484,15 @@ fun EditProfileDialog(
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unfocusedLabelColor = textSecondaryColor,
                         focusedLabelColor = MotiumPrimary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                        focusedBorderColor = MotiumPrimary
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor
                     ),
-                    singleLine = true
+                    singleLine = true,
+                    enabled = !isSaving
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -1998,13 +2517,91 @@ fun EditProfileDialog(
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unfocusedLabelColor = textSecondaryColor,
                         focusedLabelColor = MotiumPrimary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                        focusedBorderColor = MotiumPrimary
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor
                     ),
-                    singleLine = true
+                    singleLine = true,
+                    enabled = !isSaving
                 )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Sécurité section
+                HorizontalDivider(
+                    color = textSecondaryColor.copy(alpha = 0.2f),
+                    thickness = 1.dp
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Sécurité",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = textColor,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Change Email button
+                OutlinedButton(
+                    onClick = onChangeEmailClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = textColor
+                    ),
+                    border = BorderStroke(1.dp, textSecondaryColor.copy(alpha = 0.5f)),
+                    enabled = !isSaving
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Email,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MotiumPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Modifier l'email")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Change Password button
+                OutlinedButton(
+                    onClick = onChangePasswordClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = textColor
+                    ),
+                    border = BorderStroke(1.dp, textSecondaryColor.copy(alpha = 0.5f)),
+                    enabled = !isSaving
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MotiumPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Modifier le mot de passe")
+                }
+
+                // Error message
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(28.dp))
 
@@ -2022,23 +2619,821 @@ fun EditProfileDialog(
                             containerColor = MotiumPrimary,
                             contentColor = Color.White
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isSaving && name.isNotBlank()
                     ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = "Enregistrer",
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving
+                    ) {
+                        Text(
+                            text = "Annuler",
+                            color = textSecondaryColor
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Dialog pour changer l'email
+ */
+@Composable
+fun ChangeEmailDialog(
+    currentEmail: String,
+    newEmail: String,
+    onNewEmailChange: (String) -> Unit,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = { if (!isLoading) onDismiss() }) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = surfaceColor,
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Email,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MotiumPrimary
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Modifier l'email",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = textColor
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Un email de confirmation sera envoyé",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = textSecondaryColor
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Current email (read-only)
+                OutlinedTextField(
+                    value = currentEmail,
+                    onValueChange = {},
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Email actuel") },
+                    enabled = false,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = textSecondaryColor,
+                        disabledBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                        disabledLabelColor = textSecondaryColor
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // New email
+                OutlinedTextField(
+                    value = newEmail,
+                    onValueChange = onNewEmailChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Nouvel email") },
+                    placeholder = { Text("nouveau@email.com") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Email,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = textSecondaryColor,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor
+                    ),
+                    singleLine = true,
+                    enabled = !isLoading
+                )
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = onSave,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MotiumPrimary,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isLoading && newEmail.isNotBlank() && newEmail != currentEmail
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Envoyer la confirmation")
+                    }
+                }
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading
+                ) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Dialog pour changer le mot de passe
+ */
+@Composable
+fun ChangePasswordDialog(
+    newPassword: String,
+    confirmPassword: String,
+    onNewPasswordChange: (String) -> Unit,
+    onConfirmPasswordChange: (String) -> Unit,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = { if (!isLoading) onDismiss() }) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = surfaceColor,
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MotiumPrimary
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Modifier le mot de passe",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = textColor
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Minimum 6 caractères",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = textSecondaryColor
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // New password
+                OutlinedTextField(
+                    value = newPassword,
+                    onValueChange = onNewPasswordChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Nouveau mot de passe") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (passwordVisible) "Masquer" else "Afficher",
+                                tint = textSecondaryColor
+                            )
+                        }
+                    },
+                    visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = textSecondaryColor,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor
+                    ),
+                    singleLine = true,
+                    enabled = !isLoading
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Confirm password
+                OutlinedTextField(
+                    value = confirmPassword,
+                    onValueChange = onConfirmPasswordChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Confirmer le mot de passe") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = MotiumPrimary
+                        )
+                    },
+                    visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedLabelColor = textSecondaryColor,
+                        focusedLabelColor = MotiumPrimary,
+                        unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
+                        focusedBorderColor = MotiumPrimary,
+                        unfocusedTextColor = textColor,
+                        focusedTextColor = textColor
+                    ),
+                    singleLine = true,
+                    enabled = !isLoading,
+                    isError = confirmPassword.isNotEmpty() && newPassword != confirmPassword
+                )
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = onSave,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MotiumPrimary,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isLoading && newPassword.length >= 6 && newPassword == confirmPassword
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Modifier le mot de passe")
+                    }
+                }
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading
+                ) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Section displaying Pro company information (for ENTERPRISE users)
+ */
+@Composable
+fun ProCompanyInfoSection(
+    proAccount: ProAccountDto?,
+    isLoading: Boolean,
+    companyName: String,
+    siret: String,
+    vatNumber: String,
+    legalForm: LegalForm?,
+    billingAddress: String,
+    billingEmail: String,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onEditClick: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Informations Entreprise",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold
+                ),
+                fontSize = 20.sp,
+                color = textColor
+            )
+            TextButton(onClick = onEditClick) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "Modifier",
+                    modifier = Modifier.size(18.dp),
+                    tint = MotiumPrimary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Modifier", color = MotiumPrimary)
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        ) {
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = MotiumPrimary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            } else if (proAccount == null && companyName.isEmpty()) {
+                // Empty state - invite to complete info
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        Icons.Default.Business,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = textSecondaryColor
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "Complétez vos informations entreprise",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = textSecondaryColor
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onEditClick,
+                        colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary)
+                    ) {
+                        Text("Compléter")
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Company Name
+                    ProInfoRow(
+                        icon = Icons.Default.Business,
+                        label = "Nom de l'entreprise",
+                        value = companyName.ifEmpty { "Non renseigné" },
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor
+                    )
+
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+                    // SIRET
+                    ProInfoRow(
+                        icon = Icons.Default.Numbers,
+                        label = "SIRET",
+                        value = siret.ifEmpty { "Non renseigné" },
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor
+                    )
+
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+                    // VAT Number
+                    ProInfoRow(
+                        icon = Icons.Default.Receipt,
+                        label = "N° TVA Intracommunautaire",
+                        value = vatNumber.ifEmpty { "Non renseigné" },
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor
+                    )
+
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+                    // Legal Form
+                    ProInfoRow(
+                        icon = Icons.Default.Gavel,
+                        label = "Forme juridique",
+                        value = legalForm?.name ?: "Non renseigné",
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor
+                    )
+
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+                    // Billing Address
+                    ProInfoRow(
+                        icon = Icons.Default.LocationOn,
+                        label = "Adresse de facturation",
+                        value = billingAddress.ifEmpty { "Non renseigné" },
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor
+                    )
+
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+                    // Billing Email
+                    ProInfoRow(
+                        icon = Icons.Default.Email,
+                        label = "Email de facturation",
+                        value = billingEmail.ifEmpty { "Non renseigné" },
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProInfoRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MotiumPrimary
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 12.sp,
+                color = textSecondaryColor
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 14.sp,
+                color = if (value == "Non renseigné") textSecondaryColor else textColor
+            )
+        }
+    }
+}
+
+/**
+ * Dialog for editing Pro company information
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditProInfoDialog(
+    companyName: String,
+    siret: String,
+    vatNumber: String,
+    legalForm: LegalForm?,
+    billingAddress: String,
+    billingEmail: String,
+    onCompanyNameChange: (String) -> Unit,
+    onSiretChange: (String) -> Unit,
+    onVatNumberChange: (String) -> Unit,
+    onLegalFormChange: (LegalForm?) -> Unit,
+    onBillingAddressChange: (String) -> Unit,
+    onBillingEmailChange: (String) -> Unit,
+    isSaving: Boolean,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    var showLegalFormDropdown by remember { mutableStateOf(false) }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = surfaceColor,
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Informations Entreprise",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = textColor
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Fermer")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Scrollable content
+                Column(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Company Name (required)
+                    OutlinedTextField(
+                        value = companyName,
+                        onValueChange = onCompanyNameChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Nom de l'entreprise *") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Business, contentDescription = null, tint = MotiumPrimary)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor,
+                            unfocusedLabelColor = textSecondaryColor,
+                            focusedLabelColor = MotiumPrimary,
+                            unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary
+                        ),
+                        singleLine = true
+                    )
+
+                    // SIRET
+                    OutlinedTextField(
+                        value = siret,
+                        onValueChange = onSiretChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("SIRET (14 chiffres)") },
+                        placeholder = { Text("12345678901234") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Numbers, contentDescription = null, tint = MotiumPrimary)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor,
+                            unfocusedLabelColor = textSecondaryColor,
+                            focusedLabelColor = MotiumPrimary,
+                            unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary
+                        ),
+                        singleLine = true
+                    )
+
+                    // VAT Number
+                    OutlinedTextField(
+                        value = vatNumber,
+                        onValueChange = onVatNumberChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("N° TVA Intracommunautaire") },
+                        placeholder = { Text("FR12345678901") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Receipt, contentDescription = null, tint = MotiumPrimary)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor,
+                            unfocusedLabelColor = textSecondaryColor,
+                            focusedLabelColor = MotiumPrimary,
+                            unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary
+                        ),
+                        singleLine = true
+                    )
+
+                    // Legal Form Dropdown
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = legalForm?.name ?: "",
+                            onValueChange = {},
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showLegalFormDropdown = true },
+                            label = { Text("Forme juridique") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Gavel, contentDescription = null, tint = MotiumPrimary)
+                            },
+                            trailingIcon = {
+                                Icon(
+                                    if (showLegalFormDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = null
+                                )
+                            },
+                            readOnly = true,
+                            enabled = false,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                disabledTextColor = textColor,
+                                disabledLabelColor = textSecondaryColor,
+                                disabledBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                                disabledLeadingIconColor = MotiumPrimary,
+                                disabledTrailingIconColor = textSecondaryColor
+                            )
+                        )
+
+                        // Clickable overlay
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clickable { showLegalFormDropdown = true }
+                        )
+
+                        DropdownMenu(
+                            expanded = showLegalFormDropdown,
+                            onDismissRequest = { showLegalFormDropdown = false }
+                        ) {
+                            LegalForm.entries.forEach { form ->
+                                DropdownMenuItem(
+                                    text = { Text(form.name) },
+                                    onClick = {
+                                        onLegalFormChange(form)
+                                        showLegalFormDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Billing Address
+                    OutlinedTextField(
+                        value = billingAddress,
+                        onValueChange = onBillingAddressChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Adresse de facturation") },
+                        leadingIcon = {
+                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = MotiumPrimary)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor,
+                            unfocusedLabelColor = textSecondaryColor,
+                            focusedLabelColor = MotiumPrimary,
+                            unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary
+                        ),
+                        maxLines = 3
+                    )
+
+                    // Billing Email
+                    OutlinedTextField(
+                        value = billingEmail,
+                        onValueChange = onBillingEmailChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Email de facturation") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Email, contentDescription = null, tint = MotiumPrimary)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor,
+                            unfocusedLabelColor = textSecondaryColor,
+                            focusedLabelColor = MotiumPrimary,
+                            unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary
+                        ),
+                        singleLine = true
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Save button
+                Button(
+                    onClick = onSave,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    enabled = companyName.isNotEmpty() && !isSaving,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MotiumPrimary,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
                         Text(
                             text = "Enregistrer",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
-                        )
-                    }
-
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "Annuler",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

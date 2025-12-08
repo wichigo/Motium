@@ -40,7 +40,7 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         AutoTrackingSettingsEntity::class,
         CompanyLinkEntity::class
     ],
-    version = 5,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)

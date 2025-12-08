@@ -7,8 +7,6 @@ data class User(
     val name: String,
     val email: String,
     val role: UserRole,
-    val organizationId: String?,
-    val organizationName: String?,
     val subscription: Subscription,
     val monthlyTripCount: Int = 0,
     val phoneNumber: String = "",
@@ -26,6 +24,9 @@ data class User(
     val sharePersonalTrips: Boolean = false,     // Pro ne voit PAS les trajets perso par défaut
     val shareVehicleInfo: Boolean = true,        // Pro voit les véhicules
     val shareExpenses: Boolean = false,          // Pro ne voit PAS les dépenses par défaut
+
+    // Paramètre fiscal : prendre en compte toute la distance travail-maison (sans plafond 40km)
+    val considerFullDistance: Boolean = false,
 
     val createdAt: Instant,
     val updatedAt: Instant

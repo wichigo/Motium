@@ -16,8 +16,6 @@ data class UserEntity(
     val name: String,
     val email: String,
     val role: String, // UserRole enum stored as String
-    val organizationId: String?,
-    val organizationName: String?,
     val subscriptionType: String, // SubscriptionType enum stored as String
     val subscriptionExpiresAt: String?, // Instant stored as ISO-8601 string
     val stripeCustomerId: String? = null, // Stripe customer ID for payments
@@ -36,6 +34,8 @@ data class UserEntity(
     val sharePersonalTrips: Boolean,
     val shareVehicleInfo: Boolean,
     val shareExpenses: Boolean,
+    // Fiscal settings
+    val considerFullDistance: Boolean = false, // Prendre en compte toute la distance travail-maison (sans plafond 40km)
     val createdAt: String, // Instant stored as ISO-8601 string
     val updatedAt: String, // Instant stored as ISO-8601 string
     val lastSyncedAt: Long? = null, // Timestamp of last sync with Supabase
@@ -51,8 +51,6 @@ fun UserEntity.toDomainModel(): User {
         name = name,
         email = email,
         role = UserRole.valueOf(role),
-        organizationId = organizationId,
-        organizationName = organizationName,
         subscription = Subscription(
             type = SubscriptionType.valueOf(subscriptionType),
             expiresAt = subscriptionExpiresAt?.let { Instant.parse(it) },
@@ -71,6 +69,7 @@ fun UserEntity.toDomainModel(): User {
         sharePersonalTrips = sharePersonalTrips,
         shareVehicleInfo = shareVehicleInfo,
         shareExpenses = shareExpenses,
+        considerFullDistance = considerFullDistance,
         createdAt = Instant.parse(createdAt),
         updatedAt = Instant.parse(updatedAt)
     )
@@ -85,8 +84,6 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         name = name,
         email = email,
         role = role.name,
-        organizationId = organizationId,
-        organizationName = organizationName,
         subscriptionType = subscription.type.name,
         subscriptionExpiresAt = subscription.expiresAt?.toString(),
         stripeCustomerId = subscription.stripeCustomerId,
@@ -103,6 +100,7 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         sharePersonalTrips = sharePersonalTrips,
         shareVehicleInfo = shareVehicleInfo,
         shareExpenses = shareExpenses,
+        considerFullDistance = considerFullDistance,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
         lastSyncedAt = lastSyncedAt,

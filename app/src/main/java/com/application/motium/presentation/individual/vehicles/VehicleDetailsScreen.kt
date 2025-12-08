@@ -243,11 +243,11 @@ fun VehicleDetailsScreen(
                             "${"%.1f".format(vehicle.totalMileagePro)} km"
                         )
                         VehicleInfoRow(
-                            "Current Pro Rate",
+                            "Taux actuel Pro",
                             "$proRate €/km"
                         )
                         Text(
-                            text = "Based on the official scale for the current annual mileage.",
+                            text = "Taux basé sur le barème fiscal 2025 selon le kilométrage annuel.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
@@ -255,18 +255,32 @@ fun VehicleDetailsScreen(
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
-                        // Personal Section
-                        val persoRate = calculateCurrentMileageRate(vehicle, isProfessional = false)
+                        // Work-Home Trip Section (for fiscal allowance)
+                        val workHomeRate = calculateWorkHomeMileageRate(vehicle)
+                        VehicleInfoRow(
+                            "Dist. travail-maison",
+                            "${"%.1f".format(vehicle.totalMileageWorkHome)} km"
+                        )
+                        VehicleInfoRow(
+                            "Taux travail-maison",
+                            "$workHomeRate €/km"
+                        )
+                        Text(
+                            text = "Trajets personnels domicile-travail. Distance plafonnée à 40 km par trajet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                        // Personal Section (non-reimbursable)
                         VehicleInfoRow(
                             "Kilométrage Perso",
                             "${"%.1f".format(vehicle.totalMileagePerso)} km"
                         )
-                        VehicleInfoRow(
-                            "Current Personal Rate",
-                            "$persoRate €/km"
-                        )
                         Text(
-                            text = "Personal mileage rate is indicative.",
+                            text = "Trajets personnels hors travail-maison (non remboursables).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             modifier = Modifier.padding(top = 4.dp)
@@ -321,6 +335,55 @@ fun VehicleInfoRow(label: String, value: String) {
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
+    }
+}
+
+// Calcul du taux actuel basé sur le kilométrage travail-maison - Barème 2025
+private fun calculateWorkHomeMileageRate(vehicle: Vehicle): String {
+    val mileageKm = vehicle.totalMileageWorkHome
+
+    // Pour les vélos, taux fixe
+    if (vehicle.type == VehicleType.BIKE) {
+        return "0.25"
+    }
+
+    // Pour les motos et scooters
+    if (vehicle.type == VehicleType.MOTORCYCLE || vehicle.type == VehicleType.SCOOTER) {
+        return "0.395"
+    }
+
+    // Pour les voitures, utiliser le barème officiel 2025
+    val power = vehicle.power ?: return "N/A"
+
+    // Barème kilométrique 2025 - valeurs directement en km
+    return when {
+        mileageKm <= 5000 -> {
+            when (power) {
+                VehiclePower.CV_3 -> "0.529"
+                VehiclePower.CV_4 -> "0.606"
+                VehiclePower.CV_5 -> "0.636"
+                VehiclePower.CV_6 -> "0.665"
+                VehiclePower.CV_7_PLUS -> "0.697"
+            }
+        }
+        mileageKm <= 20000 -> {
+            when (power) {
+                VehiclePower.CV_3 -> "0.316"
+                VehiclePower.CV_4 -> "0.340"
+                VehiclePower.CV_5 -> "0.357"
+                VehiclePower.CV_6 -> "0.374"
+                VehiclePower.CV_7_PLUS -> "0.394"
+            }
+        }
+        else -> { // > 20000 km
+            when (power) {
+                VehiclePower.CV_3 -> "0.370"
+                VehiclePower.CV_4 -> "0.407"
+                VehiclePower.CV_5 -> "0.427"
+                VehiclePower.CV_6 -> "0.447"
+                VehiclePower.CV_7_PLUS -> "0.470"
+            }
+        }
     }
 }
 

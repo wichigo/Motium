@@ -16,7 +16,14 @@
       "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" :app:testDebugUnitTest --tests \"com.application.motium.utils.ExportManagerTest\")",
       "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\settings\\ProSettingsScreen.kt\")",
       "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\vehicles\\ProVehiclesScreen.kt\")",
-      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" clean compileDebugKotlin -x test)"
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" clean compileDebugKotlin -x test)",
+      "Bash(sqlite3:*)",
+      "Bash(timeout 60 adb logcat:*)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" status)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" log --oneline -5)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" diff --stat)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" add -A)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" commit -m \"$(cat <<''EOF''\nfeat(trip): Preserve GPS trace when editing trips with cumulative distance\n\n- Add GPS trace preservation in EditTripScreen: when modifying start/end \n  address, the original GPS trace is kept and new points are prepended/appended\n- Implement cumulative distance calculation: original + start gap + end gap\n- Add GPS trace restoration from Supabase when local data is corrupted (≤5 points)\n- Add getTripById() function to SupabaseTripRepository for single trip fetch\n- Fix color picker click in SettingsScreen by moving clickable to header row only\n- Add is_work_home_trip and reimbursement_amount fields to Trip model\n- Various UI improvements and Pro interface enhancements\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []

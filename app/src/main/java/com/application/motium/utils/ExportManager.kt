@@ -6,8 +6,13 @@ import androidx.core.content.FileProvider
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.ExpenseRepository
+import com.application.motium.data.VehicleRepository
 import com.application.motium.service.SupabaseStorageService
 import com.application.motium.domain.model.Expense
+import com.application.motium.domain.model.Vehicle
+import com.application.motium.domain.model.VehicleType
+import com.application.motium.domain.model.VehiclePower
+import com.application.motium.domain.model.TripType
 import com.itextpdf.kernel.colors.Color
 import com.itextpdf.kernel.colors.DeviceRgb
 import com.itextpdf.kernel.pdf.PdfDocument
@@ -50,7 +55,7 @@ class ExportManager(private val context: Context) {
 
     companion object {
         private const val EXPORT_FOLDER = "Motium_Exports"
-        private const val MILEAGE_RATE = 0.50 // €/km - Barème fiscal France
+        private const val DEFAULT_MILEAGE_RATE = 0.50 // €/km - Taux par défaut si pas de véhicule
 
         // Couleurs Motium (palette cohérente avec l'app)
         private val MOTIUM_GREEN = DeviceRgb(16, 185, 129) // #10B981 - Vert Motium principal
@@ -65,6 +70,73 @@ class ExportManager(private val context: Context) {
 
     private val expenseRepository = ExpenseRepository.getInstance(context)
     private val storageService = SupabaseStorageService.getInstance(context)
+    private val vehicleRepository = VehicleRepository.getInstance(context)
+
+    /**
+     * Cache des véhicules pour l'export en cours
+     */
+    private var vehiclesCache: Map<String, Vehicle> = emptyMap()
+
+    /**
+     * Charge les véhicules pour tous les trajets à exporter
+     */
+    private suspend fun loadVehiclesForTrips(trips: List<Trip>, userId: String): Map<String, Vehicle> {
+        val vehicleIds = trips.mapNotNull { it.vehicleId }.filter { it.isNotBlank() }.distinct()
+        if (vehicleIds.isEmpty()) return emptyMap()
+
+        val vehicles = vehicleRepository.getAllVehiclesForUser(userId)
+        return vehicles.associateBy { it.id }
+    }
+
+    /**
+     * Récupère l'indemnité pour un trajet - utilise la valeur stockée si disponible
+     * @param trip Le trajet
+     * @param vehiclesMap Map des véhicules par ID (utilisé pour fallback)
+     * @return Indemnité en euros
+     */
+    private fun calculateTripIndemnity(trip: Trip, vehiclesMap: Map<String, Vehicle>): Double {
+        // PRIORITÉ: Utiliser le montant de remboursement pré-calculé si disponible
+        trip.reimbursementAmount?.let { storedAmount ->
+            if (storedAmount > 0) {
+                return storedAmount
+            }
+        }
+
+        // FALLBACK pour les anciens trajets sans montant pré-calculé
+        val distanceKm = trip.totalDistance / 1000.0
+        val vehicleId = trip.vehicleId
+
+        // Si pas de véhicule associé, utiliser le taux par défaut
+        if (vehicleId.isNullOrBlank()) {
+            return distanceKm * DEFAULT_MILEAGE_RATE
+        }
+
+        val vehicle = vehiclesMap[vehicleId]
+        if (vehicle == null) {
+            return distanceKm * DEFAULT_MILEAGE_RATE
+        }
+
+        // Déterminer le type de trajet
+        val tripType = when (trip.tripType) {
+            "PROFESSIONAL" -> TripType.PROFESSIONAL
+            "PERSONAL" -> TripType.PERSONAL
+            else -> TripType.PROFESSIONAL // Par défaut pro pour les indemnités
+        }
+
+        // Utiliser le calcul progressif avec le barème fiscal
+        return TripCalculator.calculateMileageCost(distanceKm, vehicle, tripType)
+    }
+
+    /**
+     * Obtient le taux effectif moyen pour l'affichage dans le résumé
+     */
+    private fun getAverageRate(trips: List<Trip>, vehiclesMap: Map<String, Vehicle>): Double {
+        val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
+        if (totalKm == 0.0) return DEFAULT_MILEAGE_RATE
+
+        val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesMap) }
+        return totalIndemnities / totalKm
+    }
 
     /**
      * Charge les expenses pour une liste de trips par date (optimisé)
@@ -106,9 +178,14 @@ class ExportManager(private val context: Context) {
         onError: (String) -> Unit
     ) {
         try {
-            // Load expenses
-            val tripsWithExpenses = runBlocking {
-                loadExpensesForTrips(trips)
+            // Load expenses and vehicles
+            val tripsWithExpenses: List<TripWithExpenses>
+            val vehiclesMap: Map<String, Vehicle>
+
+            runBlocking {
+                tripsWithExpenses = loadExpensesForTrips(trips)
+                val userId = trips.firstOrNull()?.userId ?: ""
+                vehiclesMap = if (userId.isNotBlank()) loadVehiclesForTrips(trips, userId) else emptyMap()
             }
 
             val exportDir = File(context.getExternalFilesDir(null), EXPORT_FOLDER)
@@ -131,25 +208,29 @@ class ExportManager(private val context: Context) {
                 when (expenseMode) {
                     "trips_only" -> {
                         val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                        val totalIndemnities = totalKm * MILEAGE_RATE
+                        val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesMap) }
+                        val avgRate = getAverageRate(trips, vehiclesMap)
 
                         appendLine("RÉSUMÉ")
                         appendLine("Nombre de trajets,${trips.size}")
                         appendLine("Distance totale (km),${String.format("%.2f", totalKm)}")
-                        appendLine("Indemnités kilométriques (${MILEAGE_RATE}€/km),${String.format("%.2f", totalIndemnities)}€")
+                        appendLine("Indemnités kilométriques (barème progressif),${String.format("%.2f", totalIndemnities)}€")
+                        appendLine("Taux moyen,${String.format("%.3f", avgRate)}€/km")
                         appendLine("TOTAL,${String.format("%.2f", totalIndemnities)}€")
                         appendLine()
                     }
                     "trips_with_expenses" -> {
                         val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                        val totalIndemnities = totalKm * MILEAGE_RATE
+                        val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesMap) }
                         val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
                         val grandTotal = totalIndemnities + totalExpenses
+                        val avgRate = getAverageRate(trips, vehiclesMap)
 
                         appendLine("RÉSUMÉ")
                         appendLine("Nombre de trajets,${trips.size}")
                         appendLine("Distance totale (km),${String.format("%.2f", totalKm)}")
-                        appendLine("Indemnités kilométriques (${MILEAGE_RATE}€/km),${String.format("%.2f", totalIndemnities)}€")
+                        appendLine("Indemnités kilométriques (barème progressif),${String.format("%.2f", totalIndemnities)}€")
+                        appendLine("Taux moyen,${String.format("%.3f", avgRate)}€/km")
                         appendLine("Frais annexes,${String.format("%.2f", totalExpenses)}€")
                         appendLine("TOTAL GÉNÉRAL,${String.format("%.2f", grandTotal)}€")
                         appendLine()
@@ -179,7 +260,7 @@ class ExportManager(private val context: Context) {
                         val tripDate = dateFormat.format(Date(trip.startTime))
                         val tripTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(trip.startTime))
                         val distanceKm = trip.totalDistance / 1000.0
-                        val indemnity = distanceKm * MILEAGE_RATE
+                        val indemnity = calculateTripIndemnity(trip, vehiclesMap)
                         val startAddr = trip.startAddress?.replace(",", " ") ?: "Non géocodé"
                         val endAddr = trip.endAddress?.replace(",", " ") ?: "Non géocodé"
 
@@ -234,10 +315,18 @@ class ExportManager(private val context: Context) {
         onError: (String) -> Unit
     ) {
         try {
-            // Load expenses
-            val tripsWithExpenses = runBlocking {
-                loadExpensesForTrips(trips)
+            // Load expenses and vehicles
+            val tripsWithExpenses: List<TripWithExpenses>
+            val vehiclesMap: Map<String, Vehicle>
+
+            runBlocking {
+                tripsWithExpenses = loadExpensesForTrips(trips)
+                val userId = trips.firstOrNull()?.userId ?: ""
+                vehiclesMap = if (userId.isNotBlank()) loadVehiclesForTrips(trips, userId) else emptyMap()
             }
+
+            // Store in cache for use in helper methods
+            vehiclesCache = vehiclesMap
 
             val exportDir = File(context.getExternalFilesDir(null), EXPORT_FOLDER)
             if (!exportDir.exists()) {
@@ -364,11 +453,13 @@ class ExportManager(private val context: Context) {
         when (expenseMode) {
             "trips_only" -> {
                 val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                val totalIndemnities = totalKm * MILEAGE_RATE
+                val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesCache) }
+                val avgRate = getAverageRate(trips, vehiclesCache)
 
                 addSummaryRow(summaryTable, "Nombre de trajets", trips.size.toString())
                 addSummaryRow(summaryTable, "Distance totale", "${String.format("%.2f", totalKm)} km")
-                addSummaryRow(summaryTable, "Indemnités kilométriques ($MILEAGE_RATE€/km)", "${String.format("%.2f", totalIndemnities)} €")
+                addSummaryRow(summaryTable, "Indemnités kilométriques (barème progressif)", "${String.format("%.2f", totalIndemnities)} €")
+                addSummaryRow(summaryTable, "Taux moyen", "${String.format("%.3f", avgRate)} €/km")
 
                 // Total en vert
                 summaryTable.addCell(
@@ -389,13 +480,15 @@ class ExportManager(private val context: Context) {
             }
             "trips_with_expenses" -> {
                 val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                val totalIndemnities = totalKm * MILEAGE_RATE
+                val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesCache) }
                 val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
                 val grandTotal = totalIndemnities + totalExpenses
+                val avgRate = getAverageRate(trips, vehiclesCache)
 
                 addSummaryRow(summaryTable, "Nombre de trajets", trips.size.toString())
                 addSummaryRow(summaryTable, "Distance totale", "${String.format("%.2f", totalKm)} km")
-                addSummaryRow(summaryTable, "Indemnités kilométriques ($MILEAGE_RATE€/km)", "${String.format("%.2f", totalIndemnities)} €")
+                addSummaryRow(summaryTable, "Indemnités kilométriques (barème progressif)", "${String.format("%.2f", totalIndemnities)} €")
+                addSummaryRow(summaryTable, "Taux moyen", "${String.format("%.3f", avgRate)} €/km")
                 addSummaryRow(summaryTable, "Frais annexes", "${String.format("%.2f", totalExpenses)} €")
 
                 // Total en vert
@@ -502,7 +595,7 @@ class ExportManager(private val context: Context) {
         tripsWithExpenses.sortedBy { it.trip.startTime }.forEach { tripWithExpenses ->
             val trip = tripWithExpenses.trip
             val distanceKm = trip.totalDistance / 1000.0
-            val indemnity = distanceKm * MILEAGE_RATE
+            val indemnity = calculateTripIndemnity(trip, vehiclesCache)
 
             addTableCell(tripsTable, dateFormat.format(Date(trip.startTime)))
             addTableCell(tripsTable, timeFormat.format(Date(trip.startTime)))
@@ -792,10 +885,18 @@ class ExportManager(private val context: Context) {
         onError: (String) -> Unit
     ) {
         try {
-            // Load expenses
-            val tripsWithExpenses = runBlocking {
-                loadExpensesForTrips(trips)
+            // Load expenses and vehicles
+            val tripsWithExpenses: List<TripWithExpenses>
+            val vehiclesMap: Map<String, Vehicle>
+
+            runBlocking {
+                tripsWithExpenses = loadExpensesForTrips(trips)
+                val userId = trips.firstOrNull()?.userId ?: ""
+                vehiclesMap = if (userId.isNotBlank()) loadVehiclesForTrips(trips, userId) else emptyMap()
             }
+
+            // Store in cache for use in helper methods
+            vehiclesCache = vehiclesMap
 
             val exportDir = File(context.getExternalFilesDir(null), EXPORT_FOLDER)
             if (!exportDir.exists()) {
@@ -1012,23 +1113,27 @@ class ExportManager(private val context: Context) {
         when (expenseMode) {
             "trips_only" -> {
                 val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                val totalIndemnities = totalKm * MILEAGE_RATE
+                val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesCache) }
+                val avgRate = getAverageRate(trips, vehiclesCache)
 
                 addSummaryRow(sheet, rowNum++, "Nombre de trajets", trips.size.toString(), styles)
                 addSummaryRow(sheet, rowNum++, "Distance totale", String.format("%.2f km", totalKm), styles)
-                addSummaryRow(sheet, rowNum++, "Indemnités ($MILEAGE_RATE€/km)", String.format("%.2f €", totalIndemnities), styles)
+                addSummaryRow(sheet, rowNum++, "Indemnités (barème progressif)", String.format("%.2f €", totalIndemnities), styles)
+                addSummaryRow(sheet, rowNum++, "Taux moyen", String.format("%.3f €/km", avgRate), styles)
                 rowNum++
                 addTotalRow(sheet, rowNum++, "TOTAL", totalIndemnities, styles)
             }
             "trips_with_expenses" -> {
                 val totalKm = trips.sumOf { it.totalDistance / 1000.0 }
-                val totalIndemnities = totalKm * MILEAGE_RATE
+                val totalIndemnities = trips.sumOf { calculateTripIndemnity(it, vehiclesCache) }
                 val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
                 val grandTotal = totalIndemnities + totalExpenses
+                val avgRate = getAverageRate(trips, vehiclesCache)
 
                 addSummaryRow(sheet, rowNum++, "Nombre de trajets", trips.size.toString(), styles)
                 addSummaryRow(sheet, rowNum++, "Distance totale", String.format("%.2f km", totalKm), styles)
-                addSummaryRow(sheet, rowNum++, "Indemnités ($MILEAGE_RATE€/km)", String.format("%.2f €", totalIndemnities), styles)
+                addSummaryRow(sheet, rowNum++, "Indemnités (barème progressif)", String.format("%.2f €", totalIndemnities), styles)
+                addSummaryRow(sheet, rowNum++, "Taux moyen", String.format("%.3f €/km", avgRate), styles)
                 addSummaryRow(sheet, rowNum++, "Frais annexes", String.format("%.2f €", totalExpenses), styles)
                 rowNum++
                 addTotalRow(sheet, rowNum++, "TOTAL GÉNÉRAL", grandTotal, styles)
@@ -1108,7 +1213,7 @@ class ExportManager(private val context: Context) {
             val trip = tripWithExpenses.trip
             val row = sheet.createRow(rowNum++)
             val distanceKm = trip.totalDistance / 1000.0
-            val indemnity = distanceKm * MILEAGE_RATE
+            val indemnity = calculateTripIndemnity(trip, vehiclesCache)
 
             row.createCell(0).apply {
                 setCellValue(dateFormat.format(Date(trip.startTime)))

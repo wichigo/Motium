@@ -28,6 +28,7 @@ import com.application.motium.data.TripLocation
 import com.application.motium.data.geocoding.NominatimService
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.VehicleRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.domain.model.AuthState
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
@@ -59,6 +60,7 @@ fun AddTripScreen(
     val nominatimService = remember { NominatimService.getInstance() }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }  // Room cache
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
+    val localUserRepository = remember { LocalUserRepository.getInstance(context) }
 
     val authState by authRepository.authState.collectAsState(initial = AuthState())
     val currentUser = authState.user
@@ -75,6 +77,8 @@ fun AddTripScreen(
     var selectedTime by remember { mutableStateOf("") }
     var endTime by remember { mutableStateOf("") }
     var isProfessional by remember { mutableStateOf(true) }
+    var isWorkHomeTrip by remember { mutableStateOf(false) }
+    var considerFullDistance by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
     var isCalculatingRoute by remember { mutableStateOf(false) }
 
@@ -90,6 +94,14 @@ fun AddTripScreen(
         val now = Date()
         selectedTime = timeFormat.format(now)
         endTime = timeFormat.format(Date(now.time + (23 * 60 * 1000))) // +23 min
+
+        // Load user setting for considerFullDistance
+        try {
+            val user = localUserRepository.getLoggedInUser()
+            considerFullDistance = user?.considerFullDistance ?: false
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("Could not load user settings: ${e.message}", "AddTripScreen")
+        }
     }
 
     // Load vehicles when currentUser becomes available
@@ -263,7 +275,8 @@ fun AddTripScreen(
                                     startAddress = startLocation,
                                     endAddress = endLocation,
                                     notes = notes.ifBlank { null },
-                                    tripType = if (isProfessional) "PROFESSIONAL" else "PERSONAL"
+                                    tripType = if (isProfessional) "PROFESSIONAL" else "PERSONAL",
+                                    isWorkHomeTrip = if (isProfessional) false else isWorkHomeTrip // Only for personal trips
                                 )
 
                                 MotiumApplication.logger.d("Trip created: ${trip.id}", "AddTripScreen")
@@ -324,8 +337,11 @@ fun AddTripScreen(
                     iconColor = MotiumPrimary,
                     onValueChange = { startLocation = it },
                     onAddressSelected = { result ->
+                        MotiumApplication.logger.i("📍 Departure selected: ${result.display_name}", "AddTripScreen")
+                        MotiumApplication.logger.i("📍 Departure coords: lat=${result.lat}, lon=${result.lon}", "AddTripScreen")
                         startCoordinates = result.lat.toDouble() to result.lon.toDouble()
                         startLocation = result.display_name
+                        MotiumApplication.logger.i("📍 endCoordinates=$endCoordinates - will calculate route: ${endCoordinates != null}", "AddTripScreen")
                         if (endCoordinates != null) calculateRoute()
                     }
                 )
@@ -338,8 +354,11 @@ fun AddTripScreen(
                     iconColor = Color(0xFFEF4444),
                     onValueChange = { endLocation = it },
                     onAddressSelected = { result ->
+                        MotiumApplication.logger.i("📍 Arrival selected: ${result.display_name}", "AddTripScreen")
+                        MotiumApplication.logger.i("📍 Arrival coords: lat=${result.lat}, lon=${result.lon}", "AddTripScreen")
                         endCoordinates = result.lat.toDouble() to result.lon.toDouble()
                         endLocation = result.display_name
+                        MotiumApplication.logger.i("📍 startCoordinates=$startCoordinates - will calculate route: ${startCoordinates != null}", "AddTripScreen")
                         if (startCoordinates != null) calculateRoute()
                     }
                 )
@@ -349,8 +368,24 @@ fun AddTripScreen(
             item {
                 ProfessionalTripToggle(
                     isProfessional = isProfessional,
-                    onToggle = { isProfessional = it }
+                    onToggle = {
+                        isProfessional = it
+                        // Reset work-home when switching to professional
+                        if (it) isWorkHomeTrip = false
+                    }
                 )
+            }
+
+            // Work-Home Trip toggle (only for personal trips)
+            if (!isProfessional) {
+                item {
+                    WorkHomeTripToggle(
+                        isWorkHomeTrip = isWorkHomeTrip,
+                        onToggle = { isWorkHomeTrip = it },
+                        distanceKm = distance.replace(',', '.').toDoubleOrNull() ?: 0.0,
+                        considerFullDistance = considerFullDistance
+                    )
+                }
             }
 
             // Distance and Duration
@@ -361,7 +396,7 @@ fun AddTripScreen(
                 ) {
                     ReadOnlyField(
                         label = "Distance",
-                        value = if (distance.isNotBlank()) "$distance mi" else "",
+                        value = if (distance.isNotBlank()) "$distance km" else "",
                         icon = Icons.Default.Route,
                         modifier = Modifier.weight(1f)
                     )
@@ -538,6 +573,93 @@ fun ProfessionalTripToggle(
                     checkedTrackColor = MotiumPrimary
                 )
             )
+        }
+    }
+}
+
+/**
+ * Toggle for marking a personal trip as work-home commute.
+ * Shows a warning when distance exceeds 40km and considerFullDistance is disabled.
+ */
+@Composable
+fun WorkHomeTripToggle(
+    isWorkHomeTrip: Boolean,
+    onToggle: (Boolean) -> Unit,
+    distanceKm: Double,
+    considerFullDistance: Boolean
+) {
+    val showDistanceWarning = isWorkHomeTrip && distanceKm > 40.0 && !considerFullDistance
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Trajet travail-maison",
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = FontWeight.Medium
+                        )
+                    )
+                    Text(
+                        "Ouvre droit aux indemnités kilométriques",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                Switch(
+                    checked = isWorkHomeTrip,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MotiumPrimary
+                    )
+                )
+            }
+
+            // Warning when distance exceeds 40km
+            if (showDistanceWarning) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFFF3E0) // Light orange
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFE65100),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Seuls 40 km seront retenus pour le calcul des indemnités (case \"Prendre en compte toute la distance\" non cochée dans les paramètres).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE65100)
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -27,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
+import com.application.motium.data.TripLocation
 import com.application.motium.data.TripRepository
 import com.application.motium.data.VehicleRepository
 import com.application.motium.data.ExpenseRepository
@@ -76,12 +77,53 @@ fun TripDetailsScreen(
     var matchedRouteCoordinates by remember { mutableStateOf<List<List<Double>>?>(null) }
     var isMapMatching by remember { mutableStateOf(false) }
     val nominatimService = remember { NominatimService.getInstance() }
+    val supabaseTripRepository = remember { com.application.motium.data.supabase.SupabaseTripRepository.getInstance(context) }
+    val secureSessionStorage = remember { com.application.motium.data.preferences.SecureSessionStorage(context) }
 
     // Charger le trip et les expenses au démarrage
-    LaunchedEffect(tripId) {
+    // Include currentUser?.id as dependency to retry when auth becomes available
+    LaunchedEffect(tripId, currentUser?.id) {
         coroutineScope.launch {
             // Chargement direct par ID (rapide, utilise Room)
-            trip = tripRepository.getTripById(tripId)
+            var loadedTrip = tripRepository.getTripById(tripId)
+
+            // Check if local trip has suspiciously few GPS points - try to restore from Supabase
+            if (loadedTrip != null && loadedTrip.locations.size <= 5) {
+                // Try to get userId from auth state, fallback to secure storage
+                val userId = currentUser?.id ?: secureSessionStorage.restoreSession()?.userId
+                MotiumApplication.logger.d("TripDetailsScreen: Checking GPS restoration - localPoints=${loadedTrip.locations.size}, userId=$userId", "TripDetailsScreen")
+                if (!userId.isNullOrEmpty()) {
+                    MotiumApplication.logger.i("⚠️ Local trip has only ${loadedTrip.locations.size} points, trying to restore from Supabase...", "TripDetailsScreen")
+                    try {
+                        val supabaseResult = supabaseTripRepository.getTripById(tripId, userId)
+                        if (supabaseResult.isSuccess) {
+                            val supabaseTrip = supabaseResult.getOrNull()
+                            val supabasePointsCount = supabaseTrip?.tracePoints?.size ?: 0
+                            if (supabasePointsCount > loadedTrip.locations.size) {
+                                MotiumApplication.logger.i("✅ Restored GPS trace from Supabase: ${loadedTrip.locations.size} → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "TripDetailsScreen")
+                                val restoredLocations = supabaseTrip.tracePoints!!.map { point ->
+                                    TripLocation(
+                                        latitude = point.latitude,
+                                        longitude = point.longitude,
+                                        accuracy = point.accuracy ?: 10.0f,
+                                        timestamp = point.timestamp.toEpochMilliseconds()
+                                    )
+                                }
+                                // Restore both locations AND distance from Supabase
+                                val restoredDistanceMeters = supabaseTrip.distanceKm * 1000
+                                loadedTrip = loadedTrip.copy(
+                                    locations = restoredLocations,
+                                    totalDistance = restoredDistanceMeters
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.e("Failed to restore GPS trace: ${e.message}", "TripDetailsScreen", e)
+                    }
+                }
+            }
+
+            trip = loadedTrip
 
             // Load vehicle if trip has a vehicleId (from Room cache)
             trip?.vehicleId?.let { vehicleId ->
@@ -439,35 +481,19 @@ fun TripDetailsScreen(
 
                         HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
-                        // Indemnités kilométriques - Calcul avec barème progressif
+                        // Indemnités kilométriques - Utilise la valeur pré-calculée
+                        val mileageCost = currentTrip.reimbursementAmount ?: 0.0
+
+                        // Info sur la tranche actuelle (pour affichage)
                         val tripType = when (currentTrip.tripType) {
                             "PROFESSIONAL" -> TripType.PROFESSIONAL
                             "PERSONAL" -> TripType.PERSONAL
                             else -> TripType.PERSONAL
                         }
-
-                        // Kilométrage annuel précédent pour ce véhicule/type
                         val previousAnnualKm = when (tripType) {
                             TripType.PROFESSIONAL -> vehicle?.totalMileagePro ?: 0.0
                             TripType.PERSONAL -> vehicle?.totalMileagePerso ?: 0.0
                         }
-
-                        // Calcul avec le barème progressif
-                        val tripDistanceKm = currentTrip.totalDistance / 1000.0
-                        val mileageCost = if (vehicle != null) {
-                            MileageAllowanceCalculator.calculateTripCost(
-                                vehicleType = vehicle!!.type,
-                                power = vehicle!!.power,
-                                previousAnnualKm = previousAnnualKm,
-                                tripDistanceKm = tripDistanceKm,
-                                fuelType = vehicle!!.fuelType  // Pour majoration électrique +20%
-                            )
-                        } else {
-                            // Fallback si pas de véhicule : taux moyen 5CV
-                            tripDistanceKm * 0.636
-                        }
-
-                        // Info sur la tranche actuelle
                         val bracketInfo = vehicle?.let {
                             MileageAllowanceCalculator.getCurrentBracketInfo(it.type, it.power, previousAnnualKm)
                         }

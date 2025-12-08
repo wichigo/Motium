@@ -23,6 +23,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.utils.TripCalculator
 
 @Serializable
 data class TripLocation(
@@ -45,6 +46,8 @@ data class Trip(
     val endAddress: String? = null,
     val notes: String? = null,  // Notes générales du trajet
     val tripType: String? = null,  // "PROFESSIONAL" or "PERSONAL"
+    val reimbursementAmount: Double? = null, // Stored mileage reimbursement calculated at save time
+    val isWorkHomeTrip: Boolean = false, // Trajet travail-maison (perso uniquement, donne droit aux indemnités)
     val createdAt: Long = System.currentTimeMillis(),  // Timestamp de création
     val updatedAt: Long = System.currentTimeMillis(),   // Timestamp de mise à jour
     val lastSyncedAt: Long? = null,  // SYNC OPTIMIZATION: Timestamp de dernière synchronisation vers Supabase
@@ -113,6 +116,7 @@ class TripRepository private constructor(context: Context) {
     private val supabaseTripRepository = SupabaseTripRepository.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
+    private val vehicleRepository = VehicleRepository.getInstance(context)
 
     // Migration automatique au premier lancement
     init {
@@ -185,11 +189,79 @@ class TripRepository private constructor(context: Context) {
             val currentUser = authRepository.getCurrentAuthUser()
             val userId = currentUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
 
-            val tripWithUserId = if (trip.userId == null && userId != null) {
+            var tripWithUserId = if (trip.userId == null && userId != null) {
                 trip.copy(userId = userId)
             } else {
                 trip
             }
+
+            // REIMBURSEMENT: Calculer le montant du remboursement
+            // - PROFESSIONAL: toujours calculé
+            // - PERSONAL: uniquement si isWorkHomeTrip = true, sinon 0€
+            val vehicleId = tripWithUserId.vehicleId
+            if (!vehicleId.isNullOrBlank() && userId != null) {
+                val vehicle = vehicleRepository.getVehicleById(vehicleId)
+                if (vehicle != null) {
+                    val tripType = when (tripWithUserId.tripType) {
+                        "PROFESSIONAL" -> TripType.PROFESSIONAL
+                        "PERSONAL" -> TripType.PERSONAL
+                        else -> TripType.PERSONAL
+                    }
+
+                    val reimbursement: Double
+                    val distanceKm = tripWithUserId.totalDistance / 1000.0
+
+                    if (tripType == TripType.PROFESSIONAL) {
+                        // Trajets PRO: calcul classique
+                        reimbursement = TripCalculator.calculateMileageCost(distanceKm, vehicle, tripType)
+                    } else {
+                        // Trajets PERSO: uniquement si travail-maison
+                        if (tripWithUserId.isWorkHomeTrip) {
+                            // Récupérer le paramètre considerFullDistance de l'utilisateur
+                            val user = localUserRepository.getLoggedInUser()
+                            val considerFullDistance = user?.considerFullDistance ?: false
+
+                            // Appliquer le plafond de 40km si nécessaire
+                            val effectiveDistance = if (!considerFullDistance && distanceKm > 40.0) {
+                                40.0 // Plafond à 40km par trajet
+                            } else {
+                                distanceKm
+                            }
+
+                            // Calculer avec l'odomètre travail-maison pour déterminer la tranche
+                            reimbursement = TripCalculator.calculateMileageCost(
+                                effectiveDistance,
+                                vehicle.copy(totalMileagePerso = vehicle.totalMileageWorkHome), // Utiliser l'odomètre travail-maison
+                                tripType
+                            )
+
+                            if (!considerFullDistance && distanceKm > 40.0) {
+                                MotiumApplication.logger.i(
+                                    "📏 Work-home trip capped: ${String.format("%.2f", distanceKm)} km → 40 km (considerFullDistance=false)",
+                                    "TripRepository"
+                                )
+                            }
+                        } else {
+                            // Trajet perso non travail-maison: pas d'indemnité
+                            reimbursement = 0.0
+                            MotiumApplication.logger.d(
+                                "🚗 Personal trip (not work-home): no reimbursement",
+                                "TripRepository"
+                            )
+                        }
+                    }
+
+                    tripWithUserId = tripWithUserId.copy(reimbursementAmount = reimbursement)
+                    MotiumApplication.logger.i(
+                        "💰 Calculated reimbursement: €${String.format("%.2f", reimbursement)} for ${String.format("%.2f", distanceKm)} km",
+                        "TripRepository"
+                    )
+                }
+            }
+
+            // MILEAGE: Récupérer l'ancien trajet pour détecter les changements de véhicule/type
+            val oldTrip = tripDao.getTripById(trip.id)?.toDataModel()
+            val oldVehicleId = oldTrip?.vehicleId
 
             // SÉCURITÉ: Sauvegarder dans Room Database au lieu de SharedPreferences non chiffré
             if (userId != null) {
@@ -200,6 +272,29 @@ class TripRepository private constructor(context: Context) {
                     "✅ Trip saved to Room Database: ${tripWithUserId.id}, ${tripWithUserId.getFormattedDistance()}, userId=$userId",
                     "TripRepository"
                 )
+
+                // MILEAGE: Mettre à jour le kilométrage des véhicules concernés
+                val newVehicleId = tripWithUserId.vehicleId
+                val vehicleIdsToUpdate = mutableListOf<String>()
+
+                // Toujours mettre à jour le nouveau véhicule (s'il existe)
+                if (!newVehicleId.isNullOrBlank()) {
+                    vehicleIdsToUpdate.add(newVehicleId)
+                }
+
+                // Si le véhicule a changé, mettre à jour aussi l'ancien
+                if (!oldVehicleId.isNullOrBlank() && oldVehicleId != newVehicleId) {
+                    vehicleIdsToUpdate.add(oldVehicleId)
+                    MotiumApplication.logger.i(
+                        "🚗 Vehicle changed from $oldVehicleId to $newVehicleId - updating both mileages",
+                        "TripRepository"
+                    )
+                }
+
+                // Recalculer le kilométrage pour les véhicules concernés
+                if (vehicleIdsToUpdate.isNotEmpty()) {
+                    vehicleRepository.recalculateAndUpdateMultipleVehiclesMileage(vehicleIdsToUpdate)
+                }
             } else {
                 MotiumApplication.logger.w(
                     "⚠️ Cannot save trip - no userId available: ${tripWithUserId.id}",
@@ -494,10 +589,23 @@ class TripRepository private constructor(context: Context) {
 
     suspend fun deleteTrip(tripId: String) = withContext(Dispatchers.IO) {
         try {
+            // MILEAGE: Récupérer le trajet avant suppression pour connaître le véhicule
+            val tripToDelete = tripDao.getTripById(tripId)?.toDataModel()
+            val vehicleId = tripToDelete?.vehicleId
+
             // SÉCURITÉ: Supprimer depuis Room Database
             tripDao.deleteTripById(tripId)
 
             MotiumApplication.logger.i("Trip deleted from Room Database: $tripId", "TripRepository")
+
+            // MILEAGE: Recalculer le kilométrage du véhicule concerné
+            if (!vehicleId.isNullOrBlank()) {
+                MotiumApplication.logger.i(
+                    "🚗 Trip deleted - updating mileage for vehicle: $vehicleId",
+                    "TripRepository"
+                )
+                vehicleRepository.recalculateAndUpdateVehicleMileage(vehicleId)
+            }
 
             // Supprimer de Supabase si l'utilisateur est connecté
             try {
@@ -669,6 +777,100 @@ class TripRepository private constructor(context: Context) {
         }
     }
 
+    /**
+     * REIMBURSEMENT: Recalcule les montants de remboursement pour tous les trajets d'un véhicule.
+     * Utilise le calcul progressif par tranches basé sur l'ordre chronologique des trajets.
+     * À appeler quand la puissance fiscale d'un véhicule change.
+     *
+     * @param vehicleId L'ID du véhicule
+     * @param tripType Le type de trajet à recalculer ("PROFESSIONAL" ou "PERSONAL")
+     * @return Le nombre de trajets mis à jour
+     */
+    suspend fun recalculateReimbursementsForVehicle(vehicleId: String, tripType: String): Int = withContext(Dispatchers.IO) {
+        try {
+            if (vehicleId.isBlank()) {
+                MotiumApplication.logger.w("Cannot recalculate reimbursements - no vehicle ID", "TripRepository")
+                return@withContext 0
+            }
+
+            val vehicle = vehicleRepository.getVehicleById(vehicleId)
+            if (vehicle == null) {
+                MotiumApplication.logger.w("Cannot recalculate reimbursements - vehicle not found: $vehicleId", "TripRepository")
+                return@withContext 0
+            }
+
+            val userId = authRepository.getCurrentAuthUser()?.id
+                ?: prefs.getString(KEY_LAST_USER_ID, null)
+            if (userId == null) {
+                MotiumApplication.logger.w("Cannot recalculate reimbursements - no user ID", "TripRepository")
+                return@withContext 0
+            }
+
+            // Récupérer tous les trajets du véhicule triés par date
+            val startOfYear = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.DAY_OF_YEAR, 1)
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            val trips = tripDao.getTripsForVehicleAndType(vehicleId, tripType, startOfYear)
+                .sortedBy { it.startTime }
+
+            if (trips.isEmpty()) {
+                MotiumApplication.logger.i("No trips to recalculate for vehicle $vehicleId", "TripRepository")
+                return@withContext 0
+            }
+
+            val tripTypeEnum = when (tripType) {
+                "PROFESSIONAL" -> TripType.PROFESSIONAL
+                "PERSONAL" -> TripType.PERSONAL
+                else -> TripType.PERSONAL
+            }
+
+            var cumulativeKm = 0.0
+            var updatedCount = 0
+
+            trips.forEach { tripEntity ->
+                val distanceKm = tripEntity.totalDistance / 1000.0
+
+                // Calculer le remboursement avec le kilométrage cumulatif actuel
+                val reimbursement = TripCalculator.calculateMileageCost(
+                    distanceKm,
+                    vehicle.copy(
+                        totalMileagePro = if (tripTypeEnum == TripType.PROFESSIONAL) cumulativeKm else vehicle.totalMileagePro,
+                        totalMileagePerso = if (tripTypeEnum == TripType.PERSONAL) cumulativeKm else vehicle.totalMileagePerso
+                    ),
+                    tripTypeEnum
+                )
+
+                // Mettre à jour le trajet si le montant a changé
+                if (tripEntity.reimbursementAmount != reimbursement) {
+                    val updatedTrip = tripEntity.copy(
+                        reimbursementAmount = reimbursement,
+                        needsSync = true,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    tripDao.insertTrip(updatedTrip)
+                    updatedCount++
+                }
+
+                cumulativeKm += distanceKm
+            }
+
+            MotiumApplication.logger.i(
+                "✅ Recalculated reimbursements for $updatedCount/${trips.size} $tripType trips (vehicle: $vehicleId)",
+                "TripRepository"
+            )
+
+            return@withContext updatedCount
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error recalculating reimbursements: ${e.message}", "TripRepository", e)
+            return@withContext 0
+        }
+    }
+
     suspend fun syncTripsFromSupabase(userId: String? = null) = withContext(Dispatchers.IO) {
         try {
             // Utiliser le userId passé en paramètre ou le récupérer depuis authRepository
@@ -750,6 +952,26 @@ class TripRepository private constructor(context: Context) {
                         "✅ Sync complete: ${dataTrips.size} from Supabase, ${localOnlyTripsToKeep.size} local pending, ${tripsToDelete.size} deleted → Final count: $finalCount",
                         "TripRepository"
                     )
+
+                    // MILEAGE: Recalculer le kilométrage de tous les véhicules concernés
+                    // Collecter les vehicleIds de tous les trips traités (supprimés, ajoutés, modifiés)
+                    val allVehicleIds = mutableSetOf<String>()
+
+                    // Véhicules des trips supprimés
+                    tripsToDelete.mapNotNull { it.vehicleId?.takeIf { id -> id.isNotBlank() } }
+                        .forEach { allVehicleIds.add(it) }
+
+                    // Véhicules des trips synchronisés depuis Supabase
+                    dataTrips.mapNotNull { it.vehicleId?.takeIf { id -> id.isNotBlank() } }
+                        .forEach { allVehicleIds.add(it) }
+
+                    if (allVehicleIds.isNotEmpty()) {
+                        MotiumApplication.logger.i(
+                            "🚗 Updating mileage for ${allVehicleIds.size} vehicles after sync",
+                            "TripRepository"
+                        )
+                        vehicleRepository.recalculateAndUpdateMultipleVehiclesMileage(allVehicleIds.toList())
+                    }
                 } else {
                     MotiumApplication.logger.e("❌ Failed to fetch trips from Supabase: ${result.exceptionOrNull()?.message}", "TripRepository")
                 }
@@ -799,6 +1021,8 @@ private fun Trip.toDomainTrip(userId: String = ""): DomainTrip {
         },
         isValidated = isValidated,
         cost = 0.0, // Default cost
+        reimbursementAmount = this.reimbursementAmount,
+        isWorkHomeTrip = this.isWorkHomeTrip,
         tracePoints = locationPoints,
         createdAt = Instant.fromEpochMilliseconds(createdAt), // Preserve original creation time
         updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis()) // Update modification time
@@ -834,6 +1058,8 @@ private fun DomainTrip.toDataTrip(): Trip {
             TripType.PROFESSIONAL -> "PROFESSIONAL"
             TripType.PERSONAL -> "PERSONAL"
         },
+        reimbursementAmount = reimbursementAmount,
+        isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt.toEpochMilliseconds(),  // Preserve creation time
         updatedAt = updatedAt.toEpochMilliseconds(),  // Preserve update time
         lastSyncedAt = System.currentTimeMillis(),  // 🔧 FIX: Mark as synced since it came from Supabase

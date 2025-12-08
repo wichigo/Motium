@@ -536,6 +536,12 @@ fun MotiumNavHost(
             com.application.motium.presentation.pro.accounts.LinkedAccountsScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToExport = { navController.navigate("pro_export") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") },
                 onNavigateToAccountDetails = { accountId ->
                     navController.navigate("pro_account_details/$accountId")
                 },
@@ -560,6 +566,12 @@ fun MotiumNavHost(
             com.application.motium.presentation.pro.licenses.LicensesScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToExport = { navController.navigate("pro_export") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") },
                 authViewModel = authViewModel
             )
         }
@@ -569,6 +581,12 @@ fun MotiumNavHost(
             com.application.motium.presentation.pro.export.ProExportAdvancedScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToHome = { navController.navigate("enterprise_home") },
+                onNavigateToCalendar = { navController.navigate("pro_calendar") },
+                onNavigateToVehicles = { navController.navigate("pro_vehicles") },
+                onNavigateToExport = { navController.navigate("pro_export") },
+                onNavigateToSettings = { navController.navigate("pro_settings") },
+                onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
+                onNavigateToLicenses = { navController.navigate("pro_licenses") },
                 authViewModel = authViewModel
             )
         }

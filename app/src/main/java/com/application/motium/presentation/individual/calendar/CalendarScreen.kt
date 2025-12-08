@@ -118,7 +118,7 @@ fun CalendarScreen(
         }
 
         val totalDistance = monthTrips.sumOf { it.totalDistance } / 1000.0 // Convert to km
-        val totalIndemnities = totalDistance * 0.585 // 0.585 €/km for cars
+        val totalIndemnities = monthTrips.sumOf { it.reimbursementAmount ?: 0.0 }
 
         Triple(totalDistance, totalIndemnities, monthTrips.size)
     }
@@ -369,7 +369,7 @@ fun CalendarScreen(
                 // Daily stats card - Same style as HomeScreen
                 item {
                     val totalDistance = selectedDayTrips.sumOf { it.totalDistance } / 1000.0
-                    val totalIndemnities = selectedDayTrips.sumOf { it.totalDistance * 0.20 } / 1000.0
+                    val totalIndemnities = selectedDayTrips.sumOf { it.reimbursementAmount ?: 0.0 }
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
@@ -700,7 +700,7 @@ fun CalendarTripCard(
                 ) {
                     // Indemnités
                     Text(
-                        text = String.format("%.2f €", trip.totalDistance * 0.20 / 1000),
+                        text = String.format("%.2f €", trip.reimbursementAmount ?: 0.0),
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                         color = MotiumPrimary
                     )

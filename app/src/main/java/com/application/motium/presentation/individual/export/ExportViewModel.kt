@@ -10,6 +10,8 @@ import com.application.motium.data.VehicleRepository
 import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.repository.AuthRepository
 import com.application.motium.utils.ExportManager
+import com.application.motium.utils.TripCalculator
+import com.application.motium.domain.model.TripType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -152,11 +154,31 @@ class ExportViewModel(private val context: Context) : ViewModel() {
         val totalTrips = trips.size
         val totalDistance = trips.sumOf { it.totalDistance }
 
-        // Calculate indemnities based on distance and mileage rate
-        // Using default rate of 0.50€/km for professional trips
+        // Créer un map des véhicules pour le calcul des indemnités
+        val vehiclesMap = _vehicles.value.associateBy { it.id }
+
+        // Calculer les indemnités en utilisant le barème progressif par véhicule
         val totalIndemnities = trips.sumOf { trip ->
             val distanceKm = trip.totalDistance / 1000.0
-            distanceKm * 0.50 // Default mileage rate
+            val vehicleId = trip.vehicleId
+
+            if (vehicleId.isNullOrBlank()) {
+                // Pas de véhicule, utiliser le taux par défaut
+                distanceKm * 0.50
+            } else {
+                val vehicle = vehiclesMap[vehicleId]
+                if (vehicle == null) {
+                    distanceKm * 0.50
+                } else {
+                    // Utiliser le calcul progressif avec le barème fiscal
+                    val tripType = when (trip.tripType) {
+                        "PROFESSIONAL" -> TripType.PROFESSIONAL
+                        "PERSONAL" -> TripType.PERSONAL
+                        else -> TripType.PROFESSIONAL
+                    }
+                    TripCalculator.calculateMileageCost(distanceKm, vehicle, tripType)
+                }
+            }
         }
 
         _stats.value = ExportStats(

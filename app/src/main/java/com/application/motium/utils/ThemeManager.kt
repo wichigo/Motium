@@ -22,6 +22,12 @@ class ThemeManager private constructor(context: Context) {
     )
     val primaryColor: StateFlow<Color> = _primaryColor.asStateFlow()
 
+    // Index de la couleur sélectionnée: -1 = défaut, 0-4 = favoris
+    private val _selectedColorIndex = MutableStateFlow(
+        prefs.getInt(KEY_SELECTED_COLOR_INDEX, -1)
+    )
+    val selectedColorIndex: StateFlow<Int> = _selectedColorIndex.asStateFlow()
+
     // Favorite colors - default first slot is MockupGreen (#10B981)
     private val mockupGreen = 0xFF10B981.toInt()
     private val _favoriteColors = MutableStateFlow(
@@ -46,7 +52,7 @@ class ThemeManager private constructor(context: Context) {
         prefs.edit().putBoolean(KEY_DARK_MODE, enabled).apply()
     }
 
-    fun setPrimaryColor(color: Color) {
+    fun setPrimaryColor(color: Color, selectedIndex: Int = -1) {
         val colorInt = android.graphics.Color.argb(
             (color.alpha * 255).toInt(),
             (color.red * 255).toInt(),
@@ -54,11 +60,25 @@ class ThemeManager private constructor(context: Context) {
             (color.blue * 255).toInt()
         )
         _primaryColor.value = color
-        prefs.edit().putInt(KEY_PRIMARY_COLOR, colorInt).apply()
+        _selectedColorIndex.value = selectedIndex
+        prefs.edit()
+            .putInt(KEY_PRIMARY_COLOR, colorInt)
+            .putInt(KEY_SELECTED_COLOR_INDEX, selectedIndex)
+            .apply()
+    }
+
+    fun selectDefaultColor() {
+        setPrimaryColor(Color(0xFF10B981.toInt()), -1)
+    }
+
+    fun selectFavoriteColor(index: Int) {
+        if (index < 0 || index >= 5) return
+        val color = _favoriteColors.value.getOrNull(index) ?: return
+        setPrimaryColor(color, index)
     }
 
     fun resetToDefaultColor() {
-        setPrimaryColor(Color(defaultColor))
+        selectDefaultColor()
     }
 
     fun setFavoriteColor(index: Int, color: Color) {
@@ -97,6 +117,7 @@ class ThemeManager private constructor(context: Context) {
         private const val PREFS_NAME = "theme_prefs"
         private const val KEY_DARK_MODE = "dark_mode"
         private const val KEY_PRIMARY_COLOR = "primary_color"
+        private const val KEY_SELECTED_COLOR_INDEX = "selected_color_index"
         private const val KEY_FAVORITE_COLOR_1 = "favorite_color_1"
         private const val KEY_FAVORITE_COLOR_2 = "favorite_color_2"
         private const val KEY_FAVORITE_COLOR_3 = "favorite_color_3"

@@ -30,6 +30,7 @@ import com.application.motium.data.geocoding.NominatimService
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.VehicleRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.domain.model.Vehicle
@@ -63,6 +64,7 @@ fun EditTripScreen(
     val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }  // Room cache
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
+    val localUserRepository = remember { LocalUserRepository.getInstance(context) }
 
     // Auth state
     val authState by authRepository.authState.collectAsState(initial = com.application.motium.domain.model.AuthState())
@@ -71,6 +73,16 @@ fun EditTripScreen(
     // Loading state
     var isLoading by remember { mutableStateOf(true) }
     var isCalculatingRoute by remember { mutableStateOf(false) }
+
+    // Track if trip has real GPS trace (from automatic tracking)
+    var hasRealGpsTrace by remember { mutableStateOf(false) }
+    var originalStartCoordinates by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var originalEndCoordinates by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var originalDistanceKm by remember { mutableStateOf(0.0) }
+    var startGapDistanceKm by remember { mutableStateOf(0.0) }
+    var endGapDistanceKm by remember { mutableStateOf(0.0) }
+    // Original GPS trace (immutable) - used to rebuild route with gaps
+    var originalRouteCoordinates by remember { mutableStateOf<List<List<Double>>?>(null) }
 
     // Trip fields
     var originalTrip by remember { mutableStateOf<Trip?>(null) }
@@ -85,12 +97,18 @@ fun EditTripScreen(
     var selectedTime by remember { mutableStateOf("") }
     var endTime by remember { mutableStateOf("") }
     var isProfessional by remember { mutableStateOf(true) }
+    var isWorkHomeTrip by remember { mutableStateOf(false) }
+    var considerFullDistance by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
     var selectedVehicleId by remember { mutableStateOf<String?>(null) }
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
 
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+
+    // Supabase repository for restoring GPS trace if needed
+    val supabaseTripRepository = remember { com.application.motium.data.supabase.SupabaseTripRepository.getInstance(context) }
+    val secureSessionStorage = remember { com.application.motium.data.preferences.SecureSessionStorage(context) }
 
     // Load vehicles when currentUser becomes available (same logic as Add Trip)
     LaunchedEffect(currentUser?.id) {
@@ -114,13 +132,56 @@ fun EditTripScreen(
     }
 
     // Load trip and expenses
-    LaunchedEffect(tripId) {
+    // Include currentUser?.id as dependency to retry when auth becomes available
+    LaunchedEffect(tripId, currentUser?.id) {
         coroutineScope.launch {
-            // Load trip
+            // Load trip from local Room database
             val allTrips = tripRepository.getAllTrips()
-            val trip = allTrips.firstOrNull { it.id == tripId }
+            var trip = allTrips.firstOrNull { it.id == tripId }
 
             if (trip != null) {
+                // Check if local trip has suspiciously few GPS points (might be corrupted)
+                // Try to restore full GPS trace from Supabase if local has <= 5 points
+                val localPointsCount = trip.locations.size
+                if (localPointsCount <= 5) {
+                    // Try to get userId from auth state, fallback to secure storage
+                    val userId = currentUser?.id ?: secureSessionStorage.restoreSession()?.userId
+                    MotiumApplication.logger.d("EditTripScreen: Checking GPS restoration - localPoints=$localPointsCount, userId=$userId", "EditTripScreen")
+                    if (!userId.isNullOrEmpty()) {
+                        MotiumApplication.logger.i("⚠️ Local trip has only $localPointsCount points, trying to restore from Supabase...", "EditTripScreen")
+                        try {
+                            val supabaseResult = supabaseTripRepository.getTripById(tripId, userId)
+                            if (supabaseResult.isSuccess) {
+                                val supabaseTrip = supabaseResult.getOrNull()
+                                val supabasePointsCount = supabaseTrip?.tracePoints?.size ?: 0
+                                if (supabasePointsCount > localPointsCount) {
+                                    // Supabase has more points - convert to data Trip and use it
+                                    MotiumApplication.logger.i("✅ Restored GPS trace from Supabase: $localPointsCount → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "EditTripScreen")
+                                    val restoredLocations = supabaseTrip.tracePoints!!.map { point ->
+                                        TripLocation(
+                                            latitude = point.latitude,
+                                            longitude = point.longitude,
+                                            accuracy = point.accuracy ?: 10.0f,
+                                            timestamp = point.timestamp.toEpochMilliseconds()
+                                        )
+                                    }
+                                    // Restore both locations AND distance from Supabase
+                                    val restoredDistanceMeters = supabaseTrip.distanceKm * 1000
+                                    trip = trip.copy(
+                                        locations = restoredLocations,
+                                        totalDistance = restoredDistanceMeters
+                                    )
+                                    MotiumApplication.logger.i("✅ Restored trip: ${restoredLocations.size} points, ${restoredDistanceMeters}m", "EditTripScreen")
+                                } else {
+                                    MotiumApplication.logger.i("Supabase has same or fewer points ($supabasePointsCount), keeping local", "EditTripScreen")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Failed to restore from Supabase: ${e.message}", "EditTripScreen", e)
+                        }
+                    }
+                }
+
                 originalTrip = trip
 
                 // Pre-fill trip data
@@ -133,16 +194,28 @@ fun EditTripScreen(
                 startCoordinates = firstLocation?.let { it.latitude to it.longitude }
                 endCoordinates = lastLocation?.let { it.latitude to it.longitude }
 
+                // Save original coordinates to detect significant changes
+                originalStartCoordinates = startCoordinates
+                originalEndCoordinates = endCoordinates
+
                 // Load existing route coordinates from trip locations
-                if (trip.locations.size > 2) {
+                // Consider any trip with 2+ points as having a real GPS trace
+                if (trip.locations.size >= 2) {
                     // Convert trip locations to route coordinates format [lon, lat]
-                    routeCoordinates = trip.locations.map { location ->
+                    val loadedRoute = trip.locations.map { location ->
                         listOf(location.longitude, location.latitude)
                     }
-                    MotiumApplication.logger.i("✅ Loaded ${trip.locations.size} route points from existing trip", "EditTripScreen")
+                    routeCoordinates = loadedRoute
+                    originalRouteCoordinates = loadedRoute // Save immutable copy for gap calculations
+                    hasRealGpsTrace = true
+                    MotiumApplication.logger.i("✅ Loaded ${trip.locations.size} GPS trace points for editing", "EditTripScreen")
+                } else {
+                    hasRealGpsTrace = false
+                    MotiumApplication.logger.i("ℹ️ Trip has only ${trip.locations.size} points (incomplete trip)", "EditTripScreen")
                 }
 
-                distance = String.format("%.1f", trip.totalDistance / 1000)
+                originalDistanceKm = trip.totalDistance / 1000.0
+                distance = String.format("%.1f", originalDistanceKm)
                 MotiumApplication.logger.i("📏 Loaded trip distance: ${trip.totalDistance}m (${distance}km)", "EditTripScreen")
                 val durationMin = ((trip.endTime ?: trip.startTime) - trip.startTime) / 1000 / 60
                 duration = durationMin.toString()
@@ -154,6 +227,15 @@ fun EditTripScreen(
                 notes = trip.notes ?: ""
                 selectedVehicleId = trip.vehicleId
                 isProfessional = trip.tripType == "PROFESSIONAL"
+                isWorkHomeTrip = trip.isWorkHomeTrip
+
+                // Load user setting for considerFullDistance
+                try {
+                    val user = localUserRepository.getLoggedInUser()
+                    considerFullDistance = user?.considerFullDistance ?: false
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Could not load user settings: ${e.message}", "EditTripScreen")
+                }
             } else {
                 MotiumApplication.logger.e("Trip not found: $tripId", "EditTripScreen")
                 Toast.makeText(context, "Trip not found", Toast.LENGTH_SHORT).show()
@@ -165,9 +247,16 @@ fun EditTripScreen(
     }
 
     // Auto-recalculate route if distance seems wrong (for old trips with default 5km)
-    LaunchedEffect(startCoordinates, endCoordinates, originalTrip?.totalDistance) {
+    // IMPORTANT: Skip if trip has real GPS trace - we don't want to overwrite it!
+    LaunchedEffect(startCoordinates, endCoordinates, originalTrip?.totalDistance, hasRealGpsTrace) {
         val trip = originalTrip
         if (!isLoading && trip != null && startCoordinates != null && endCoordinates != null) {
+            // NEVER recalculate if we have a real GPS trace - preserve it!
+            if (hasRealGpsTrace) {
+                MotiumApplication.logger.i("ℹ️ Trip has real GPS trace (${trip.locations.size} points), skipping auto-recalculation", "EditTripScreen")
+                return@LaunchedEffect
+            }
+
             val tripDistance = trip.totalDistance
             // If distance is suspiciously small (< 10km) but we have coordinates, recalculate
             if (tripDistance < 10000) {
@@ -196,9 +285,78 @@ fun EditTripScreen(
         }
     }
 
-    // Calculate route
+    // Calculate distance between two GPS points in meters
+    fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        return results[0]
+    }
+
+    // Rebuild route from original GPS trace with current gaps (start/end points)
+    fun rebuildRouteWithGaps() {
+        originalRouteCoordinates?.let { original ->
+            var rebuilt = original.toList()
+
+            // Prepend new start point if gap > 10m
+            if (startGapDistanceKm > 0.01 && startCoordinates != null) {
+                val newStartPoint = listOf(startCoordinates!!.second, startCoordinates!!.first) // [lon, lat]
+                rebuilt = listOf(newStartPoint) + rebuilt
+            }
+
+            // Append new end point if gap > 10m
+            if (endGapDistanceKm > 0.01 && endCoordinates != null) {
+                val newEndPoint = listOf(endCoordinates!!.second, endCoordinates!!.first) // [lon, lat]
+                rebuilt = rebuilt + listOf(newEndPoint)
+            }
+
+            routeCoordinates = rebuilt
+            MotiumApplication.logger.i("📍 Route reconstruite: ${original.size} original + gaps = ${rebuilt.size} points", "EditTripScreen")
+        }
+    }
+
+    // Update total distance = original + start gap + end gap
+    fun updateTotalDistance() {
+        val totalKm = originalDistanceKm + startGapDistanceKm + endGapDistanceKm
+        distance = String.format("%.1f", totalKm)
+        MotiumApplication.logger.i("📏 Distance mise à jour: ${originalDistanceKm}km (original) + ${startGapDistanceKm}km (départ) + ${endGapDistanceKm}km (arrivée) = ${totalKm}km", "EditTripScreen")
+    }
+
+    // Calculate gap from new departure to first GPS point and update route
+    fun updateStartGap(newStart: Pair<Double, Double>) {
+        if (hasRealGpsTrace && originalStartCoordinates != null) {
+            val gapMeters = distanceBetween(
+                newStart.first, newStart.second,
+                originalStartCoordinates!!.first, originalStartCoordinates!!.second
+            )
+            startGapDistanceKm = gapMeters / 1000.0
+            MotiumApplication.logger.i("📍 Gap départ: nouvelle adresse -> 1er point GPS = ${String.format("%.2f", startGapDistanceKm)}km", "EditTripScreen")
+
+            // Rebuild entire route from original with all current gaps
+            rebuildRouteWithGaps()
+            updateTotalDistance()
+        }
+    }
+
+    // Calculate gap from last GPS point to new arrival and update route
+    fun updateEndGap(newEnd: Pair<Double, Double>) {
+        if (hasRealGpsTrace && originalEndCoordinates != null) {
+            val gapMeters = distanceBetween(
+                originalEndCoordinates!!.first, originalEndCoordinates!!.second,
+                newEnd.first, newEnd.second
+            )
+            endGapDistanceKm = gapMeters / 1000.0
+            MotiumApplication.logger.i("📍 Gap arrivée: dernier point GPS -> nouvelle adresse = ${String.format("%.2f", endGapDistanceKm)}km", "EditTripScreen")
+
+            // Rebuild entire route from original with all current gaps
+            rebuildRouteWithGaps()
+            updateTotalDistance()
+        }
+    }
+
+    // Calculate route for manual trips (no GPS trace)
     fun calculateRoute() {
-        if (startCoordinates != null && endCoordinates != null) {
+        if (!hasRealGpsTrace && startCoordinates != null && endCoordinates != null) {
+            MotiumApplication.logger.i("🗺️ Calculating route for manual trip", "EditTripScreen")
             isCalculatingRoute = true
             coroutineScope.launch {
                 try {
@@ -211,13 +369,16 @@ fun EditTripScreen(
 
                     if (route != null) {
                         routeCoordinates = route.coordinates
-                        distance = String.format("%.1f", route.distance / 1000)
+                        originalDistanceKm = route.distance / 1000.0
+                        distance = String.format("%.1f", originalDistanceKm)
                         duration = String.format("%.0f", route.duration / 60)
 
                         // Calculate end time
                         val startTimeDate = timeFormat.parse(selectedTime) ?: Date()
                         val endTimeDate = Date(startTimeDate.time + route.duration.toLong() * 1000)
                         endTime = timeFormat.format(endTimeDate)
+
+                        MotiumApplication.logger.i("✅ Route calculated: ${distance}km, ${duration}min", "EditTripScreen")
                     }
                 } catch (e: Exception) {
                     MotiumApplication.logger.e("Route error: ${e.message}", "EditTripScreen", e)
@@ -295,6 +456,7 @@ fun EditTripScreen(
 
                                         // Use route coordinates if available, otherwise fallback to start/end only
                                         val routePoints = routeCoordinates
+                                        MotiumApplication.logger.i("💾 SAVE: routeCoordinates has ${routePoints?.size ?: 0} points, hasRealGpsTrace=$hasRealGpsTrace", "EditTripScreen")
                                         val locations = if (!routePoints.isNullOrEmpty()) {
                                             // Use route coordinates with interpolated timestamps
                                             val timeStep = (endTimeMs - startTimeMs) / routePoints.size.toDouble()
@@ -334,7 +496,8 @@ fun EditTripScreen(
                                             endAddress = endLocation,
                                             notes = notes.ifBlank { null },
                                             vehicleId = selectedVehicleId,
-                                            tripType = if (isProfessional) "PROFESSIONAL" else "PERSONAL"
+                                            tripType = if (isProfessional) "PROFESSIONAL" else "PERSONAL",
+                                            isWorkHomeTrip = if (isProfessional) false else isWorkHomeTrip // Only for personal trips
                                         )
 
                                         MotiumApplication.logger.i("✅ Updated trip object: totalDistance=${updatedTrip.totalDistance}m, locations=${updatedTrip.locations.size} points", "EditTripScreen")
@@ -400,9 +563,18 @@ fun EditTripScreen(
                         iconColor = MotiumPrimary,
                         onValueChange = { startLocation = it },
                         onAddressSelected = { result ->
-                            startCoordinates = result.lat.toDouble() to result.lon.toDouble()
+                            MotiumApplication.logger.i("📍 Departure selected: ${result.display_name}", "EditTripScreen")
+                            val newCoords = result.lat.toDouble() to result.lon.toDouble()
+                            startCoordinates = newCoords
                             startLocation = result.display_name
-                            if (endCoordinates != null) calculateRoute()
+
+                            if (hasRealGpsTrace) {
+                                // Cumulative mode: calculate gap from new address to first GPS point
+                                updateStartGap(newCoords)
+                            } else if (endCoordinates != null) {
+                                // Manual trip: recalculate full route
+                                calculateRoute()
+                            }
                         }
                     )
                 }
@@ -414,9 +586,18 @@ fun EditTripScreen(
                         iconColor = Color.Red,
                         onValueChange = { endLocation = it },
                         onAddressSelected = { result ->
-                            endCoordinates = result.lat.toDouble() to result.lon.toDouble()
+                            MotiumApplication.logger.i("📍 Arrival selected: ${result.display_name}", "EditTripScreen")
+                            val newCoords = result.lat.toDouble() to result.lon.toDouble()
+                            endCoordinates = newCoords
                             endLocation = result.display_name
-                            if (startCoordinates != null) calculateRoute()
+
+                            if (hasRealGpsTrace) {
+                                // Cumulative mode: calculate gap from last GPS point to new address
+                                updateEndGap(newCoords)
+                            } else if (startCoordinates != null) {
+                                // Manual trip: recalculate full route
+                                calculateRoute()
+                            }
                         }
                     )
                 }
@@ -425,8 +606,24 @@ fun EditTripScreen(
                 item {
                     ProfessionalTripToggle(
                         isProfessional = isProfessional,
-                        onToggle = { isProfessional = it }
+                        onToggle = {
+                            isProfessional = it
+                            // Reset work-home when switching to professional
+                            if (it) isWorkHomeTrip = false
+                        }
                     )
+                }
+
+                // Work-Home Trip toggle (only for personal trips)
+                if (!isProfessional) {
+                    item {
+                        WorkHomeTripToggle(
+                            isWorkHomeTrip = isWorkHomeTrip,
+                            onToggle = { isWorkHomeTrip = it },
+                            distanceKm = distance.replace(',', '.').toDoubleOrNull() ?: 0.0,
+                            considerFullDistance = considerFullDistance
+                        )
+                    }
                 }
 
                 // Vehicle Selection
@@ -604,6 +801,93 @@ fun ProfessionalTripToggle(
                     checkedTrackColor = MotiumPrimary
                 )
             )
+        }
+    }
+}
+
+/**
+ * Toggle for marking a personal trip as work-home commute.
+ * Shows a warning when distance exceeds 40km and considerFullDistance is disabled.
+ */
+@Composable
+fun WorkHomeTripToggle(
+    isWorkHomeTrip: Boolean,
+    onToggle: (Boolean) -> Unit,
+    distanceKm: Double,
+    considerFullDistance: Boolean
+) {
+    val showDistanceWarning = isWorkHomeTrip && distanceKm > 40.0 && !considerFullDistance
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Trajet travail-maison",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Medium
+                        )
+                    )
+                    Text(
+                        "Ouvre droit aux indemnités kilométriques",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                Switch(
+                    checked = isWorkHomeTrip,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MotiumPrimary
+                    )
+                )
+            }
+
+            // Warning when distance exceeds 40km
+            if (showDistanceWarning) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFFF3E0) // Light orange
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFE65100),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Seuls 40 km seront retenus pour le calcul des indemnités (case \"Prendre en compte toute la distance\" non cochée dans les paramètres).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE65100)
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -32,21 +32,23 @@ class SupabaseTripRepository(private val context: Context) {
     data class SupabaseTrip(
         val id: String,
         val user_id: String,
-        val vehicle_id: String?,
+        val vehicle_id: String? = null,
         val start_time: String, // TIMESTAMPTZ
-        val end_time: String?, // TIMESTAMPTZ
+        val end_time: String? = null, // TIMESTAMPTZ
         val start_latitude: Double,
         val start_longitude: Double,
-        val end_latitude: Double?,
-        val end_longitude: Double?,
-        val start_address: String?,
-        val end_address: String?,
+        val end_latitude: Double? = null,
+        val end_longitude: Double? = null,
+        val start_address: String? = null,
+        val end_address: String? = null,
         val distance_km: Double,
         val duration_ms: Long,
         val type: String,
         val is_validated: Boolean,
-        val cost: Double,
-        val trace_gps: String?, // JSONB as JSON string for manual trips
+        val cost: Double = 0.0,
+        val reimbursement_amount: Double? = null, // Stored mileage reimbursement (optional for old trips)
+        val is_work_home_trip: Boolean = false, // Trajet travail-maison (perso uniquement)
+        val trace_gps: String? = null, // JSONB as JSON string for manual trips
         val created_at: String,
         val updated_at: String
     )
@@ -67,6 +69,8 @@ class SupabaseTripRepository(private val context: Context) {
         val is_validated: Boolean,
         val vehicle_id: String?,
         val cost: Double,
+        val reimbursement_amount: Double?, // Stored mileage reimbursement
+        val is_work_home_trip: Boolean = false, // Trajet travail-maison (perso uniquement)
         val trace_gps: String?,
         val updated_at: String
     )
@@ -138,6 +142,8 @@ class SupabaseTripRepository(private val context: Context) {
                 type = trip.type.name, // FIX: Use actual trip type instead of hardcoded PERSONAL
                 is_validated = trip.isValidated,
                 cost = 0.0,
+                reimbursement_amount = trip.reimbursementAmount,
+                is_work_home_trip = trip.isWorkHomeTrip,
                 trace_gps = traceGpsJson,
                 created_at = existingTrip?.created_at ?: createdAtFormatted,
                 updated_at = now
@@ -201,6 +207,8 @@ class SupabaseTripRepository(private val context: Context) {
                 is_validated = trip.isValidated,
                 vehicle_id = cleanVehicleId,  // Use cleaned vehicleId
                 cost = 0.0,
+                reimbursement_amount = trip.reimbursementAmount,
+                is_work_home_trip = trip.isWorkHomeTrip,
                 trace_gps = traceGpsJson,
                 updated_at = now
             )
@@ -308,6 +316,40 @@ class SupabaseTripRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Fetch a single trip by ID from Supabase.
+     * Useful to restore GPS trace from cloud when local data is corrupted.
+     */
+    suspend fun getTripById(tripId: String, userId: String): Result<Trip?> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("Fetching trip $tripId from Supabase", "SupabaseTripRepository")
+
+            val supabaseTrips = postgres.from("trips")
+                .select {
+                    filter {
+                        eq("id", tripId)
+                        eq("user_id", userId)
+                    }
+                }
+                .decodeList<SupabaseTrip>()
+
+            if (supabaseTrips.isEmpty()) {
+                MotiumApplication.logger.w("Trip $tripId not found in Supabase", "SupabaseTripRepository")
+                return@withContext Result.success(null)
+            }
+
+            val domainTrip = supabaseTrips.first().toDomainTrip()
+            val tracePointsCount = domainTrip.tracePoints?.size ?: 0
+            MotiumApplication.logger.i("✅ Fetched trip $tripId from Supabase with $tracePointsCount GPS points", "SupabaseTripRepository")
+
+            Result.success(domainTrip)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error fetching trip $tripId from Supabase: ${e.message}", "SupabaseTripRepository", e)
+            Result.failure(e)
+        }
+    }
+
     private fun SupabaseTrip.toDomainTrip(): Trip {
         fun parseInstant(timestamp: String): Instant {
             return try {
@@ -354,6 +396,8 @@ class SupabaseTripRepository(private val context: Context) {
             type = com.application.motium.domain.model.TripType.valueOf(type),
             isValidated = is_validated,
             cost = cost,
+            reimbursementAmount = reimbursement_amount,
+            isWorkHomeTrip = is_work_home_trip,
             tracePoints = tracePoints,
             createdAt = parseInstant(created_at),
             updatedAt = parseInstant(updated_at)

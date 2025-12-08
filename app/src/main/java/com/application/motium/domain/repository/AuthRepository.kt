@@ -23,4 +23,8 @@ interface AuthRepository {
     suspend fun createUserProfile(authUser: AuthUser, name: String, isEnterprise: Boolean = false, organizationName: String = ""): AuthResult<User>
     suspend fun getUserProfile(userId: String): AuthResult<User>
     suspend fun updateUserProfile(user: User): AuthResult<User>
+
+    // Mise à jour des credentials
+    suspend fun updateEmail(newEmail: String): AuthResult<Unit>
+    suspend fun updatePassword(newPassword: String): AuthResult<Unit>
 }

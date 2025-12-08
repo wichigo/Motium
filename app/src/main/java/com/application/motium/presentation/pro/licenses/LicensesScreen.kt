@@ -19,11 +19,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicenseStatus
 import com.application.motium.domain.model.LicensesSummary
 import com.application.motium.presentation.auth.AuthViewModel
+import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
 
@@ -36,6 +38,12 @@ import com.application.motium.utils.ThemeManager
 fun LicensesScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
+    onNavigateToCalendar: () -> Unit = {},
+    onNavigateToVehicles: () -> Unit = {},
+    onNavigateToExport: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
+    onNavigateToLinkedAccounts: () -> Unit = {},
+    onNavigateToExportAdvanced: () -> Unit = {},
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -46,7 +54,7 @@ fun LicensesScreen(
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     val backgroundColor = if (isDarkMode) BackgroundDark else BackgroundLight
-    val cardColor = if (isDarkMode) SurfaceDark else SurfaceLight
+    val surfaceColor = if (isDarkMode) SurfaceDark else SurfaceLight
     val textColor = if (isDarkMode) TextDark else TextLight
     val textSecondaryColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
 
@@ -67,138 +75,177 @@ fun LicensesScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        "Licences",
-                        fontWeight = FontWeight.Bold,
-                        color = textColor
+    Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            "Licences",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            fontSize = 18.sp,
+                            color = textColor
+                        )
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = backgroundColor
                     )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            Icons.Default.ArrowBack,
-                            contentDescription = "Retour",
-                            tint = textColor
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = { viewModel.showPurchaseDialog() },
+                    containerColor = MotiumPrimary,
+                    contentColor = Color.White,
+                    modifier = Modifier.padding(bottom = 100.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Ajouter une licence")
+                }
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            containerColor = Color.Transparent
+        ) { paddingValues ->
+            if (uiState.isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = MotiumPrimary)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 140.dp),
+                    verticalArrangement = Arrangement.spacedBy(24.dp)
+                ) {
+                    // Summary section
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                "Résumé",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = textColor
+                            )
+
+                            LicensesSummaryCard(
+                                summary = uiState.summary,
+                                surfaceColor = surfaceColor,
+                                textColor = textColor,
+                                textSecondaryColor = textSecondaryColor
+                            )
+                        }
+                    }
+
+                    // Pricing info
+                    item {
+                        PricingInfoCard(
+                            textColor = textColor,
+                            textSecondaryColor = textSecondaryColor
                         )
                     }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = backgroundColor
-                )
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.showPurchaseDialog() },
-                containerColor = MotiumPrimary,
-                contentColor = Color.White
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Ajouter une licence")
-            }
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        containerColor = backgroundColor
-    ) { paddingValues ->
-        if (uiState.isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(color = MotiumPrimary)
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(vertical = 16.dp)
-            ) {
-                // Summary card
-                item {
-                    LicensesSummaryCard(
-                        summary = uiState.summary,
-                        cardColor = cardColor,
-                        textColor = textColor,
-                        textSecondaryColor = textSecondaryColor
-                    )
-                }
 
-                // Pricing info
-                item {
-                    PricingInfoCard(
-                        cardColor = cardColor,
-                        textColor = textColor,
-                        textSecondaryColor = textSecondaryColor
-                    )
-                }
-
-                // Licenses list
-                if (uiState.licenses.isNotEmpty()) {
+                    // Licenses list section
                     item {
                         Text(
                             "Licences actives",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
                             color = textColor
                         )
                     }
 
-                    items(uiState.licenses) { license ->
-                        LicenseCard(
-                            license = license,
-                            cardColor = cardColor,
-                            textColor = textColor,
-                            textSecondaryColor = textSecondaryColor,
-                            onCancel = { viewModel.cancelLicense(license.id) }
-                        )
-                    }
-                } else {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = cardColor),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
+                    if (uiState.licenses.isEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = surfaceColor),
+                                shape = RoundedCornerShape(16.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                             ) {
-                                Icon(
-                                    Icons.Outlined.CardMembership,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(64.dp),
-                                    tint = textSecondaryColor
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Text(
-                                    "Aucune licence",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = textSecondaryColor
-                                )
-                                Text(
-                                    "Achetez des licences pour vos collaborateurs",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = textSecondaryColor
-                                )
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(32.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.CardMembership,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(64.dp),
+                                        tint = textSecondaryColor
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(
+                                        "Aucune licence",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = textSecondaryColor
+                                    )
+                                    Text(
+                                        "Achetez des licences pour vos collaborateurs",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = textSecondaryColor
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = surfaceColor),
+                                shape = RoundedCornerShape(16.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                            ) {
+                                Column {
+                                    uiState.licenses.forEachIndexed { index, license ->
+                                        LicenseRow(
+                                            license = license,
+                                            textColor = textColor,
+                                            textSecondaryColor = textSecondaryColor,
+                                            onCancel = { viewModel.cancelLicense(license.id) }
+                                        )
+                                        if (index < uiState.licenses.size - 1) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(horizontal = 16.dp),
+                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
-
-                item {
-                    Spacer(modifier = Modifier.height(80.dp)) // Space for FAB
-                }
             }
+        }
+
+        // Bottom Navigation
+        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            ProBottomNavigation(
+                currentRoute = "pro_licenses",
+                onNavigate = { route ->
+                    when (route) {
+                        "pro_home" -> onNavigateToHome()
+                        "pro_calendar" -> onNavigateToCalendar()
+                        "pro_vehicles" -> onNavigateToVehicles()
+                        "pro_export" -> onNavigateToExport()
+                        "pro_settings" -> onNavigateToSettings()
+                        "pro_linked_accounts" -> onNavigateToLinkedAccounts()
+                        "pro_licenses" -> { /* Already here */ }
+                        "pro_export_advanced" -> onNavigateToExportAdvanced()
+                    }
+                },
+                isDarkMode = isDarkMode
+            )
         }
     }
 
@@ -215,14 +262,14 @@ fun LicensesScreen(
 @Composable
 private fun LicensesSummaryCard(
     summary: LicensesSummary,
-    cardColor: Color,
+    surfaceColor: Color,
     textColor: Color,
     textSecondaryColor: Color
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor),
+        colors = CardDefaults.cardColors(containerColor = surfaceColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
@@ -230,15 +277,6 @@ private fun LicensesSummaryCard(
                 .fillMaxWidth()
                 .padding(20.dp)
         ) {
-            Text(
-                "Résumé",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = textColor
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -328,13 +366,12 @@ private fun LicensesSummaryCard(
 
 @Composable
 private fun PricingInfoCard(
-    cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MotiumPrimary.copy(alpha = 0.1f))
     ) {
         Row(
@@ -390,128 +427,125 @@ private fun StatItem(
 }
 
 @Composable
-private fun LicenseCard(
+private fun LicenseRow(
     license: License,
-    cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color,
     onCancel: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        // Status icon
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Status icon
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when (license.status) {
-                            LicenseStatus.ACTIVE -> ValidatedGreen.copy(alpha = 0.1f)
-                            LicenseStatus.PENDING -> PendingOrange.copy(alpha = 0.1f)
-                            else -> ErrorRed.copy(alpha = 0.1f)
-                        }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = when (license.status) {
-                        LicenseStatus.ACTIVE -> Icons.Default.CheckCircle
-                        LicenseStatus.PENDING -> Icons.Default.Schedule
-                        else -> Icons.Default.Cancel
-                    },
-                    contentDescription = null,
-                    tint = when (license.status) {
-                        LicenseStatus.ACTIVE -> ValidatedGreen
-                        LicenseStatus.PENDING -> PendingOrange
-                        else -> ErrorRed
-                    },
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Licence #${license.id.take(8)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = textColor
-                )
-                Text(
-                    text = when (license.status) {
-                        LicenseStatus.ACTIVE -> "Active"
-                        LicenseStatus.PENDING -> "En attente"
-                        LicenseStatus.EXPIRED -> "Expirée"
-                        LicenseStatus.CANCELLED -> "Annulée"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = textSecondaryColor
-                )
-                license.daysRemaining?.let { days ->
-                    if (days <= 7) {
-                        Text(
-                            text = "Expire dans $days jours",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = PendingOrange
-                        )
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(
+                    when (license.status) {
+                        LicenseStatus.ACTIVE -> ValidatedGreen.copy(alpha = 0.1f)
+                        LicenseStatus.PENDING -> PendingOrange.copy(alpha = 0.1f)
+                        else -> ErrorRed.copy(alpha = 0.1f)
                     }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = when (license.status) {
+                    LicenseStatus.ACTIVE -> Icons.Default.CheckCircle
+                    LicenseStatus.PENDING -> Icons.Default.Schedule
+                    else -> Icons.Default.Cancel
+                },
+                contentDescription = null,
+                tint = when (license.status) {
+                    LicenseStatus.ACTIVE -> ValidatedGreen
+                    LicenseStatus.PENDING -> PendingOrange
+                    else -> ErrorRed
+                },
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Licence #${license.id.take(8)}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = textColor
+            )
+            Text(
+                text = when (license.status) {
+                    LicenseStatus.ACTIVE -> "Active"
+                    LicenseStatus.PENDING -> "En attente"
+                    LicenseStatus.EXPIRED -> "Expirée"
+                    LicenseStatus.CANCELLED -> "Annulée"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = textSecondaryColor
+            )
+            license.daysRemaining?.let { days ->
+                if (days <= 7) {
+                    Text(
+                        text = "Expire dans $days jours",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PendingOrange
+                    )
                 }
             }
+        }
 
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = String.format("%.2f €", license.priceMonthlyTTC),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MotiumPrimary
-                )
-                Text(
-                    text = "/mois",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = textSecondaryColor
-                )
-            }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = String.format("%.2f €", license.priceMonthlyTTC),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = MotiumPrimary
+            )
+            Text(
+                text = "/mois",
+                style = MaterialTheme.typography.labelSmall,
+                color = textSecondaryColor
+            )
+        }
 
-            if (license.status == LicenseStatus.ACTIVE) {
-                var showMenu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = "Options",
-                            tint = textSecondaryColor
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Annuler", color = ErrorRed) },
-                            onClick = {
-                                showMenu = false
-                                onCancel()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Outlined.Cancel,
-                                    contentDescription = null,
-                                    tint = ErrorRed
-                                )
-                            }
-                        )
-                    }
+        if (license.status == LicenseStatus.ACTIVE) {
+            var showMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Options",
+                        tint = textSecondaryColor
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier.background(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Annuler", color = ErrorRed) },
+                        onClick = {
+                            showMenu = false
+                            onCancel()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Cancel,
+                                contentDescription = null,
+                                tint = ErrorRed
+                            )
+                        },
+                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                    )
                 }
             }
         }

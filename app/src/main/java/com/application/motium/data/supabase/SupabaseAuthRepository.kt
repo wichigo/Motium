@@ -69,8 +69,6 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val name: String,
         val email: String,
         val role: String,
-        val organization_id: String? = null,
-        val organization_name: String? = null,
         val subscription_type: String = "FREE",
         val subscription_expires_at: String? = null,
         val stripe_customer_id: String? = null,
@@ -517,12 +515,9 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         return try {
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
             val role = if (isEnterprise) "ENTERPRISE" else "INDIVIDUAL"
-            val organizationId = if (isEnterprise) java.util.UUID.randomUUID().toString() else null
 
             val userProfile = UserProfile(
                 auth_id = authUser.id, name = name, email = authUser.email ?: "", role = role,
-                organization_id = organizationId,
-                organization_name = if (isEnterprise) organizationName else null,
                 created_at = now, updated_at = now
             )
 
@@ -530,6 +525,22 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             val createdProfile = postgres.from("users").select { filter { UserProfile::auth_id eq authUser.id } }.decodeSingle<UserProfile>()
 
             val user = createdProfile.toDomainUser()
+
+            // Si c'est un compte ENTERPRISE, créer un pro_account avec le nom de l'entreprise
+            // Note: pro_accounts.user_id est une FK vers public.users.id
+            if (isEnterprise && organizationName.isNotBlank()) {
+                try {
+                    val proAccountRepo = ProAccountRepository.getInstance(context)
+                    proAccountRepo.createProAccount(
+                        userId = user.id,
+                        companyName = organizationName
+                    )
+                    MotiumApplication.logger.i("✅ Compte Pro créé pour ${user.email}", "SupabaseAuth")
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e("Erreur création compte Pro: ${e.message}", "SupabaseAuth", e)
+                    // Continue même si la création du pro_account échoue - l'utilisateur pourra le compléter plus tard
+                }
+            }
 
             // Sauvegarder l'utilisateur dans la base de données locale
             localUserRepository.saveUser(user, isLocallyConnected = true)
@@ -578,6 +589,33 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
 
+    override suspend fun updateEmail(newEmail: String): AuthResult<Unit> {
+        return try {
+            auth.updateUser {
+                email = newEmail
+            }
+            MotiumApplication.logger.i("✅ Email update request sent to: $newEmail", "SupabaseAuth")
+            // Note: Supabase enverra un email de confirmation à la nouvelle adresse
+            AuthResult.Success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to update email: ${e.message}", "SupabaseAuth", e)
+            AuthResult.Error(e.message ?: "Failed to update email", e)
+        }
+    }
+
+    override suspend fun updatePassword(newPassword: String): AuthResult<Unit> {
+        return try {
+            auth.updateUser {
+                password = newPassword
+            }
+            MotiumApplication.logger.i("✅ Password updated successfully", "SupabaseAuth")
+            AuthResult.Success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to update password: ${e.message}", "SupabaseAuth", e)
+            AuthResult.Error(e.message ?: "Failed to update password", e)
+        }
+    }
+
     private suspend fun updateAuthState() {
         MotiumApplication.logger.d("🔍 updateAuthState() called", "SupabaseAuth")
         val authUser = getCurrentAuthUser()
@@ -614,10 +652,12 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         MotiumApplication.logger.d("✅ updateAuthState() completed - isAuthenticated: true, user: ${user?.email}", "SupabaseAuth")
     }
     
-    private fun UserProfile.toDomainUser(): User = User(
-        id = id ?: auth_id,
+    private fun UserProfile.toDomainUser(): User {
+        val resolvedId = id ?: auth_id
+        MotiumApplication.logger.d("🔍 toDomainUser: UserProfile.id=$id, auth_id=$auth_id, resolvedId=$resolvedId", "SupabaseAuth")
+        return User(
+        id = resolvedId,
         name = name, email = email, role = UserRole.valueOf(role),
-        organizationId = organization_id, organizationName = organization_name,
         subscription = Subscription(
             type = SubscriptionType.valueOf(subscription_type),
             expiresAt = subscription_expires_at?.let { Instant.parse(it) },
@@ -638,10 +678,10 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         shareExpenses = share_expenses,
         createdAt = Instant.parse(created_at), updatedAt = Instant.parse(updated_at)
     )
+    }
 
     private fun User.toUserProfile(): UserProfile = UserProfile(
         id = id, auth_id = id, name = name, email = email, role = role.name,
-        organization_id = organizationId, organization_name = organizationName,
         subscription_type = subscription.type.name,
         subscription_expires_at = subscription.expiresAt?.toString(),
         stripe_customer_id = subscription.stripeCustomerId,
@@ -675,6 +715,9 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 return null
             }
 
+            // Debug: Log the user ID being used
+            MotiumApplication.logger.d("🔍 Looking for pro_account with user_id: ${currentUser.id}", "SupabaseAuth")
+
             // Query pro_accounts table for this user
             val proAccounts = postgres.from("pro_accounts")
                 .select {
@@ -683,6 +726,11 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     }
                 }
                 .decodeList<ProAccountDto>()
+
+            MotiumApplication.logger.d("🔍 Found ${proAccounts.size} pro_accounts", "SupabaseAuth")
+            proAccounts.forEach {
+                MotiumApplication.logger.d("🔍 pro_account: id=${it.id}, user_id=${it.userId}", "SupabaseAuth")
+            }
 
             val proAccountId = proAccounts.firstOrNull()?.id
             MotiumApplication.logger.d("Pro account ID: $proAccountId", "SupabaseAuth")
@@ -693,30 +741,4 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
 }
-
-/**
- * DTO for pro_accounts table
- */
-@Serializable
-data class ProAccountDto(
-    val id: String,
-    @kotlinx.serialization.SerialName("user_id")
-    val userId: String,
-    @kotlinx.serialization.SerialName("company_name")
-    val companyName: String,
-    val siret: String? = null,
-    @kotlinx.serialization.SerialName("vat_number")
-    val vatNumber: String? = null,
-    @kotlinx.serialization.SerialName("legal_form")
-    val legalForm: String? = null,
-    @kotlinx.serialization.SerialName("billing_address")
-    val billingAddress: String? = null,
-    @kotlinx.serialization.SerialName("billing_email")
-    val billingEmail: String? = null,
-    @kotlinx.serialization.SerialName("stripe_customer_id")
-    val stripeCustomerId: String? = null,
-    @kotlinx.serialization.SerialName("created_at")
-    val createdAt: String,
-    @kotlinx.serialization.SerialName("updated_at")
-    val updatedAt: String
-)
+// ProAccountDto is defined in ProAccountRepository.kt

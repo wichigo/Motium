@@ -29,6 +29,8 @@ data class TripEntity(
     val endAddress: String?,
     val notes: String?,
     val tripType: String?, // TripType enum stored as String
+    val reimbursementAmount: Double?, // Stored mileage reimbursement calculated at save time
+    val isWorkHomeTrip: Boolean = false, // Trajet travail-maison (perso uniquement, donne droit aux indemnités)
     val createdAt: Long,
     val updatedAt: Long,
     val lastSyncedAt: Long?, // Timestamp of last sync with Supabase
@@ -68,6 +70,8 @@ fun TripEntity.toDataModel(): com.application.motium.data.Trip {
         endAddress = endAddress,
         notes = notes,
         tripType = tripType,
+        reimbursementAmount = reimbursementAmount,
+        isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastSyncedAt = lastSyncedAt,
@@ -92,6 +96,8 @@ fun com.application.motium.data.Trip.toEntity(userId: String): TripEntity {
         endAddress = endAddress,
         notes = notes,
         tripType = tripType,
+        reimbursementAmount = reimbursementAmount,
+        isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastSyncedAt = lastSyncedAt,
