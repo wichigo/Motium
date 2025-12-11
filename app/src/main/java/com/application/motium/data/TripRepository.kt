@@ -52,7 +52,8 @@ data class Trip(
     val updatedAt: Long = System.currentTimeMillis(),   // Timestamp de mise à jour
     val lastSyncedAt: Long? = null,  // SYNC OPTIMIZATION: Timestamp de dernière synchronisation vers Supabase
     val needsSync: Boolean = true,  // SYNC OPTIMIZATION: Flag indiquant si le trip doit être synchronisé
-    val userId: String? = null  // SECURITY: User ID pour isolation des données
+    val userId: String? = null,  // SECURITY: User ID pour isolation des données
+    val matchedRouteCoordinates: String? = null  // CACHE: Map-matched route coordinates as JSON [[lon,lat],...]
 ) {
     fun getFormattedDistance(): String = String.format("%.1f km", totalDistance / 1000)
 
@@ -933,8 +934,15 @@ class TripRepository private constructor(context: Context) {
                     }
 
                     // Sauvegarder dans Room Database: trips Supabase + trips locaux non encore synchronisés
-                    val allTripsToSave = dataTrips + localOnlyTripsToKeep
-                    MotiumApplication.logger.i("💾 Saving ${allTripsToSave.size} trips to Room (${dataTrips.size} from Supabase + ${localOnlyTripsToKeep.size} local pending)", "TripRepository")
+                    // PRESERVE local matchedRouteCoordinates cache when syncing from Supabase
+                    val localCacheMap = localTripEntities.associate { it.id to it.matchedRouteCoordinates }
+                    val dataTripsWithCache = dataTrips.map { trip ->
+                        val cachedCoords = localCacheMap[trip.id]
+                        if (cachedCoords != null) trip.copy(matchedRouteCoordinates = cachedCoords) else trip
+                    }
+
+                    val allTripsToSave = dataTripsWithCache + localOnlyTripsToKeep
+                    MotiumApplication.logger.i("💾 Saving ${allTripsToSave.size} trips to Room (${dataTripsWithCache.size} from Supabase + ${localOnlyTripsToKeep.size} local pending)", "TripRepository")
 
                     if (allTripsToSave.isNotEmpty()) {
                         try {

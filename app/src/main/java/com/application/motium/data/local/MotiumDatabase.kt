@@ -40,7 +40,7 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         AutoTrackingSettingsEntity::class,
         CompanyLinkEntity::class
     ],
-    version = 8,
+    version = 9,  // v9: Added matchedRouteCoordinates to TripEntity for map-matching cache
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)

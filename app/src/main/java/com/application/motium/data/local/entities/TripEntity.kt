@@ -34,7 +34,8 @@ data class TripEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val lastSyncedAt: Long?, // Timestamp of last sync with Supabase
-    val needsSync: Boolean // Flag indicating if trip needs to be synced
+    val needsSync: Boolean, // Flag indicating if trip needs to be synced
+    val matchedRouteCoordinates: String? = null // CACHE: Map-matched route coordinates as JSON [[lon,lat],...]
 )
 
 /**
@@ -75,7 +76,8 @@ fun TripEntity.toDataModel(): com.application.motium.data.Trip {
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync
+        needsSync = needsSync,
+        matchedRouteCoordinates = matchedRouteCoordinates
     )
 }
 
@@ -101,6 +103,7 @@ fun com.application.motium.data.Trip.toEntity(userId: String): TripEntity {
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync
+        needsSync = needsSync,
+        matchedRouteCoordinates = matchedRouteCoordinates
     )
 }

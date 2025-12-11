@@ -51,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import com.application.motium.data.geocoding.NominatimService
 
 // Couleurs additionnelles (MotiumPrimary remplacé par MotiumPrimary du thème)
 val MockupTextBlack = Color(0xFF1F2937)
@@ -224,6 +225,65 @@ fun NewHomeScreen(
                 trips = syncedTrips
                 currentOffset = syncedTrips.size
                 hasMoreTrips = syncedTrips.size >= 10
+            }
+        }
+    }
+
+    // Background map-matching: Calculate and cache route coordinates for trips without cache
+    val nominatimService = remember { NominatimService.getInstance() }
+    LaunchedEffect(trips) {
+        if (trips.isEmpty()) return@LaunchedEffect
+
+        // Find trips that need map-matching (no cached coordinates and have GPS points)
+        val tripsNeedingMapMatch = trips.filter { trip ->
+            trip.matchedRouteCoordinates.isNullOrBlank() && trip.locations.size >= 2
+        }
+
+        if (tripsNeedingMapMatch.isNotEmpty()) {
+            MotiumApplication.logger.d(
+                "🗺️ Background map-matching: ${tripsNeedingMapMatch.size} trips need processing",
+                "HomeScreen"
+            )
+
+            // Process trips in background, one at a time to avoid overloading OSRM
+            coroutineScope.launch(Dispatchers.IO) {
+                for (trip in tripsNeedingMapMatch) {
+                    try {
+                        val gpsPoints = trip.locations.map { loc ->
+                            Pair(loc.latitude, loc.longitude)
+                        }
+                        val matched = nominatimService.matchRoute(gpsPoints)
+
+                        if (matched != null && matched.isNotEmpty()) {
+                            // Serialize to JSON
+                            val jsonCoords = matched.joinToString(",", "[", "]") { coord ->
+                                "[${coord[0]},${coord[1]}]"
+                            }
+
+                            // Save to database
+                            val updatedTrip = trip.copy(matchedRouteCoordinates = jsonCoords)
+                            tripRepository.saveTrip(updatedTrip)
+
+                            // Update local state to trigger recomposition
+                            trips = trips.map { t ->
+                                if (t.id == trip.id) updatedTrip else t
+                            }
+
+                            MotiumApplication.logger.d(
+                                "✅ Background map-match: trip ${trip.id.take(8)}... (${matched.size} points)",
+                                "HomeScreen"
+                            )
+                        }
+
+                        // Small delay between requests to be nice to OSRM servers
+                        kotlinx.coroutines.delay(500)
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w(
+                            "Failed background map-match for trip ${trip.id}: ${e.message}",
+                            "HomeScreen"
+                        )
+                    }
+                }
             }
         }
     }
@@ -687,6 +747,17 @@ fun NewHomeTripCard(
     val startTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.startTime))
     val endTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.endTime ?: System.currentTimeMillis()))
 
+    // Use cached map-matched coordinates if available, otherwise fallback to raw GPS
+    val routeCoordinates = remember(trip.matchedRouteCoordinates, trip.locations) {
+        trip.matchedRouteCoordinates?.let { cached ->
+            try {
+                kotlinx.serialization.json.Json.decodeFromString<List<List<Double>>>(cached)
+            } catch (e: Exception) {
+                null
+            }
+        } ?: trip.locations.map { listOf(it.longitude, it.latitude) }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -714,8 +785,9 @@ fun NewHomeTripCard(
                         startLongitude = startLocation.longitude,
                         endLatitude = endLocation.latitude,
                         endLongitude = endLocation.longitude,
-                        routeCoordinates = trip.locations.map { listOf(it.longitude, it.latitude) },
-                        modifier = Modifier.fillMaxSize()
+                        routeCoordinates = routeCoordinates,
+                        modifier = Modifier.fillMaxSize(),
+                        isCompact = true  // Small 83dp map on Home screen
                     )
                 } else {
                     Icon(

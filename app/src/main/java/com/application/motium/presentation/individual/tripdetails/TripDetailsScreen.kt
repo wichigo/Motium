@@ -140,6 +140,25 @@ fun TripDetailsScreen(
 
             // Map Matching: "Snap to Road" pour un tracé qui suit les vraies routes
             trip?.let { currentTrip ->
+                // Check if we already have cached map-matched coordinates
+                if (!currentTrip.matchedRouteCoordinates.isNullOrBlank()) {
+                    try {
+                        val cached = kotlinx.serialization.json.Json.decodeFromString<List<List<Double>>>(currentTrip.matchedRouteCoordinates)
+                        if (cached.isNotEmpty()) {
+                            matchedRouteCoordinates = cached
+                            MotiumApplication.logger.d(
+                                "📍 Using cached map-matched route: ${cached.size} points",
+                                "TripDetailsScreen"
+                            )
+                            isLoading = false
+                            return@launch
+                        }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("Failed to parse cached coordinates, recalculating", "TripDetailsScreen")
+                    }
+                }
+
+                // Calculate map-matching if not cached
                 if (currentTrip.locations.size >= 2) {
                     isMapMatching = true
                     try {
@@ -153,6 +172,23 @@ fun TripDetailsScreen(
                                 "✅ Map matching: ${currentTrip.locations.size} GPS → ${matched.size} road points",
                                 "TripDetailsScreen"
                             )
+
+                            // Cache the map-matched coordinates for future use (Home screen mini-maps)
+                            try {
+                                // Simple JSON serialization: [[lon,lat],[lon,lat],...]
+                                val jsonCoords = matched.joinToString(",", "[", "]") { coord ->
+                                    "[${coord[0]},${coord[1]}]"
+                                }
+                                val updatedTrip = currentTrip.copy(matchedRouteCoordinates = jsonCoords)
+                                tripRepository.saveTrip(updatedTrip)
+                                trip = updatedTrip
+                                MotiumApplication.logger.d(
+                                    "💾 Cached map-matched coordinates (${jsonCoords.length} chars)",
+                                    "TripDetailsScreen"
+                                )
+                            } catch (e: Exception) {
+                                MotiumApplication.logger.w("Failed to cache map-matched coords: ${e.message}", "TripDetailsScreen")
+                            }
                         } else {
                             MotiumApplication.logger.w(
                                 "Map matching returned null, using raw GPS",

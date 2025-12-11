@@ -26,8 +26,11 @@ fun MiniMap(
     endLatitude: Double?,
     endLongitude: Double?,
     routeCoordinates: List<List<Double>>? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isCompact: Boolean = false  // For small maps (e.g., 83dp on Home screen)
 ) {
+    // Stroke width adapts to map size: thinner for compact views
+    val strokeWidth = if (isCompact) 4f else 8f
     val context = LocalContext.current
 
     // Configure OSMDroid
@@ -151,11 +154,11 @@ fun MiniMap(
 
                         // Afficher l'itinéraire si disponible
                         if (!routeCoordinates.isNullOrEmpty()) {
-                            Log.d("MiniMap", "Affichage route avec ${routeCoordinates.size} points")
+                            Log.d("MiniMap", "Affichage route avec ${routeCoordinates.size} points (strokeWidth=$strokeWidth)")
 
                             val polyline = Polyline().apply {
                                 outlinePaint.color = Color.Blue.toArgb()
-                                outlinePaint.strokeWidth = 8f
+                                outlinePaint.strokeWidth = strokeWidth
                             }
 
                             routeCoordinates.forEach { coord ->
@@ -269,11 +272,11 @@ fun MiniMap(
 
                     // Ajouter la route si disponible
                     if (routeCoordinates != null && routeCoordinates.isNotEmpty()) {
-                        Log.d("MiniMap", "Update: Ajout route avec ${routeCoordinates.size} points")
+                        Log.d("MiniMap", "Update: Ajout route avec ${routeCoordinates.size} points (strokeWidth=$strokeWidth)")
 
                         val polyline = Polyline().apply {
                             outlinePaint.color = Color.Blue.toArgb()
-                            outlinePaint.strokeWidth = 8f
+                            outlinePaint.strokeWidth = strokeWidth
                         }
 
                         routeCoordinates.forEach { coord ->
