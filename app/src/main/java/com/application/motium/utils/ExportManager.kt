@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
+import com.application.motium.domain.model.Trip as DomainTrip
 import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.VehicleRepository
 import com.application.motium.service.SupabaseStorageService
@@ -49,6 +50,33 @@ import java.util.*
 data class TripWithExpenses(
     val trip: Trip,
     val expenses: List<Expense>
+)
+
+/**
+ * Données d'export Pro - structure complète pour export entreprise
+ */
+data class ProExportData(
+    val companyName: String,
+    val siret: String?,
+    val vatNumber: String?,
+    val legalForm: String?,
+    val billingAddress: String?,
+    val employees: List<EmployeeExportData>,
+    val startDate: Long,
+    val endDate: Long,
+    val includeExpenses: Boolean
+)
+
+/**
+ * Données d'un employé pour l'export Pro
+ */
+data class EmployeeExportData(
+    val userId: String,
+    val displayName: String,
+    val email: String,
+    val trips: List<DomainTrip>,
+    val expenses: List<Expense>,
+    val vehicle: Vehicle?
 )
 
 class ExportManager(private val context: Context) {
@@ -1306,6 +1334,773 @@ class ExportManager(private val context: Context) {
         for (i in headers.indices) {
             sheet.autoSizeColumn(i)
         }
+    }
+
+    // ================================================================================
+    // PRO EXPORT METHODS - Export with company legal information
+    // ================================================================================
+
+    /**
+     * Export Pro data to CSV format with company header and employee grouping
+     * Format légal français avec mentions obligatoires URSSAF
+     */
+    fun exportProToCSV(
+        data: ProExportData,
+        onSuccess: (File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        try {
+            val exportDir = File(context.getExternalFilesDir(null), EXPORT_FOLDER)
+            if (!exportDir.exists()) {
+                exportDir.mkdirs()
+            }
+
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val fileName = "Motium_Pro_Facture_${timestamp}.csv"
+            val csvFile = File(exportDir, fileName)
+
+            val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+            val csvContent = buildString {
+                // En-tête entreprise
+                appendLine("ENTREPRISE")
+                appendLine("Raison sociale;${data.companyName}")
+                data.legalForm?.let { appendLine("Forme juridique;$it") }
+                data.billingAddress?.let { appendLine("Adresse;${it.replace("\n", " ")}") }
+                data.siret?.let { appendLine("SIRET;${formatSiret(it)}") }
+                data.vatNumber?.let { appendLine("N° TVA;$it") }
+                appendLine()
+
+                // Période
+                appendLine("PÉRIODE")
+                appendLine("Du;${dateFormat.format(Date(data.startDate))}")
+                appendLine("Au;${dateFormat.format(Date(data.endDate))}")
+                appendLine()
+
+                // Totaux généraux
+                val allTrips = data.employees.flatMap { it.trips }
+                val allExpenses = data.employees.flatMap { it.expenses }
+                val totalKm = allTrips.sumOf { it.distanceKm }
+                val totalIndemnities = allTrips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+                val totalExpenses = allExpenses.sumOf { it.amount }
+
+                // Détail par employé
+                data.employees.forEachIndexed { index, employee ->
+                    appendLine("=" .repeat(60))
+                    appendLine("COLLABORATEUR ${index + 1}: ${employee.displayName}")
+                    appendLine("=" .repeat(60))
+                    appendLine("Email;${employee.email}")
+                    employee.vehicle?.let { v ->
+                        val powerStr = v.power?.cv ?: "N/A"
+                        appendLine("Véhicule;${v.name} ($powerStr) - ${v.type.displayName}")
+                    }
+                    appendLine()
+
+                    // Trajets de l'employé
+                    if (employee.trips.isNotEmpty()) {
+                        appendLine("TRAJETS")
+                        appendLine("Date;Heure;Départ;Arrivée;Distance (km);Véhicule (CV);Indemnités (€)")
+
+                        employee.trips.sortedBy { it.startTime }.forEach { trip ->
+                            val tripDate = dateFormat.format(Date(trip.startTime.toEpochMilliseconds()))
+                            val tripTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(trip.startTime.toEpochMilliseconds()))
+                            val distanceKm = trip.distanceKm
+                            val indemnity = trip.reimbursementAmount ?: (distanceKm * DEFAULT_MILEAGE_RATE)
+                            val startAddr = trip.startAddress?.replace(";", ",") ?: "Non géocodé"
+                            val endAddr = trip.endAddress?.replace(";", ",") ?: "Non géocodé"
+                            val vehicleCv = employee.vehicle?.power?.cv ?: "N/A"
+
+                            appendLine("$tripDate;$tripTime;$startAddr;$endAddr;${String.format("%.2f", distanceKm)};$vehicleCv;${String.format("%.2f", indemnity)}")
+                        }
+
+                        // Sous-total employé
+                        val empTotalKm = employee.trips.sumOf { it.distanceKm }
+                        val empTotalIndemnities = employee.trips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+                        appendLine("SOUS-TOTAL;${employee.trips.size} trajets;;${String.format("%.2f", empTotalKm)} km;;${String.format("%.2f", empTotalIndemnities)} €")
+                        appendLine()
+                    }
+
+                    // Notes de frais de l'employé (si incluses)
+                    if (data.includeExpenses && employee.expenses.isNotEmpty()) {
+                        appendLine("NOTES DE FRAIS")
+                        appendLine("Date;Type;Montant TTC (€);Note")
+
+                        employee.expenses.forEach { expense ->
+                            val note = expense.note.replace(";", ",")
+                            appendLine("${expense.date};${expense.getExpenseTypeLabel()};${String.format("%.2f", expense.amount)};$note")
+                        }
+
+                        val empTotalExpenses = employee.expenses.sumOf { it.amount }
+                        appendLine("SOUS-TOTAL FRAIS;;;${String.format("%.2f", empTotalExpenses)} €")
+                        appendLine()
+                    }
+                }
+
+                // Total général
+                appendLine("=" .repeat(60))
+                appendLine("TOTAL GÉNÉRAL")
+                appendLine("=" .repeat(60))
+                appendLine("Nombre de collaborateurs;${data.employees.size}")
+                appendLine("Nombre total de trajets;${allTrips.size}")
+                appendLine("Distance totale;${String.format("%.2f", totalKm)} km")
+                appendLine("Indemnités kilométriques totales;${String.format("%.2f", totalIndemnities)} €")
+                if (data.includeExpenses && totalExpenses > 0) {
+                    appendLine("Notes de frais totales;${String.format("%.2f", totalExpenses)} €")
+                    appendLine("GRAND TOTAL;${String.format("%.2f", totalIndemnities + totalExpenses)} €")
+                }
+                appendLine()
+
+                // Mention légale
+                appendLine("NOTE LÉGALE")
+                appendLine("Les indemnités kilométriques sont calculées selon le barème fiscal en vigueur.")
+                appendLine("Ces remboursements ne sont pas soumis à la TVA (art. 261 CGI).")
+                appendLine("Document à conserver pour justification URSSAF.")
+                appendLine()
+                appendLine("Document généré par Motium le ${SimpleDateFormat("dd/MM/yyyy à HH:mm", Locale.getDefault()).format(Date())}")
+            }
+
+            csvFile.writeText(csvContent, Charsets.UTF_8)
+
+            MotiumApplication.logger.i("Pro CSV export successful: ${csvFile.absolutePath}", "ExportManager")
+            onSuccess(csvFile)
+
+        } catch (e: Exception) {
+            val error = "Failed to export Pro CSV: ${e.message}"
+            MotiumApplication.logger.e(error, "ExportManager", e)
+            onError(error)
+        }
+    }
+
+    /**
+     * Export Pro data to PDF format with company header and employee sections
+     * Format légal français avec mentions obligatoires URSSAF
+     */
+    fun exportProToPDF(
+        data: ProExportData,
+        onSuccess: (File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        try {
+            val exportDir = File(context.getExternalFilesDir(null), EXPORT_FOLDER)
+            if (!exportDir.exists()) {
+                exportDir.mkdirs()
+            }
+
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val fileName = "Motium_Pro_Facture_${timestamp}.pdf"
+            val pdfFile = File(exportDir, fileName)
+
+            val pdfWriter = PdfWriter(pdfFile)
+            val pdfDoc = PdfDocument(pdfWriter)
+            val document = Document(pdfDoc)
+
+            // En-tête Pro avec informations entreprise
+            addProPdfHeader(document, data)
+
+            // Résumé global
+            addProPdfSummary(document, data)
+
+            // Sections par employé
+            data.employees.forEachIndexed { index, employee ->
+                addProEmployeeSection(document, employee, index + 1, data.includeExpenses)
+            }
+
+            // Pied de page légal
+            addProPdfFooter(document)
+
+            document.close()
+
+            MotiumApplication.logger.i("Pro PDF export successful: ${pdfFile.absolutePath}", "ExportManager")
+            onSuccess(pdfFile)
+
+        } catch (e: Exception) {
+            val error = "Failed to export Pro PDF: ${e.message}"
+            MotiumApplication.logger.e(error, "ExportManager", e)
+            onError(error)
+        }
+    }
+
+    /**
+     * Export Pro data to Excel format with multiple sheets
+     * Format légal français avec mentions obligatoires URSSAF
+     */
+    fun exportProToExcel(
+        data: ProExportData,
+        onSuccess: (File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        try {
+            val exportDir = File(context.getExternalFilesDir(null), EXPORT_FOLDER)
+            if (!exportDir.exists()) {
+                exportDir.mkdirs()
+            }
+
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val fileName = "Motium_Pro_Facture_${timestamp}.xlsx"
+            val xlsxFile = File(exportDir, fileName)
+
+            val workbook = XSSFWorkbook()
+            val styles = createExcelStyles(workbook)
+
+            // Feuille 1: Résumé entreprise
+            createProSummarySheet(workbook, data, styles)
+
+            // Feuille 2: Détail par collaborateur
+            createProEmployeesSheet(workbook, data, styles)
+
+            // Feuille 3: Notes de frais (si incluses)
+            if (data.includeExpenses && data.employees.any { it.expenses.isNotEmpty() }) {
+                createProExpensesSheet(workbook, data, styles)
+            }
+
+            // Write to file
+            FileOutputStream(xlsxFile).use { outputStream ->
+                workbook.write(outputStream)
+            }
+            workbook.close()
+
+            MotiumApplication.logger.i("Pro Excel export successful: ${xlsxFile.absolutePath}", "ExportManager")
+            onSuccess(xlsxFile)
+
+        } catch (e: Exception) {
+            val error = "Failed to export Pro Excel: ${e.message}"
+            MotiumApplication.logger.e(error, "ExportManager", e)
+            onError(error)
+        }
+    }
+
+    // --- Pro PDF Helper Methods ---
+
+    private fun addProPdfHeader(document: Document, data: ProExportData) {
+        val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+
+        // Table principale pour header
+        val headerTable = PdfTable(UnitValue.createPercentArray(floatArrayOf(50f, 50f)))
+            .setWidth(UnitValue.createPercentValue(100f))
+            .setMarginBottom(20f)
+
+        // Colonne gauche: Informations entreprise
+        val companyCell = PdfCell()
+            .setBorder(SolidBorder(MOTIUM_GREEN, 2f))
+            .setBackgroundColor(MOTIUM_GREEN_LIGHT)
+            .setPadding(15f)
+
+        companyCell.add(Paragraph(data.companyName)
+            .setFontSize(16f)
+            .setBold()
+            .setFontColor(MOTIUM_GREEN)
+            .setMarginBottom(5f))
+
+        data.legalForm?.let {
+            companyCell.add(Paragraph(it)
+                .setFontSize(10f)
+                .setFontColor(GRAY_DARK))
+        }
+
+        data.billingAddress?.let {
+            companyCell.add(Paragraph(it)
+                .setFontSize(9f)
+                .setFontColor(TEXT_PRIMARY)
+                .setMarginTop(5f))
+        }
+
+        data.siret?.let {
+            companyCell.add(Paragraph("SIRET: ${formatSiret(it)}")
+                .setFontSize(9f)
+                .setFontColor(TEXT_PRIMARY)
+                .setMarginTop(5f))
+        }
+
+        data.vatNumber?.let {
+            companyCell.add(Paragraph("TVA: $it")
+                .setFontSize(9f)
+                .setFontColor(TEXT_PRIMARY))
+        }
+
+        headerTable.addCell(companyCell)
+
+        // Colonne droite: Titre et période
+        val titleCell = PdfCell()
+            .setBorder(SolidBorder(MOTIUM_PRIMARY, 2f))
+            .setBackgroundColor(MOTIUM_PRIMARY_LIGHT)
+            .setPadding(15f)
+
+        titleCell.add(Paragraph("NOTE DE FRAIS")
+            .setFontSize(18f)
+            .setBold()
+            .setFontColor(MOTIUM_PRIMARY)
+            .setTextAlignment(TextAlignment.CENTER))
+
+        titleCell.add(Paragraph("KILOMÉTRIQUES")
+            .setFontSize(14f)
+            .setBold()
+            .setFontColor(MOTIUM_PRIMARY)
+            .setTextAlignment(TextAlignment.CENTER)
+            .setMarginBottom(10f))
+
+        titleCell.add(Paragraph("📅 Période")
+            .setFontSize(10f)
+            .setFontColor(GRAY_DARK)
+            .setTextAlignment(TextAlignment.CENTER))
+
+        titleCell.add(Paragraph("${dateFormat.format(Date(data.startDate))} - ${dateFormat.format(Date(data.endDate))}")
+            .setFontSize(11f)
+            .setBold()
+            .setFontColor(TEXT_PRIMARY)
+            .setTextAlignment(TextAlignment.CENTER))
+
+        titleCell.add(Paragraph("Généré le ${SimpleDateFormat("dd/MM/yyyy à HH:mm", Locale.getDefault()).format(Date())}")
+            .setFontSize(8f)
+            .setFontColor(GRAY_DARK)
+            .setTextAlignment(TextAlignment.CENTER)
+            .setMarginTop(5f))
+
+        headerTable.addCell(titleCell)
+        document.add(headerTable)
+    }
+
+    private fun addProPdfSummary(document: Document, data: ProExportData) {
+        val allTrips = data.employees.flatMap { it.trips }
+        val allExpenses = data.employees.flatMap { it.expenses }
+        val totalKm = allTrips.sumOf { it.distanceKm }
+        val totalIndemnities = allTrips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+        val totalExpenses = allExpenses.sumOf { it.amount }
+
+        document.add(Paragraph("📊 RÉSUMÉ GÉNÉRAL")
+            .setFontSize(14f)
+            .setBold()
+            .setFontColor(MOTIUM_PRIMARY)
+            .setMarginBottom(10f))
+
+        val summaryTable = PdfTable(UnitValue.createPercentArray(floatArrayOf(60f, 40f)))
+            .setWidth(UnitValue.createPercentValue(100f))
+            .setMarginBottom(20f)
+
+        addSummaryRow(summaryTable, "Nombre de collaborateurs", data.employees.size.toString())
+        addSummaryRow(summaryTable, "Nombre total de trajets", allTrips.size.toString())
+        addSummaryRow(summaryTable, "Distance totale", "${String.format("%.2f", totalKm)} km")
+        addSummaryRow(summaryTable, "Indemnités kilométriques", "${String.format("%.2f", totalIndemnities)} €")
+
+        if (data.includeExpenses && totalExpenses > 0) {
+            addSummaryRow(summaryTable, "Notes de frais", "${String.format("%.2f", totalExpenses)} €")
+
+            summaryTable.addCell(
+                PdfCell().add(Paragraph("TOTAL GÉNÉRAL").setBold())
+                    .setBackgroundColor(MOTIUM_GREEN)
+                    .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                    .setPadding(10f)
+                    .setBorder(null)
+            )
+            summaryTable.addCell(
+                PdfCell().add(Paragraph("${String.format("%.2f", totalIndemnities + totalExpenses)} €").setBold())
+                    .setBackgroundColor(MOTIUM_GREEN)
+                    .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                    .setTextAlignment(TextAlignment.RIGHT)
+                    .setPadding(10f)
+                    .setBorder(null)
+            )
+        } else {
+            summaryTable.addCell(
+                PdfCell().add(Paragraph("TOTAL").setBold())
+                    .setBackgroundColor(MOTIUM_GREEN)
+                    .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                    .setPadding(10f)
+                    .setBorder(null)
+            )
+            summaryTable.addCell(
+                PdfCell().add(Paragraph("${String.format("%.2f", totalIndemnities)} €").setBold())
+                    .setBackgroundColor(MOTIUM_GREEN)
+                    .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE)
+                    .setTextAlignment(TextAlignment.RIGHT)
+                    .setPadding(10f)
+                    .setBorder(null)
+            )
+        }
+
+        document.add(summaryTable)
+    }
+
+    private fun addProEmployeeSection(
+        document: Document,
+        employee: EmployeeExportData,
+        index: Int,
+        includeExpenses: Boolean
+    ) {
+        // En-tête employé
+        val employeeHeader = PdfTable(UnitValue.createPercentArray(floatArrayOf(100f)))
+            .setWidth(UnitValue.createPercentValue(100f))
+            .setMarginTop(15f)
+            .setMarginBottom(10f)
+
+        val headerCell = PdfCell()
+            .setBackgroundColor(MOTIUM_PRIMARY)
+            .setPadding(12f)
+            .setBorder(null)
+
+        headerCell.add(Paragraph("👤 COLLABORATEUR $index: ${employee.displayName}")
+            .setFontSize(12f)
+            .setBold()
+            .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE))
+
+        headerCell.add(Paragraph("📧 ${employee.email}")
+            .setFontSize(9f)
+            .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE))
+
+        employee.vehicle?.let { v ->
+            val powerStr = v.power?.cv ?: "N/A"
+            headerCell.add(Paragraph("🚗 ${v.name} ($powerStr) - ${v.type.displayName}")
+                .setFontSize(9f)
+                .setFontColor(com.itextpdf.kernel.colors.ColorConstants.WHITE))
+        }
+
+        employeeHeader.addCell(headerCell)
+        document.add(employeeHeader)
+
+        // Tableau des trajets
+        if (employee.trips.isNotEmpty()) {
+            val tripsTable = PdfTable(UnitValue.createPercentArray(floatArrayOf(12f, 8f, 22f, 22f, 10f, 10f, 12f)))
+                .setWidth(UnitValue.createPercentValue(100f))
+                .setFontSize(8f)
+
+            addTableHeader(tripsTable, "Date")
+            addTableHeader(tripsTable, "Heure")
+            addTableHeader(tripsTable, "Départ")
+            addTableHeader(tripsTable, "Arrivée")
+            addTableHeader(tripsTable, "Km")
+            addTableHeader(tripsTable, "CV")
+            addTableHeader(tripsTable, "Indem.")
+
+            val dateFormat = SimpleDateFormat("dd/MM/yy", Locale.getDefault())
+            val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+            employee.trips.sortedBy { it.startTime }.forEach { trip ->
+                val indemnity = trip.reimbursementAmount ?: (trip.distanceKm * DEFAULT_MILEAGE_RATE)
+                val vehicleCv = employee.vehicle?.power?.cv ?: "N/A"
+
+                addTableCell(tripsTable, dateFormat.format(Date(trip.startTime.toEpochMilliseconds())))
+                addTableCell(tripsTable, timeFormat.format(Date(trip.startTime.toEpochMilliseconds())))
+                addTableCell(tripsTable, trip.startAddress?.take(28) ?: "N/A")
+                addTableCell(tripsTable, trip.endAddress?.take(28) ?: "N/A")
+                addTableCell(tripsTable, String.format("%.1f", trip.distanceKm))
+                addTableCell(tripsTable, vehicleCv)
+                addTableCell(tripsTable, String.format("%.2f€", indemnity))
+            }
+
+            document.add(tripsTable)
+
+            // Sous-total employé
+            val empTotalKm = employee.trips.sumOf { it.distanceKm }
+            val empTotalIndemnities = employee.trips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+
+            val subtotalTable = PdfTable(UnitValue.createPercentArray(floatArrayOf(50f, 50f)))
+                .setWidth(UnitValue.createPercentValue(60f))
+                .setMarginTop(5f)
+                .setMarginBottom(10f)
+                .setHorizontalAlignment(com.itextpdf.layout.properties.HorizontalAlignment.RIGHT)
+
+            subtotalTable.addCell(
+                PdfCell().add(Paragraph("Sous-total: ${employee.trips.size} trajets").setFontSize(9f))
+                    .setBackgroundColor(GRAY_LIGHT)
+                    .setPadding(6f)
+                    .setBorder(SolidBorder(GRAY_MEDIUM, 0.5f))
+            )
+            subtotalTable.addCell(
+                PdfCell().add(Paragraph("${String.format("%.2f", empTotalKm)} km → ${String.format("%.2f", empTotalIndemnities)} €").setFontSize(9f).setBold())
+                    .setBackgroundColor(GRAY_LIGHT)
+                    .setPadding(6f)
+                    .setTextAlignment(TextAlignment.RIGHT)
+                    .setBorder(SolidBorder(GRAY_MEDIUM, 0.5f))
+            )
+
+            document.add(subtotalTable)
+        }
+
+        // Notes de frais employé
+        if (includeExpenses && employee.expenses.isNotEmpty()) {
+            document.add(Paragraph("🧾 Notes de frais")
+                .setFontSize(10f)
+                .setBold()
+                .setFontColor(GRAY_DARK)
+                .setMarginTop(10f)
+                .setMarginBottom(5f))
+
+            val expensesTable = PdfTable(UnitValue.createPercentArray(floatArrayOf(15f, 25f, 15f, 45f)))
+                .setWidth(UnitValue.createPercentValue(100f))
+                .setFontSize(8f)
+
+            addTableHeader(expensesTable, "Date")
+            addTableHeader(expensesTable, "Type")
+            addTableHeader(expensesTable, "Montant")
+            addTableHeader(expensesTable, "Note")
+
+            employee.expenses.forEach { expense ->
+                addTableCell(expensesTable, expense.date)
+                addTableCell(expensesTable, expense.getExpenseTypeLabel())
+                addTableCell(expensesTable, String.format("%.2f€", expense.amount))
+                addTableCell(expensesTable, expense.note.ifEmpty { "-" })
+            }
+
+            document.add(expensesTable)
+
+            val empTotalExpenses = employee.expenses.sumOf { it.amount }
+            document.add(Paragraph("Sous-total frais: ${String.format("%.2f", empTotalExpenses)} €")
+                .setFontSize(9f)
+                .setBold()
+                .setTextAlignment(TextAlignment.RIGHT)
+                .setMarginTop(5f))
+        }
+    }
+
+    private fun addProPdfFooter(document: Document) {
+        document.add(Paragraph("\n"))
+
+        // Mention légale
+        val legalBox = PdfTable(UnitValue.createPercentArray(floatArrayOf(100f)))
+            .setWidth(UnitValue.createPercentValue(100f))
+            .setMarginTop(20f)
+
+        val legalCell = PdfCell()
+            .setBackgroundColor(GRAY_LIGHT)
+            .setBorder(SolidBorder(GRAY_MEDIUM, 1f))
+            .setPadding(12f)
+
+        legalCell.add(Paragraph("📋 MENTIONS LÉGALES")
+            .setFontSize(10f)
+            .setBold()
+            .setFontColor(TEXT_PRIMARY)
+            .setMarginBottom(5f))
+
+        legalCell.add(Paragraph("Les indemnités kilométriques sont calculées selon le barème fiscal en vigueur (barème URSSAF 2024).")
+            .setFontSize(8f)
+            .setFontColor(GRAY_DARK))
+
+        legalCell.add(Paragraph("Ces remboursements ne sont pas soumis à la TVA (art. 261 du Code Général des Impôts).")
+            .setFontSize(8f)
+            .setFontColor(GRAY_DARK))
+
+        legalCell.add(Paragraph("Document à conserver pour justification en cas de contrôle URSSAF.")
+            .setFontSize(8f)
+            .setFontColor(GRAY_DARK))
+
+        legalBox.addCell(legalCell)
+        document.add(legalBox)
+
+        // Pied de page Motium
+        val footerDivider = PdfTable(UnitValue.createPercentArray(floatArrayOf(100f)))
+            .setWidth(UnitValue.createPercentValue(100f))
+            .setMarginTop(15f)
+            .setMarginBottom(5f)
+        footerDivider.addCell(
+            PdfCell()
+                .setBackgroundColor(MOTIUM_GREEN)
+                .setHeight(2f)
+                .setBorder(null)
+        )
+        document.add(footerDivider)
+
+        document.add(Paragraph("Motium — Gestion de mobilité professionnelle")
+            .setFontSize(9f)
+            .setFontColor(MOTIUM_GREEN)
+            .setBold()
+            .setTextAlignment(TextAlignment.CENTER))
+    }
+
+    // --- Pro Excel Helper Methods ---
+
+    private fun createProSummarySheet(workbook: XSSFWorkbook, data: ProExportData, styles: ExcelStyles) {
+        val sheet = workbook.createSheet("Résumé")
+        val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+        var rowNum = 0
+
+        // Titre
+        val titleRow = sheet.createRow(rowNum++)
+        titleRow.createCell(0).apply {
+            setCellValue("${data.companyName} - NOTE DE FRAIS KILOMÉTRIQUES")
+            cellStyle = styles.titleStyle
+        }
+        sheet.addMergedRegion(CellRangeAddress(0, 0, 0, 4))
+
+        // Infos entreprise
+        rowNum++
+        data.legalForm?.let {
+            sheet.createRow(rowNum++).createCell(0).setCellValue("Forme juridique: $it")
+        }
+        data.billingAddress?.let {
+            sheet.createRow(rowNum++).createCell(0).setCellValue("Adresse: ${it.replace("\n", " ")}")
+        }
+        data.siret?.let {
+            sheet.createRow(rowNum++).createCell(0).setCellValue("SIRET: ${formatSiret(it)}")
+        }
+        data.vatNumber?.let {
+            sheet.createRow(rowNum++).createCell(0).setCellValue("N° TVA: $it")
+        }
+
+        // Période
+        rowNum++
+        sheet.createRow(rowNum++).createCell(0).apply {
+            setCellValue("Période: ${dateFormat.format(Date(data.startDate))} - ${dateFormat.format(Date(data.endDate))}")
+            cellStyle = styles.subtitleStyle
+        }
+
+        // Calculs totaux
+        val allTrips = data.employees.flatMap { it.trips }
+        val allExpenses = data.employees.flatMap { it.expenses }
+        val totalKm = allTrips.sumOf { it.distanceKm }
+        val totalIndemnities = allTrips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+        val totalExpenses = allExpenses.sumOf { it.amount }
+
+        rowNum += 2
+        addSummaryRow(sheet, rowNum++, "Nombre de collaborateurs", data.employees.size.toString(), styles)
+        addSummaryRow(sheet, rowNum++, "Nombre total de trajets", allTrips.size.toString(), styles)
+        addSummaryRow(sheet, rowNum++, "Distance totale", String.format("%.2f km", totalKm), styles)
+        addSummaryRow(sheet, rowNum++, "Indemnités kilométriques", String.format("%.2f €", totalIndemnities), styles)
+
+        if (data.includeExpenses && totalExpenses > 0) {
+            addSummaryRow(sheet, rowNum++, "Notes de frais", String.format("%.2f €", totalExpenses), styles)
+            rowNum++
+            addTotalRow(sheet, rowNum++, "TOTAL GÉNÉRAL", totalIndemnities + totalExpenses, styles)
+        } else {
+            rowNum++
+            addTotalRow(sheet, rowNum++, "TOTAL", totalIndemnities, styles)
+        }
+
+        // Récapitulatif par employé
+        rowNum += 2
+        sheet.createRow(rowNum++).createCell(0).apply {
+            setCellValue("RÉCAPITULATIF PAR COLLABORATEUR")
+            cellStyle = styles.headerStyle
+        }
+        sheet.addMergedRegion(CellRangeAddress(rowNum - 1, rowNum - 1, 0, 3))
+
+        val headerRow = sheet.createRow(rowNum++)
+        listOf("Collaborateur", "Trajets", "Km", "Indemnités").forEachIndexed { i, h ->
+            headerRow.createCell(i).apply {
+                setCellValue(h)
+                cellStyle = styles.headerStyle
+            }
+        }
+
+        data.employees.forEach { emp ->
+            val empKm = emp.trips.sumOf { it.distanceKm }
+            val empIndemnities = emp.trips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+            val row = sheet.createRow(rowNum++)
+            row.createCell(0).apply { setCellValue(emp.displayName); cellStyle = styles.dataStyle }
+            row.createCell(1).apply { setCellValue(emp.trips.size.toDouble()); cellStyle = styles.dataStyle }
+            row.createCell(2).apply { setCellValue(empKm); cellStyle = styles.currencyStyle }
+            row.createCell(3).apply { setCellValue(empIndemnities); cellStyle = styles.currencyStyle }
+        }
+
+        // Note légale
+        rowNum += 2
+        sheet.createRow(rowNum++).createCell(0).setCellValue("Note: Les indemnités kilométriques ne sont pas soumises à la TVA.")
+        sheet.createRow(rowNum).createCell(0).setCellValue("Document généré par Motium le ${SimpleDateFormat("dd/MM/yyyy à HH:mm", Locale.getDefault()).format(Date())}")
+
+        // Auto-size
+        for (i in 0..4) sheet.setColumnWidth(i, 6000)
+    }
+
+    private fun createProEmployeesSheet(workbook: XSSFWorkbook, data: ProExportData, styles: ExcelStyles) {
+        val sheet = workbook.createSheet("Trajets détaillés")
+        val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+        var rowNum = 0
+
+        data.employees.forEachIndexed { empIndex, emp ->
+            // Header employé
+            val empHeaderRow = sheet.createRow(rowNum++)
+            empHeaderRow.createCell(0).apply {
+                setCellValue("${empIndex + 1}. ${emp.displayName} (${emp.email})")
+                cellStyle = styles.totalLabelStyle
+            }
+            sheet.addMergedRegion(CellRangeAddress(rowNum - 1, rowNum - 1, 0, 6))
+
+            emp.vehicle?.let { v ->
+                val vRow = sheet.createRow(rowNum++)
+                vRow.createCell(0).setCellValue("Véhicule: ${v.name} (${v.power?.cv ?: "N/A"}) - ${v.type.displayName}")
+            }
+
+            // Headers trajets
+            val headerRow = sheet.createRow(rowNum++)
+            listOf("Date", "Heure", "Départ", "Arrivée", "Km", "CV", "Indemnités").forEachIndexed { i, h ->
+                headerRow.createCell(i).apply {
+                    setCellValue(h)
+                    cellStyle = styles.headerStyle
+                }
+            }
+
+            // Trajets
+            emp.trips.sortedBy { it.startTime }.forEach { trip ->
+                val row = sheet.createRow(rowNum++)
+                val indemnity = trip.reimbursementAmount ?: (trip.distanceKm * DEFAULT_MILEAGE_RATE)
+                val vehicleCv = emp.vehicle?.power?.cv ?: "N/A"
+
+                row.createCell(0).apply { setCellValue(dateFormat.format(Date(trip.startTime.toEpochMilliseconds()))); cellStyle = styles.dataStyle }
+                row.createCell(1).apply { setCellValue(timeFormat.format(Date(trip.startTime.toEpochMilliseconds()))); cellStyle = styles.dataStyle }
+                row.createCell(2).apply { setCellValue(trip.startAddress?.take(35) ?: "N/A"); cellStyle = styles.dataStyle }
+                row.createCell(3).apply { setCellValue(trip.endAddress?.take(35) ?: "N/A"); cellStyle = styles.dataStyle }
+                row.createCell(4).apply { setCellValue(trip.distanceKm); cellStyle = styles.currencyStyle }
+                row.createCell(5).apply { setCellValue(vehicleCv); cellStyle = styles.dataStyle }
+                row.createCell(6).apply { setCellValue(indemnity); cellStyle = styles.currencyStyle }
+            }
+
+            // Sous-total
+            val empTotalKm = emp.trips.sumOf { it.distanceKm }
+            val empTotalIndemnities = emp.trips.sumOf { it.reimbursementAmount ?: (it.distanceKm * DEFAULT_MILEAGE_RATE) }
+            val subtotalRow = sheet.createRow(rowNum++)
+            subtotalRow.createCell(0).apply { setCellValue("SOUS-TOTAL"); cellStyle = styles.totalLabelStyle }
+            subtotalRow.createCell(3).apply { setCellValue("${emp.trips.size} trajets"); cellStyle = styles.totalLabelStyle }
+            subtotalRow.createCell(4).apply { setCellValue(empTotalKm); cellStyle = styles.totalValueStyle }
+            subtotalRow.createCell(6).apply { setCellValue(empTotalIndemnities); cellStyle = styles.totalValueStyle }
+
+            rowNum++ // Empty row between employees
+        }
+
+        // Auto-size columns
+        for (i in 0..6) sheet.autoSizeColumn(i)
+    }
+
+    private fun createProExpensesSheet(workbook: XSSFWorkbook, data: ProExportData, styles: ExcelStyles) {
+        val sheet = workbook.createSheet("Notes de frais")
+        var rowNum = 0
+
+        // Header
+        val headerRow = sheet.createRow(rowNum++)
+        listOf("Collaborateur", "Date", "Type", "Montant TTC", "Montant HT", "Note").forEachIndexed { i, h ->
+            headerRow.createCell(i).apply {
+                setCellValue(h)
+                cellStyle = styles.headerStyle
+            }
+        }
+
+        // Expenses by employee
+        data.employees.forEach { emp ->
+            emp.expenses.forEach { expense ->
+                val row = sheet.createRow(rowNum++)
+                row.createCell(0).apply { setCellValue(emp.displayName); cellStyle = styles.dataStyle }
+                row.createCell(1).apply { setCellValue(expense.date); cellStyle = styles.dataStyle }
+                row.createCell(2).apply { setCellValue(expense.getExpenseTypeLabel()); cellStyle = styles.dataStyle }
+                row.createCell(3).apply { setCellValue(expense.amount); cellStyle = styles.currencyStyle }
+                row.createCell(4).apply { setCellValue(expense.amountHT ?: 0.0); cellStyle = styles.currencyStyle }
+                row.createCell(5).apply { setCellValue(expense.note.ifEmpty { "-" }); cellStyle = styles.dataStyle }
+            }
+        }
+
+        // Total
+        val totalExpenses = data.employees.flatMap { it.expenses }.sumOf { it.amount }
+        rowNum++
+        val totalRow = sheet.createRow(rowNum)
+        totalRow.createCell(0).apply { setCellValue("TOTAL"); cellStyle = styles.totalLabelStyle }
+        totalRow.createCell(3).apply { setCellValue(totalExpenses); cellStyle = styles.totalValueStyle }
+
+        // Auto-size
+        for (i in 0..5) sheet.autoSizeColumn(i)
+    }
+
+    /**
+     * Format SIRET with spaces: XXX XXX XXX XXXXX
+     */
+    private fun formatSiret(siret: String): String {
+        if (siret.length != 14) return siret
+        return "${siret.substring(0, 3)} ${siret.substring(3, 6)} ${siret.substring(6, 9)} ${siret.substring(9)}"
     }
 
     /**

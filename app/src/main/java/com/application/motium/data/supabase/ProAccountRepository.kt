@@ -2,9 +2,11 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.LegalForm
 import com.application.motium.domain.model.ProAccount
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -14,9 +16,10 @@ import kotlinx.serialization.Serializable
  * Repository for managing Pro accounts (ENTERPRISE users)
  */
 class ProAccountRepository private constructor(
-    @Suppress("UNUSED_PARAMETER") context: Context
+    private val context: Context
 ) {
     private val supabaseClient = SupabaseClient.client
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     companion object {
         @Volatile
@@ -44,6 +47,30 @@ class ProAccountRepository private constructor(
 
             MotiumApplication.logger.i("Pro account loaded for user $userId", "ProAccountRepo")
             Result.success(response)
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "ProAccountRepo")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return@withContext try {
+                        val response = supabaseClient.from("pro_accounts")
+                            .select() {
+                                filter {
+                                    eq("user_id", userId)
+                                }
+                            }
+                            .decodeSingleOrNull<ProAccountDto>()
+                        MotiumApplication.logger.i("Pro account loaded after token refresh", "ProAccountRepo")
+                        Result.success(response)
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "ProAccountRepo", retryError)
+                        Result.failure(retryError)
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error getting pro account: ${e.message}", "ProAccountRepo", e)
+            Result.failure(e)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting pro account: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)

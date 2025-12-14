@@ -27,7 +27,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.*
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.utils.ThemeManager
 import kotlinx.datetime.*
 import java.text.SimpleDateFormat
@@ -52,7 +51,9 @@ fun ProExportAdvancedScreen(
 ) {
     val context = LocalContext.current
     val themeManager = remember { ThemeManager.getInstance(context) }
-    val viewModel = remember { ProExportAdvancedViewModel(context) }
+    val viewModel: ProExportAdvancedViewModel = viewModel(
+        factory = ProExportAdvancedViewModelFactory(context)
+    )
 
     val uiState by viewModel.uiState.collectAsState()
     val isDarkMode by themeManager.isDarkMode.collectAsState()
@@ -414,6 +415,14 @@ fun ProExportAdvancedScreen(
                     }
                 }
 
+                // Quick selection section
+                item {
+                    ProQuickExportSection(
+                        viewModel = viewModel,
+                        isExporting = uiState.isExporting
+                    )
+                }
+
                 // Filters section
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -702,25 +711,7 @@ fun ProExportAdvancedScreen(
         }
         }
 
-        // Bottom Navigation
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-            ProBottomNavigation(
-                currentRoute = "pro_export_advanced",
-                onNavigate = { route ->
-                    when (route) {
-                        "pro_home" -> onNavigateToHome()
-                        "pro_calendar" -> onNavigateToCalendar()
-                        "pro_export" -> onNavigateToExport()
-                        "pro_settings" -> onNavigateToSettings()
-                        "pro_linked_accounts" -> onNavigateToLinkedAccounts()
-                        "pro_licenses" -> onNavigateToLicenses()
-                        "pro_vehicles" -> onNavigateToVehicles()
-                        "pro_export_advanced" -> { /* Already here */ }
-                    }
-                },
-                isDarkMode = isDarkMode
-            )
-        }
+        // Bottom navigation is now handled at app-level in MainActivity
     }
 }
 
@@ -897,4 +888,116 @@ enum class ExportFormatOption(val displayName: String) {
     CSV("CSV"),
     PDF("PDF"),
     EXCEL("Excel")
+}
+
+/**
+ * Pro Quick Export Section with period shortcuts
+ * Sets the date range, selects all users and enables all options
+ * User then uses existing export buttons at the bottom
+ */
+@Composable
+private fun ProQuickExportSection(
+    viewModel: ProExportAdvancedViewModel,
+    isExporting: Boolean
+) {
+    val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
+
+    val textColor = if (isDarkMode) TextDark else TextLight
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.FlashOn,
+                contentDescription = null,
+                tint = MotiumPrimary,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                "Sélection rapide",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold
+                ),
+                color = textColor
+            )
+        }
+
+        Text(
+            "Configure la période, sélectionne tous les collaborateurs et active toutes les options",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
+        )
+
+        // Quick period chips - 2x2 grid
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ProQuickExportChip(
+                label = "1 jour",
+                onClick = {
+                    viewModel.applyQuickPeriod(ProExportAdvancedViewModel.QuickExportPeriod.TODAY)
+                },
+                modifier = Modifier.weight(1f)
+            )
+            ProQuickExportChip(
+                label = "1 semaine",
+                onClick = {
+                    viewModel.applyQuickPeriod(ProExportAdvancedViewModel.QuickExportPeriod.THIS_WEEK)
+                },
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ProQuickExportChip(
+                label = "1 mois",
+                onClick = {
+                    viewModel.applyQuickPeriod(ProExportAdvancedViewModel.QuickExportPeriod.THIS_MONTH)
+                },
+                modifier = Modifier.weight(1f)
+            )
+            ProQuickExportChip(
+                label = "1 an",
+                onClick = {
+                    viewModel.applyQuickPeriod(ProExportAdvancedViewModel.QuickExportPeriod.THIS_YEAR)
+                },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProQuickExportChip(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
+
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(44.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isDarkMode) Color(0xFF1E3A5F) else MotiumPrimary.copy(alpha = 0.1f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Text(
+            label,
+            color = if (isDarkMode) Color.White else MotiumPrimary,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp
+        )
+    }
 }

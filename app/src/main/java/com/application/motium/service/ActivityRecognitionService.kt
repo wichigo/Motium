@@ -1,6 +1,7 @@
 package com.application.motium.service
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.*
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -119,6 +120,7 @@ class ActivityRecognitionService : Service() {
          * Force le ré-enregistrement du service Activity Recognition
          * Utile après une réinstallation ou un changement d'UID pour nettoyer les anciens PendingIntents
          */
+        @SuppressLint("MissingPermission") // Permission checked at service startup
         fun reregisterActivityRecognition(context: Context) {
             MotiumApplication.logger.i("🔄 Force re-registering Activity Recognition to clean old UIDs", "ActivityRecognition")
 
@@ -152,6 +154,7 @@ class ActivityRecognitionService : Service() {
          * Réinitialise complètement l'Activity Recognition
          * Génère un nouveau request code et nettoie tous les anciens PendingIntents
          */
+        @SuppressLint("MissingPermission") // Permission checked at service startup
         fun resetActivityRecognition(context: Context) {
             MotiumApplication.logger.i("🔄 RESET Activity Recognition - generating new request code", "ActivityRecognition")
 
@@ -289,7 +292,9 @@ class ActivityRecognitionService : Service() {
             enableLights(false)
             enableVibration(false) // Désactiver vibration
             setSound(null, null) // Désactiver son
-            setBlockable(false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                setBlockable(false)
+            }
         }
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -519,6 +524,7 @@ class ActivityRecognitionService : Service() {
         }
     }
 
+    @SuppressLint("MissingPermission") // Permission checked at service startup
     private fun stopActivityRecognition() {
         // FIX: Utiliser les mêmes paramètres que startActivityRecognition() pour identifier le PendingIntent
         val activityIntent = Intent(applicationContext, ActivityRecognitionReceiver::class.java)

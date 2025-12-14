@@ -1,32 +1,37 @@
 {
   "permissions": {
     "allow": [
-      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" :app:testDebugUnitTest --no-daemon)",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\test\\java\\com\\application\\motium\\AutoTrackingIntegrationTest.kt\")",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\test\\java\\com\\application\\motium\\TripSavingTest.kt\")",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\test\\java\\com\\application\\motium\\data\\supabase\\SupabaseAuthRepositorySessionTest.kt\")",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\test\\java\\com\\application\\motium\\service\\ActivityRecognitionServiceTest.kt\")",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\test\\java\\com\\application\\motium\\service\\LocationTrackingServiceTest.kt\")",
-      "WebFetch(domain:bpifrance-creation.fr)",
-      "Skill(supabase-kotlin)",
-      "Bash(timeout 30 adb shell:*)",
-      "Bash(timeout 20 adb logcat:*)",
-      "mcp__context7__resolve-library-id",
-      "mcp__context7__get-library-docs",
-      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" :app:testDebugUnitTest --tests \"com.application.motium.utils.ExportManagerTest\")",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\settings\\ProSettingsScreen.kt\")",
-      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\vehicles\\ProVehiclesScreen.kt\")",
-      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" clean compileDebugKotlin -x test)",
-      "Bash(sqlite3:*)",
-      "Bash(timeout 60 adb logcat:*)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" rm --cached \"C\\357\\200\\272UsersWylde_2y5smzdDownloadsmotium_db.db\" \"C\\357\\200\\272UsersWylde_2y5smzdDownloadsmotium_db.sqlite\" \"UsersWylde_2y5smzdDownloadsmotium_db.sqlite\")",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" ls-files)",
+      "Bash(git rm:*)",
+      "Bash(git clean:*)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" lintDebug)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" testDebugUnitTest)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" compileDebugUnitTestKotlin)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" clean assembleDebug lintDebug testDebugUnitTest)",
       "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" status)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" add app/src/main/java/com/application/motium/data/TripRepository.kt app/src/main/java/com/application/motium/data/local/MotiumDatabase.kt app/src/main/java/com/application/motium/data/local/entities/TripEntity.kt app/src/main/java/com/application/motium/presentation/components/MiniMap.kt app/src/main/java/com/application/motium/presentation/individual/home/NewHomeScreen.kt app/src/main/java/com/application/motium/presentation/individual/tripdetails/TripDetailsScreen.kt)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" commit -m \"$(cat <<''EOF''\nfeat(map): Add map-matching cache for mini-maps with road-snapped routes\n\n- Add matchedRouteCoordinates field to Trip and TripEntity for caching OSRM map-matched coordinates\n- TripDetailsScreen calculates and caches map-matching on first view\n- NewHomeScreen calculates map-matching in background for all trips without cache\n- MiniMap component supports isCompact parameter for smaller stroke width on 83dp maps\n- Preserve cached coordinates during Supabase sync to avoid recalculation\n- Database version bump to v9 for new column\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(timeout 60 adb logcat:*)",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\app\\src\\main\\java\\com\\application\\motium\\presentation\\pro\\accounts\\InviteAccountDialog.kt\")",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\hs_err_pid*.log\")",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\replay_pid*.log\")",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\.kotlin\\errors\\*.log\")",
+      "Bash(del \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\logs.tx\")",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" compileDebugKotlin --no-daemon)",
+      "Bash(\"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\\gradlew\" compileDebugKotlin -x test --no-daemon -Dorg.gradle.jvmargs=\"-Xmx1024m\")",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" diff app/src/main/java/com/application/motium/data/geocoding/NominatimService.kt)",
       "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" log --oneline -5)",
-      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" diff --stat)",
-      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" add -A)",
-      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" commit -m \"$(cat <<''EOF''\nfeat(trip): Preserve GPS trace when editing trips with cumulative distance\n\n- Add GPS trace preservation in EditTripScreen: when modifying start/end \n  address, the original GPS trace is kept and new points are prepended/appended\n- Implement cumulative distance calculation: original + start gap + end gap\n- Add GPS trace restoration from Supabase when local data is corrupted (≤5 points)\n- Add getTripById() function to SupabaseTripRepository for single trip fetch\n- Fix color picker click in SettingsScreen by moving clickable to header row only\n- Add is_work_home_trip and reimbursement_amount fields to Trip model\n- Various UI improvements and Pro interface enhancements\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" add app/src/main/java/com/application/motium/data/geocoding/NominatimService.kt)",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" commit -m \"$(cat <<''EOF''\nfix(map): Add failure cache to prevent OSRM retry loop\n\n- Add failedMapMatchKeys cache with 30-minute TTL to track failed requests\n- Reduce map-matching retries from 3 to 1 for unreliable public OSRM server\n- Skip previously failed routes to avoid spamming timeout errors\n- Add LRU cache for successful map-match results (max 50 entries)\n- Configure OkHttpClient timeouts (connect: 10s, read: 15s, write: 10s)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" log --oneline -3)"
     ],
     "deny": [],
     "ask": []
   },
-  "outputStyle": "default"
+  "outputStyle": "default",
+  "enabledMcpjsonServers": [
+    "context7"
+  ],
+  "enableAllProjectMcpServers": true
 }

@@ -81,6 +81,7 @@ fun AddTripScreen(
     var considerFullDistance by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
     var isCalculatingRoute by remember { mutableStateOf(false) }
+    var routeCalculationFailed by remember { mutableStateOf(false) }
 
     // Vehicle fields
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
@@ -127,11 +128,24 @@ fun AddTripScreen(
         }
     }
 
+    // Calculate straight-line distance using Haversine formula (fallback)
+    fun calculateHaversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val R = 6371.0 // Earth radius in km
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return R * c
+    }
+
     // Calculate route
     fun calculateRoute() {
         if (startCoordinates != null && endCoordinates != null) {
             MotiumApplication.logger.i("🗺️ Calculating route from ${startCoordinates} to ${endCoordinates}", "AddTripScreen")
             isCalculatingRoute = true
+            routeCalculationFailed = false
             coroutineScope.launch {
                 try {
                     val route = nominatimService.getRoute(
@@ -145,6 +159,7 @@ fun AddTripScreen(
                         routeCoordinates = route.coordinates
                         distance = String.format("%.1f", route.distance / 1000)
                         duration = String.format("%.0f", route.duration / 60)
+                        routeCalculationFailed = false
 
                         MotiumApplication.logger.i("✅ Route calculated: ${route.coordinates.size} points, ${route.distance/1000}km, ${route.duration/60}min", "AddTripScreen")
 
@@ -153,10 +168,32 @@ fun AddTripScreen(
                         val endTimeDate = Date(startTimeDate.time + route.duration.toLong() * 1000)
                         endTime = timeFormat.format(endTimeDate)
                     } else {
-                        MotiumApplication.logger.w("⚠️ Route calculation returned null", "AddTripScreen")
+                        MotiumApplication.logger.w("⚠️ Route calculation returned null, using fallback", "AddTripScreen")
+                        routeCalculationFailed = true
+
+                        // Fallback: calculate straight-line distance and estimate duration
+                        val straightDistance = calculateHaversineDistance(
+                            startCoordinates!!.first, startCoordinates!!.second,
+                            endCoordinates!!.first, endCoordinates!!.second
+                        )
+                        // Estimate road distance as 1.3x straight-line distance
+                        val estimatedDistance = straightDistance * 1.3
+                        distance = String.format("%.1f", estimatedDistance)
+
+                        // Estimate duration: assume 50 km/h average speed
+                        val estimatedDurationMin = (estimatedDistance / 50.0) * 60
+                        duration = String.format("%.0f", estimatedDurationMin)
+
+                        // Calculate end time
+                        val startTimeDate = timeFormat.parse(selectedTime) ?: Date()
+                        val endTimeDate = Date(startTimeDate.time + (estimatedDurationMin * 60 * 1000).toLong())
+                        endTime = timeFormat.format(endTimeDate)
+
+                        Toast.makeText(context, "Route server unavailable - using estimated distance", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     MotiumApplication.logger.e("❌ Route error: ${e.message}", "AddTripScreen", e)
+                    routeCalculationFailed = true
                 } finally {
                     isCalculatingRoute = false
                 }
@@ -362,6 +399,53 @@ fun AddTripScreen(
                         if (startCoordinates != null) calculateRoute()
                     }
                 )
+            }
+
+            // Route Map - show when route is calculated
+            if (routeCoordinates != null || (startCoordinates != null && endCoordinates != null)) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isCalculatingRoute) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = MotiumPrimary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        "Calculating route...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                MiniMap(
+                                    startLatitude = startCoordinates?.first,
+                                    startLongitude = startCoordinates?.second,
+                                    endLatitude = endCoordinates?.first,
+                                    endLongitude = endCoordinates?.second,
+                                    routeCoordinates = routeCoordinates,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Professional Trip toggle

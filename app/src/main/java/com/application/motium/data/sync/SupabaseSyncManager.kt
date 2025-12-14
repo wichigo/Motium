@@ -3,6 +3,7 @@ package com.application.motium.data.sync
 import android.content.Context
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.utils.NetworkConnectionManager
 import kotlinx.coroutines.*
@@ -35,6 +36,7 @@ class SupabaseSyncManager private constructor(private val context: Context) {
     private val tripRepository = TripRepository.getInstance(context)
     private val vehicleRepository = com.application.motium.data.VehicleRepository.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
+    private val localUserRepository = LocalUserRepository.getInstance(context)
     private val networkManager = NetworkConnectionManager.getInstance(context)
 
     private var periodicSyncJob: Job? = null
@@ -288,7 +290,8 @@ class SupabaseSyncManager private constructor(private val context: Context) {
             // Cette fonction sert surtout pour les opérations DELETE
             when (operation.type) {
                 PendingSyncQueue.OperationType.DELETE -> {
-                    val currentUser = authRepository.getCurrentAuthUser()
+                    // Utiliser localUserRepository pour obtenir le bon users.id (compatible RLS)
+                    val currentUser = localUserRepository.getLoggedInUser()
                     if (currentUser != null) {
                         // Supprimer le trip de Supabase
                         // Note: La suppression est déjà gérée dans TripRepository
@@ -321,7 +324,8 @@ class SupabaseSyncManager private constructor(private val context: Context) {
             // Cette fonction sert surtout pour les opérations DELETE
             when (operation.type) {
                 PendingSyncQueue.OperationType.DELETE -> {
-                    val currentUser = authRepository.getCurrentAuthUser()
+                    // Utiliser localUserRepository pour obtenir le bon users.id (compatible RLS)
+                    val currentUser = localUserRepository.getLoggedInUser()
                     if (currentUser != null) {
                         // Suppression gérée dans VehicleRepository
                         true

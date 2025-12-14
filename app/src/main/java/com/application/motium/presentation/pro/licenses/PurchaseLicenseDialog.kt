@@ -15,17 +15,20 @@ import com.application.motium.domain.model.License
 import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
- * Dialog for purchasing new licenses
+ * Dialog for purchasing new licenses (monthly or lifetime)
  */
 @Composable
 fun PurchaseLicenseDialog(
     onDismiss: () -> Unit,
-    onPurchase: (Int) -> Unit,
+    onPurchase: (quantity: Int, isLifetime: Boolean) -> Unit,
     isLoading: Boolean = false
 ) {
     var quantity by remember { mutableIntStateOf(1) }
+    var isLifetime by remember { mutableStateOf(false) }
 
-    val priceHT = quantity * License.LICENSE_PRICE_HT
+    // Calculate prices based on mode
+    val unitPriceHT = if (isLifetime) License.LICENSE_LIFETIME_PRICE_HT else License.LICENSE_PRICE_HT
+    val priceHT = quantity * unitPriceHT
     val vat = priceHT * License.VAT_RATE
     val priceTTC = priceHT + vat
 
@@ -42,6 +45,31 @@ fun PurchaseLicenseDialog(
             Column(
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
+                // Plan type selector
+                Text(
+                    "Type de licence",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = !isLifetime,
+                        onClick = { isLifetime = false },
+                        label = { Text("Mensuel") },
+                        enabled = !isLoading
+                    )
+                    FilterChip(
+                        selected = isLifetime,
+                        onClick = { isLifetime = true },
+                        label = { Text("A vie") },
+                        enabled = !isLoading
+                    )
+                }
+
                 // Quantity selector
                 Text(
                     "Nombre de licences",
@@ -93,7 +121,8 @@ fun PurchaseLicenseDialog(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                "$quantity x 5,00 € HT",
+                                "$quantity x ${unitPriceHT.toInt()} € HT" +
+                                    if (!isLifetime) " /mois" else "",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
@@ -125,7 +154,7 @@ fun PurchaseLicenseDialog(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                "Total TTC / mois",
+                                if (isLifetime) "Total TTC" else "Total TTC / mois",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -139,7 +168,7 @@ fun PurchaseLicenseDialog(
                     }
                 }
 
-                // Stripe notice
+                // Lifetime benefits notice or Stripe notice
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -148,7 +177,11 @@ fun PurchaseLicenseDialog(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        "Le paiement sera effectué via Stripe. Vous recevrez une facture par email.",
+                        if (isLifetime) {
+                            "Les licences a vie n'expirent jamais et ne necessitent aucun renouvellement. Paiement unique via Stripe."
+                        } else {
+                            "Le paiement sera effectue via Stripe. Vous recevrez une facture par email chaque mois."
+                        },
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
@@ -158,7 +191,7 @@ fun PurchaseLicenseDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onPurchase(quantity) },
+                onClick = { onPurchase(quantity, isLifetime) },
                 enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MotiumPrimary

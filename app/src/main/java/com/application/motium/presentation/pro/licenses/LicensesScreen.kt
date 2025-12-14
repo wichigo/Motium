@@ -22,10 +22,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.License
+import com.application.motium.domain.model.LicenseEffectiveStatus
 import com.application.motium.domain.model.LicenseStatus
 import com.application.motium.domain.model.LicensesSummary
 import com.application.motium.presentation.auth.AuthViewModel
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
 
@@ -155,7 +155,7 @@ fun LicensesScreen(
                     // Licenses list section
                     item {
                         Text(
-                            "Licences actives",
+                            "Licences (${uiState.licenses.size})",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -211,6 +211,9 @@ fun LicensesScreen(
                                             license = license,
                                             textColor = textColor,
                                             textSecondaryColor = textSecondaryColor,
+                                            onAssign = { viewModel.showAssignmentDialog(license) },
+                                            onRequestUnlink = { viewModel.showUnlinkConfirmDialog(license) },
+                                            onCancelUnlink = { viewModel.cancelUnlinkRequest(license.id) },
                                             onCancel = { viewModel.cancelLicense(license.id) }
                                         )
                                         if (index < uiState.licenses.size - 1) {
@@ -228,33 +231,38 @@ fun LicensesScreen(
             }
         }
 
-        // Bottom Navigation
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-            ProBottomNavigation(
-                currentRoute = "pro_licenses",
-                onNavigate = { route ->
-                    when (route) {
-                        "pro_home" -> onNavigateToHome()
-                        "pro_calendar" -> onNavigateToCalendar()
-                        "pro_vehicles" -> onNavigateToVehicles()
-                        "pro_export" -> onNavigateToExport()
-                        "pro_settings" -> onNavigateToSettings()
-                        "pro_linked_accounts" -> onNavigateToLinkedAccounts()
-                        "pro_licenses" -> { /* Already here */ }
-                        "pro_export_advanced" -> onNavigateToExportAdvanced()
-                    }
-                },
-                isDarkMode = isDarkMode
-            )
-        }
+        // Bottom navigation is now handled at app-level in MainActivity
     }
 
     // Purchase dialog
     if (uiState.showPurchaseDialog) {
         PurchaseLicenseDialog(
             onDismiss = { viewModel.hidePurchaseDialog() },
-            onPurchase = { quantity -> viewModel.purchaseLicenses(quantity) },
+            onPurchase = { quantity, isLifetime -> viewModel.purchaseLicenses(quantity, isLifetime) },
             isLoading = uiState.isPurchasing
+        )
+    }
+
+    // Assignment dialog
+    val selectedLicense = uiState.selectedLicenseForAssignment
+    if (uiState.showAssignDialog && selectedLicense != null) {
+        AssignLicenseDialog(
+            license = selectedLicense,
+            linkedAccounts = uiState.linkedAccountsForAssignment,
+            isLoading = uiState.isLoadingAccounts,
+            onDismiss = { viewModel.hideAssignmentDialog() },
+            onAssign = { licenseId, accountId -> viewModel.assignLicenseToAccount(licenseId, accountId) }
+        )
+    }
+
+    // Unlink confirmation dialog
+    val licenseToUnlink = uiState.licenseToUnlink
+    if (uiState.showUnlinkConfirmDialog && licenseToUnlink != null) {
+        UnlinkConfirmDialog(
+            license = licenseToUnlink,
+            isLoading = uiState.isUnlinking,
+            onDismiss = { viewModel.hideUnlinkConfirmDialog() },
+            onConfirm = { viewModel.confirmUnlinkRequest() }
         )
     }
 }
@@ -282,14 +290,14 @@ private fun LicensesSummaryCard(
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 StatItem(
-                    value = summary.activeLicenses.toString(),
-                    label = "Actives",
+                    value = summary.assignedLicenses.toString(),
+                    label = "Assignées",
                     color = ValidatedGreen,
                     textSecondaryColor = textSecondaryColor
                 )
                 StatItem(
-                    value = summary.pendingLicenses.toString(),
-                    label = "En attente",
+                    value = summary.availableLicenses.toString(),
+                    label = "Disponibles",
                     color = PendingOrange,
                     textSecondaryColor = textSecondaryColor
                 )
@@ -378,7 +386,7 @@ private fun PricingInfoCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
             Icon(
                 Icons.Outlined.Info,
@@ -389,13 +397,25 @@ private fun PricingInfoCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(
-                    "Tarif: 5,00 € HT / mois / utilisateur",
+                    "Tarif mensuel: 5 € HT / mois / licence",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = textColor
                 )
                 Text(
-                    "Soit 6,00 € TTC avec TVA 20%",
+                    "Soit 6 € TTC avec TVA 20%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textSecondaryColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Tarif a vie: 100 € HT / licence",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Text(
+                    "Soit 120 € TTC - paiement unique",
                     style = MaterialTheme.typography.bodySmall,
                     color = textSecondaryColor
                 )
@@ -431,38 +451,57 @@ private fun LicenseRow(
     license: License,
     textColor: Color,
     textSecondaryColor: Color,
+    onAssign: () -> Unit,
+    onRequestUnlink: () -> Unit,
+    onCancelUnlink: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val effectiveStatus = license.effectiveStatus
+    val isClickable = effectiveStatus == LicenseEffectiveStatus.AVAILABLE
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (isClickable) {
+                    Modifier.clickable(onClick = onAssign)
+                } else {
+                    Modifier
+                }
+            )
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Status icon
+        // Status icon based on effectiveStatus
         Box(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
                 .background(
-                    when (license.status) {
-                        LicenseStatus.ACTIVE -> ValidatedGreen.copy(alpha = 0.1f)
-                        LicenseStatus.PENDING -> PendingOrange.copy(alpha = 0.1f)
+                    when (effectiveStatus) {
+                        LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary.copy(alpha = 0.1f)
+                        LicenseEffectiveStatus.ACTIVE -> ValidatedGreen.copy(alpha = 0.1f)
+                        LicenseEffectiveStatus.PENDING_UNLINK -> PendingOrange.copy(alpha = 0.1f)
+                        LicenseEffectiveStatus.PENDING_PAYMENT -> PendingOrange.copy(alpha = 0.1f)
                         else -> ErrorRed.copy(alpha = 0.1f)
                     }
                 ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = when (license.status) {
-                    LicenseStatus.ACTIVE -> Icons.Default.CheckCircle
-                    LicenseStatus.PENDING -> Icons.Default.Schedule
+                imageVector = when (effectiveStatus) {
+                    LicenseEffectiveStatus.AVAILABLE -> Icons.Default.AddCircle
+                    LicenseEffectiveStatus.ACTIVE -> Icons.Default.CheckCircle
+                    LicenseEffectiveStatus.PENDING_UNLINK -> Icons.Default.Schedule
+                    LicenseEffectiveStatus.PENDING_PAYMENT -> Icons.Default.Payment
                     else -> Icons.Default.Cancel
                 },
                 contentDescription = null,
-                tint = when (license.status) {
-                    LicenseStatus.ACTIVE -> ValidatedGreen
-                    LicenseStatus.PENDING -> PendingOrange
+                tint = when (effectiveStatus) {
+                    LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary
+                    LicenseEffectiveStatus.ACTIVE -> ValidatedGreen
+                    LicenseEffectiveStatus.PENDING_UNLINK -> PendingOrange
+                    LicenseEffectiveStatus.PENDING_PAYMENT -> PendingOrange
                     else -> ErrorRed
                 },
                 modifier = Modifier.size(24.dp)
@@ -472,48 +511,142 @@ private fun LicenseRow(
         Spacer(modifier = Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Licence #${license.id.take(8)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                // Lifetime badge
+                if (license.isLifetime) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        color = Color(0xFFFFD700),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            "A VIE",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black
+                        )
+                    }
+                }
+            }
+
+            // Status text based on effectiveStatus
             Text(
-                text = "Licence #${license.id.take(8)}",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = textColor
-            )
-            Text(
-                text = when (license.status) {
-                    LicenseStatus.ACTIVE -> "Active"
-                    LicenseStatus.PENDING -> "En attente"
-                    LicenseStatus.EXPIRED -> "Expirée"
-                    LicenseStatus.CANCELLED -> "Annulée"
+                text = when (effectiveStatus) {
+                    LicenseEffectiveStatus.AVAILABLE -> "Disponible - cliquez pour assigner"
+                    LicenseEffectiveStatus.ACTIVE -> "Active"
+                    LicenseEffectiveStatus.PENDING_UNLINK -> "Deliaison en cours"
+                    LicenseEffectiveStatus.PENDING_PAYMENT -> "En attente de paiement"
+                    LicenseEffectiveStatus.EXPIRED -> "Expiree"
+                    LicenseEffectiveStatus.CANCELLED -> "Annulee"
+                    LicenseEffectiveStatus.INACTIVE -> "Inactive"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = textSecondaryColor
+                color = when (effectiveStatus) {
+                    LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary
+                    else -> textSecondaryColor
+                }
             )
-            license.daysRemaining?.let { days ->
-                if (days <= 7) {
+
+            // Show linked account info
+            if (license.isAssigned && !license.linkedAccountId.isNullOrEmpty()) {
+                Text(
+                    text = "Liee a: ${license.linkedAccountId?.take(8)}...",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = textSecondaryColor
+                )
+            }
+
+            // Show pending unlink countdown
+            if (effectiveStatus == LicenseEffectiveStatus.PENDING_UNLINK) {
+                license.daysUntilUnlinkEffective?.let { days ->
                     Text(
-                        text = "Expire dans $days jours",
+                        text = "Liberation dans $days jour${if (days > 1) "s" else ""}",
                         style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
                         color = PendingOrange
                     )
                 }
             }
+
+            // Expiry warning for monthly licenses
+            if (!license.isLifetime && license.status == LicenseStatus.ACTIVE) {
+                license.daysRemaining?.let { days ->
+                    if (days <= 7) {
+                        Text(
+                            text = "Expire dans $days jours",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PendingOrange
+                        )
+                    }
+                }
+            }
         }
 
+        // Status badge or pricing column
         Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = String.format("%.2f €", license.priceMonthlyTTC),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = MotiumPrimary
-            )
-            Text(
-                text = "/mois",
-                style = MaterialTheme.typography.labelSmall,
-                color = textSecondaryColor
-            )
+            when (effectiveStatus) {
+                LicenseEffectiveStatus.AVAILABLE -> {
+                    Surface(
+                        color = MotiumPrimary.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "Disponible",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MotiumPrimary
+                        )
+                    }
+                }
+                LicenseEffectiveStatus.PENDING_UNLINK -> {
+                    Surface(
+                        color = PendingOrange.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "${license.daysUntilUnlinkEffective ?: 0}j",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = PendingOrange
+                        )
+                    }
+                }
+                else -> {
+                    if (license.isLifetime) {
+                        Text(
+                            text = "A vie",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFFD700)
+                        )
+                    } else if (license.status == LicenseStatus.ACTIVE) {
+                        Text(
+                            text = String.format("%.2f EUR", license.priceMonthlyTTC),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MotiumPrimary
+                        )
+                        Text(
+                            text = "/mois",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = textSecondaryColor
+                        )
+                    }
+                }
+            }
         }
 
-        if (license.status == LicenseStatus.ACTIVE) {
+        // Options menu for assigned licenses
+        if (license.status == LicenseStatus.ACTIVE && license.isAssigned) {
             var showMenu by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { showMenu = true }) {
@@ -531,21 +664,60 @@ private fun LicenseRow(
                         shape = RoundedCornerShape(16.dp)
                     )
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Annuler", color = ErrorRed) },
-                        onClick = {
-                            showMenu = false
-                            onCancel()
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Outlined.Cancel,
-                                contentDescription = null,
-                                tint = ErrorRed
-                            )
-                        },
-                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                    )
+                    if (license.isPendingUnlink) {
+                        // Option to cancel unlink request
+                        DropdownMenuItem(
+                            text = { Text("Annuler la deliaison", color = ValidatedGreen) },
+                            onClick = {
+                                showMenu = false
+                                onCancelUnlink()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Undo,
+                                    contentDescription = null,
+                                    tint = ValidatedGreen
+                                )
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                        )
+                    } else {
+                        // Option to request unlink
+                        DropdownMenuItem(
+                            text = { Text("Delier la licence", color = PendingOrange) },
+                            onClick = {
+                                showMenu = false
+                                onRequestUnlink()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.LinkOff,
+                                    contentDescription = null,
+                                    tint = PendingOrange
+                                )
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                        )
+                    }
+
+                    // Cancel option (only for monthly licenses)
+                    if (!license.isLifetime) {
+                        DropdownMenuItem(
+                            text = { Text("Annuler la licence", color = ErrorRed) },
+                            onClick = {
+                                showMenu = false
+                                onCancel()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Cancel,
+                                    contentDescription = null,
+                                    tint = ErrorRed
+                                )
+                            },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                        )
+                    }
                 }
             }
         }

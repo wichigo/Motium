@@ -25,7 +25,7 @@ android {
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhqa251cXF0bXZiZnZybXZ2dHhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3MTA0MjIsImV4cCI6MjA3NDI4NjQyMn0.VLh94hdp1Q1OFcKx-yM3j2EifxC5KJjUQEyZ7eMFOIk\"")
 
         // Stripe configuration (publishable key - safe to include in client)
-        buildConfigField("String", "STRIPE_PUBLISHABLE_KEY", "\"pk_test_YOUR_STRIPE_PUBLISHABLE_KEY\"")
+        buildConfigField("String", "STRIPE_PUBLISHABLE_KEY", "\"pk_test_51RLY4eCsRT1u49RI1vDxDBpBaR0iphMbJk47LKowyTKII2wTwbkYScTIpr7kTOQBQ4dEOTkztv767Pw75MWsBB1y00xLwmOflF\"")
     }
 
     buildTypes {

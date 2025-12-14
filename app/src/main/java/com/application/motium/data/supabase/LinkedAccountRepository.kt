@@ -107,6 +107,74 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
+     * Invite a user with additional details (full name, phone, department)
+     */
+    suspend fun inviteUserWithDetails(
+        proAccountId: String,
+        email: String,
+        fullName: String,
+        phone: String? = null,
+        department: String? = null
+    ): Result<String?> = withContext(Dispatchers.IO) {
+        try {
+            // Generate invitation token
+            val invitationToken = java.util.UUID.randomUUID().toString()
+            val now = java.time.Instant.now().toString()
+
+            // First check if user exists
+            val existingUsers = supabaseClient.from("users")
+                .select() {
+                    filter {
+                        eq("email", email)
+                    }
+                }
+                .decodeList<UserDto>()
+
+            if (existingUsers.isNotEmpty()) {
+                // User exists - update with invitation and additional info
+                supabaseClient.from("users")
+                    .update({
+                        set("linked_pro_account_id", proAccountId)
+                        set("link_status", "pending")
+                        set("invitation_token", invitationToken)
+                        set("invited_at", now)
+                        set("name", fullName)
+                        if (phone != null) set("phone_number", phone)
+                        if (department != null) set("department", department)
+                    }) {
+                        filter {
+                            eq("email", email)
+                        }
+                    }
+
+                MotiumApplication.logger.i("Invitation sent to existing user $email", "LinkedAccountRepo")
+            } else {
+                // User doesn't exist - create a placeholder user
+                // This user will complete their profile when they accept the invitation
+                supabaseClient.from("users")
+                    .insert(mapOf(
+                        "email" to email,
+                        "name" to fullName,
+                        "phone_number" to (phone ?: ""),
+                        "department" to (department ?: ""),
+                        "linked_pro_account_id" to proAccountId,
+                        "link_status" to "pending",
+                        "invitation_token" to invitationToken,
+                        "invited_at" to now,
+                        "role" to "INDIVIDUAL"
+                    ))
+
+                MotiumApplication.logger.i("Created placeholder user and sent invitation to $email", "LinkedAccountRepo")
+            }
+
+            Result.success(invitationToken)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error inviting user with details: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Revoke access for a linked user
      */
     suspend fun revokeUser(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -221,6 +289,8 @@ data class LinkedUserDto(
     val userName: String?,
     @SerialName("user_email")
     val userEmail: String,
+    @SerialName("user_phone")
+    val userPhone: String? = null,
     @SerialName("link_status")
     val linkStatus: String?,
     @SerialName("invited_at")
@@ -263,6 +333,8 @@ data class UserDto(
     val id: String,
     val name: String?,
     val email: String,
+    @SerialName("phone_number")
+    val phoneNumber: String? = null,
     @SerialName("linked_pro_account_id")
     val linkedProAccountId: String? = null,
     @SerialName("link_status")
@@ -284,6 +356,7 @@ data class UserDto(
         userId = id,
         userName = name,
         userEmail = email,
+        userPhone = phoneNumber,
         linkStatus = linkStatus,
         invitedAt = invitedAt,
         linkActivatedAt = linkActivatedAt,

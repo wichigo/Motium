@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.*
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.domain.model.TrackingMode
@@ -27,14 +28,14 @@ class AutoTrackingScheduleWorker(
     private val workScheduleRepository = WorkScheduleRepository.getInstance(context)
     private val tripRepository = TripRepository.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
+    private val localUserRepository = LocalUserRepository.getInstance(context)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.d("AutoTrackingScheduleWorker: Checking tracking mode", "AutoTrackingScheduleWorker")
 
-            // Récupérer l'utilisateur actuel
-            val authState = authRepository.authState.first()
-            val userId = authState.user?.id
+            // Récupérer l'utilisateur actuel (utiliser localUserRepository pour le bon users.id compatible RLS)
+            val userId = localUserRepository.getLoggedInUser()?.id
             if (userId == null) {
                 MotiumApplication.logger.w("No user logged in, skipping check", "AutoTrackingScheduleWorker")
                 return@withContext Result.success()

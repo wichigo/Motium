@@ -12,6 +12,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -290,23 +293,56 @@ fun AddVehicleScreen(
                 }
             }
 
-            // Default vehicle checkbox
-            Row(
+            // Default vehicle section - matching EditVehicleScreen design
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDefault) MotiumGreen.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                ),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Checkbox(
-                    checked = isDefault,
-                    onCheckedChange = { isDefault = it },
-                    colors = CheckboxDefaults.colors(
-                        checkedColor = MotiumGreen
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isDefault) Icons.Default.Star else Icons.Default.StarBorder,
+                            contentDescription = null,
+                            tint = if (isDefault) MotiumGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Default Vehicle",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDefault) MotiumGreen else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isDefault) "Used for auto-tracked trips" else "Set as default for auto-tracking",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = isDefault,
+                        onCheckedChange = { isDefault = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = MotiumGreen,
+                            uncheckedThumbColor = Color.White,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.outline
+                        )
                     )
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Set as default vehicle",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                }
             }
 
             // Save button

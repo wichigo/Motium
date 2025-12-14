@@ -58,7 +58,7 @@ class ExportManagerTest {
     private val testExpenses = listOf(
         createTestExpense(
             id = "exp1",
-            tripId = "trip1",
+            date = "2024-12-06",
             type = ExpenseType.FUEL,
             amount = 45.50,
             amountHT = 37.92,
@@ -66,7 +66,7 @@ class ExportManagerTest {
         ),
         createTestExpense(
             id = "exp2",
-            tripId = "trip1",
+            date = "2024-12-06",
             type = ExpenseType.TOLL,
             amount = 12.80,
             amountHT = 10.67,
@@ -74,7 +74,7 @@ class ExportManagerTest {
         ),
         createTestExpense(
             id = "exp3",
-            tripId = "trip2",
+            date = "2024-12-05",
             type = ExpenseType.PARKING,
             amount = 8.00,
             amountHT = 6.67,
@@ -110,18 +110,13 @@ class ExportManagerTest {
 
     @Test
     fun `CSV export should calculate correct totals with expenses`() {
-        // Given
-        val tripsWithExpenses = testTrips.map { trip ->
-            TripWithExpenses(
-                trip = trip,
-                expenses = testExpenses.filter { it.tripId == trip.id }
-            )
-        }
+        // Given - expenses are linked by date instead of tripId
+        val allExpenses = testExpenses
 
         // When
         val totalKm = testTrips.sumOf { it.totalDistance / 1000.0 }
         val totalIndemnities = totalKm * 0.50
-        val totalExpenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
+        val totalExpenses = allExpenses.sumOf { it.amount }
         val grandTotal = totalIndemnities + totalExpenses
 
         // Then
@@ -132,23 +127,16 @@ class ExportManagerTest {
     }
 
     @Test
-    fun `should correctly count expenses per trip`() {
-        // Given
-        val tripsWithExpenses = testTrips.map { trip ->
-            TripWithExpenses(
-                trip = trip,
-                expenses = testExpenses.filter { it.tripId == trip.id }
-            )
-        }
+    fun `should correctly count expenses by date`() {
+        // Given - expenses are linked by date
+        val dec06Expenses = testExpenses.filter { it.date == "2024-12-06" }
+        val dec05Expenses = testExpenses.filter { it.date == "2024-12-05" }
+        val dec04Expenses = testExpenses.filter { it.date == "2024-12-04" }
 
         // When/Then
-        val trip1Expenses = tripsWithExpenses.find { it.trip.id == "trip1" }?.expenses
-        val trip2Expenses = tripsWithExpenses.find { it.trip.id == "trip2" }?.expenses
-        val trip3Expenses = tripsWithExpenses.find { it.trip.id == "trip3" }?.expenses
-
-        assertEquals(2, trip1Expenses?.size) // Fuel + Toll
-        assertEquals(1, trip2Expenses?.size) // Parking
-        assertEquals(0, trip3Expenses?.size) // No expenses
+        assertEquals(2, dec06Expenses.size) // Fuel + Toll
+        assertEquals(1, dec05Expenses.size) // Parking
+        assertEquals(0, dec04Expenses.size) // No expenses
     }
 
     // ==================== Expense Calculation Tests ====================
@@ -273,12 +261,7 @@ class ExportManagerTest {
     fun `trips_with_expenses mode should include both`() {
         // Given
         val expenseMode = "trips_with_expenses"
-        val tripsWithExpenses = testTrips.map { trip ->
-            TripWithExpenses(
-                trip = trip,
-                expenses = testExpenses.filter { it.tripId == trip.id }
-            )
-        }
+        val allExpenses = testExpenses
         val totalKm = testTrips.sumOf { it.totalDistance / 1000.0 }
         val mileageRate = 0.50
 
@@ -286,7 +269,7 @@ class ExportManagerTest {
         val total = when (expenseMode) {
             "trips_with_expenses" -> {
                 val indemnities = totalKm * mileageRate
-                val expenses = tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
+                val expenses = allExpenses.sumOf { it.amount }
                 indemnities + expenses
             }
             else -> 0.0
@@ -300,16 +283,11 @@ class ExportManagerTest {
     fun `expenses_only mode should not include mileage`() {
         // Given
         val expenseMode = "expenses_only"
-        val tripsWithExpenses = testTrips.map { trip ->
-            TripWithExpenses(
-                trip = trip,
-                expenses = testExpenses.filter { it.tripId == trip.id }
-            )
-        }
+        val allExpenses = testExpenses
 
         // When
         val total = when (expenseMode) {
-            "expenses_only" -> tripsWithExpenses.flatMap { it.expenses }.sumOf { it.amount }
+            "expenses_only" -> allExpenses.sumOf { it.amount }
             else -> 0.0
         }
 
@@ -349,7 +327,7 @@ class ExportManagerTest {
 
     private fun createTestExpense(
         id: String,
-        tripId: String,
+        date: String,
         type: ExpenseType,
         amount: Double,
         amountHT: Double?,
@@ -357,8 +335,7 @@ class ExportManagerTest {
     ): Expense {
         return Expense(
             id = id,
-            date = "2024-12-05",
-            tripId = tripId,
+            date = date,
             type = type,
             amount = amount,
             amountHT = amountHT,

@@ -95,17 +95,6 @@
             android:foregroundServiceType="location"
             android:exported="false" />
 
-        <!-- Trip Tracking Service -->
-        <service
-            android:name=".service.TripLoggerService"
-            android:foregroundServiceType="location"
-            android:exported="false" />
-
-        <!-- Trip Detection Service -->
-        <service
-            android:name=".service.TripDetectionService"
-            android:foregroundServiceType="location"
-            android:exported="false" />
 
         <!-- Supabase Connection Service -->
         <service

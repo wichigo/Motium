@@ -57,6 +57,22 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
         val updated_at: String
     )
 
+    // For inserting new vehicles
+    @Serializable
+    data class VehicleInsert(
+        val id: String,
+        val user_id: String,
+        val name: String,
+        val type: String,
+        val license_plate: String?,
+        val power: String?,
+        val fuel_type: String?,
+        val mileage_rate: Double,
+        val is_default: Boolean,
+        val created_at: String,
+        val updated_at: String
+    )
+
     // To query trips for mileage calculation
     @Serializable
     data class TripDistance(
@@ -251,23 +267,22 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date())
 
-            // Create a map to insert, excluding the transient mileage fields
-            val vehicleMap = mapOf(
-                "id" to vehicle.id,
-                "user_id" to vehicle.userId,
-                "name" to vehicle.name,
-                "type" to vehicle.type.name,
-                "license_plate" to vehicle.licensePlate,
-                "power" to vehicle.power?.cv,
-                "fuel_type" to vehicle.fuelType?.name,
-                "mileage_rate" to vehicle.mileageRate,
-                "is_default" to vehicle.isDefault,
-                "created_at" to now,
-                "updated_at" to now
+            // Create a serializable object to insert
+            val vehicleInsert = VehicleInsert(
+                id = vehicle.id,
+                user_id = vehicle.userId,
+                name = vehicle.name,
+                type = vehicle.type.name,
+                license_plate = vehicle.licensePlate,
+                power = vehicle.power?.cv,
+                fuel_type = vehicle.fuelType?.name,
+                mileage_rate = vehicle.mileageRate,
+                is_default = vehicle.isDefault,
+                created_at = now,
+                updated_at = now
             )
 
-
-            postgres.from("vehicles").insert(vehicleMap)
+            postgres.from("vehicles").insert(vehicleInsert)
 
             MotiumApplication.logger.i("Vehicle inserted successfully: ${vehicle.id}", "SupabaseVehicleRepository")
         } catch (e: Exception) {

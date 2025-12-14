@@ -3,6 +3,7 @@ package com.application.motium
 import android.app.Application
 import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseClient
+import com.application.motium.data.sync.LicenseScheduler
 import com.application.motium.data.sync.SyncScheduler
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.utils.AppLogger
@@ -37,6 +38,15 @@ class MotiumApplication : Application() {
             logger.i("Session sync scheduled successfully with WorkManager", "Application")
         } catch (e: Exception) {
             logger.e("Failed to schedule session sync: ${e.message}", "Application", e)
+        }
+
+        // Planifier le traitement des déliaisons de licences expirées
+        // WorkManager va traiter les licences avec préavis de 30 jours expiré
+        try {
+            LicenseScheduler.scheduleLicenseProcessing(this)
+            logger.i("License processing scheduled successfully with WorkManager", "Application")
+        } catch (e: Exception) {
+            logger.e("Failed to schedule license processing: ${e.message}", "Application", e)
         }
 
         // Log des informations système

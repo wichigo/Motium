@@ -38,8 +38,6 @@ import com.application.motium.domain.model.isPremium
 import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
-import com.application.motium.presentation.components.MotiumBottomNavigation
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.TrackingModeDropdown
 import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.AutoTrackingSettings
@@ -230,16 +228,24 @@ fun NewHomeScreen(
     }
 
     // Background map-matching: Calculate and cache route coordinates for trips without cache
+    // Use a set to track which trips are being processed to avoid re-triggering
     val nominatimService = remember { NominatimService.getInstance() }
-    LaunchedEffect(trips) {
+    var processedTripIds by remember { mutableStateOf(setOf<String>()) }
+
+    LaunchedEffect(trips.map { it.id }.toSet()) {
         if (trips.isEmpty()) return@LaunchedEffect
 
-        // Find trips that need map-matching (no cached coordinates and have GPS points)
+        // Find trips that need map-matching (no cached coordinates, have GPS points, not already processed)
         val tripsNeedingMapMatch = trips.filter { trip ->
-            trip.matchedRouteCoordinates.isNullOrBlank() && trip.locations.size >= 2
+            trip.matchedRouteCoordinates.isNullOrBlank() &&
+            trip.locations.size >= 2 &&
+            trip.id !in processedTripIds
         }
 
         if (tripsNeedingMapMatch.isNotEmpty()) {
+            // Mark these trips as being processed to avoid re-triggering
+            processedTripIds = processedTripIds + tripsNeedingMapMatch.map { it.id }.toSet()
+
             MotiumApplication.logger.d(
                 "🗺️ Background map-matching: ${tripsNeedingMapMatch.size} trips need processing",
                 "HomeScreen"
@@ -643,39 +649,7 @@ fun NewHomeScreen(
             }
         }
 
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-            if (isPro) {
-                ProBottomNavigation(
-                    currentRoute = "pro_home",
-                    onNavigate = { route ->
-                        when (route) {
-                            "pro_home" -> { /* Already on home */ }
-                            "pro_calendar" -> onNavigateToCalendar()
-                            "pro_vehicles" -> onNavigateToVehicles()
-                            "pro_export" -> onNavigateToExport()
-                            "pro_settings" -> onNavigateToSettings()
-                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
-                            "pro_licenses" -> onNavigateToLicenses()
-                            "pro_export_advanced" -> onNavigateToExportAdvanced()
-                        }
-                    },
-                    isDarkMode = isDarkMode
-                )
-            } else {
-                MotiumBottomNavigation(
-                    currentRoute = "home",
-                    onNavigate = { route ->
-                        when (route) {
-                            "calendar" -> onNavigateToCalendar()
-                            "vehicles" -> onNavigateToVehicles()
-                            "export" -> onNavigateToExport()
-                            "settings" -> onNavigateToSettings()
-                        }
-                    },
-                    isDarkMode = isDarkMode
-                )
-            }
-        }
+        // Bottom navigation is now handled at app-level in MainActivity
     }
 
     // Dialog pour rediriger vers Planning quand Pro est sélectionné sans horaires
@@ -744,8 +718,11 @@ fun NewHomeTripCard(
 ) {
     val startLocation = trip.locations.firstOrNull()
     val endLocation = trip.locations.lastOrNull()
-    val startTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.startTime))
-    val endTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.endTime ?: System.currentTimeMillis()))
+    val context = LocalContext.current
+    val is24Hour = android.text.format.DateFormat.is24HourFormat(context)
+    val timePattern = if (is24Hour) "HH:mm" else "hh:mm a"
+    val startTimeStr = SimpleDateFormat(timePattern, Locale.getDefault()).format(Date(trip.startTime))
+    val endTimeStr = SimpleDateFormat(timePattern, Locale.getDefault()).format(Date(trip.endTime ?: System.currentTimeMillis()))
 
     // Use cached map-matched coordinates if available, otherwise fallback to raw GPS
     val routeCoordinates = remember(trip.matchedRouteCoordinates, trip.locations) {

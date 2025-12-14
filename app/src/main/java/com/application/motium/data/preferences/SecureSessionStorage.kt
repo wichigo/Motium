@@ -52,6 +52,10 @@ class SecureSessionStorage(context: Context) {
         private const val KEY_AUTH_EMAIL = "auth_email"
         private const val KEY_AUTH_PASSWORD = "auth_password"
         private const val KEY_AUTH_METHOD = "auth_method" // "email", "google", etc.
+
+        // JWT Migration tracking - increment this when JWT signing algorithm changes
+        private const val KEY_JWT_MIGRATION_VERSION = "jwt_migration_version"
+        private const val CURRENT_JWT_VERSION = 2 // v1 = HS256 (legacy), v2 = ES256 (P-256)
     }
 
     /**
@@ -249,4 +253,70 @@ class SecureSessionStorage(context: Context) {
     }
 
     fun getAuthMethod(): String = encryptedPrefs.getString(KEY_AUTH_METHOD, "email") ?: "email"
+
+    // ==================== JWT Migration ====================
+
+    /**
+     * Check if JWT migration is needed (signing algorithm changed from HS256 to ES256).
+     * Returns true if stored session was created with an older JWT version.
+     */
+    fun needsJwtMigration(): Boolean {
+        val storedVersion = encryptedPrefs.getInt(KEY_JWT_MIGRATION_VERSION, 1) // Default to v1 (legacy HS256)
+        val needsMigration = storedVersion < CURRENT_JWT_VERSION && hasSession()
+        if (needsMigration) {
+            MotiumApplication.logger.w(
+                "⚠️ JWT migration needed: stored version $storedVersion < current version $CURRENT_JWT_VERSION",
+                "SecureSession"
+            )
+        }
+        return needsMigration
+    }
+
+    /**
+     * Mark JWT migration as complete (called after successful token refresh).
+     */
+    fun markJwtMigrationComplete() {
+        try {
+            encryptedPrefs.edit()
+                .putInt(KEY_JWT_MIGRATION_VERSION, CURRENT_JWT_VERSION)
+                .apply()
+            MotiumApplication.logger.i(
+                "✅ JWT migration complete - now using ES256 (P-256) signed tokens",
+                "SecureSession"
+            )
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error marking JWT migration: ${e.message}", "SecureSession", e)
+        }
+    }
+
+    /**
+     * Get the current stored JWT version.
+     */
+    fun getStoredJwtVersion(): Int = encryptedPrefs.getInt(KEY_JWT_MIGRATION_VERSION, 1)
+
+    /**
+     * Force invalidate the current session for migration purposes.
+     * Keeps credentials for silent re-auth but clears tokens.
+     */
+    fun invalidateSessionForMigration() {
+        try {
+            MotiumApplication.logger.w(
+                "🔄 Invalidating session for JWT migration (keeping credentials for re-auth)",
+                "SecureSession"
+            )
+            // Keep credentials but clear session tokens
+            encryptedPrefs.edit()
+                .remove(KEY_ACCESS_TOKEN)
+                .remove(KEY_EXPIRES_AT)
+                .remove(KEY_TOKEN_TYPE)
+                .remove(KEY_SESSION_CREATED_AT)
+                .remove(KEY_PERSISTENT_SESSION_FLAG)
+                // Keep refresh token for potential refresh attempt
+                // Keep user info for UX
+                // Keep credentials for silent re-auth
+                .apply()
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error invalidating session: ${e.message}", "SecureSession", e)
+        }
+    }
 }

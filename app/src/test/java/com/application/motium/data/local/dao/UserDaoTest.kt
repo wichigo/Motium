@@ -47,17 +47,18 @@ class UserDaoTest {
         name: String = "Test User",
         email: String = "test@example.com",
         role: String = "INDIVIDUAL",
-        organizationId: String? = null,
-        organizationName: String? = null,
         subscriptionType: String = "FREE",
         subscriptionExpiresAt: String? = null,
         monthlyTripCount: Int = 0,
         phoneNumber: String = "",
         address: String = "",
-        linkedToCompany: Boolean = false,
-        shareProfessionalTrips: Boolean = false,
+        linkedProAccountId: String? = null,
+        linkStatus: String? = null,
+        shareProfessionalTrips: Boolean = true,
         sharePersonalTrips: Boolean = false,
-        sharePersonalInfo: Boolean = false,
+        shareVehicleInfo: Boolean = true,
+        shareExpenses: Boolean = false,
+        considerFullDistance: Boolean = false,
         lastSyncedAt: Long? = null,
         isLocallyConnected: Boolean = true
     ): UserEntity {
@@ -67,17 +68,23 @@ class UserDaoTest {
             name = name,
             email = email,
             role = role,
-            organizationId = organizationId,
-            organizationName = organizationName,
             subscriptionType = subscriptionType,
             subscriptionExpiresAt = subscriptionExpiresAt,
+            stripeCustomerId = null,
+            stripeSubscriptionId = null,
             monthlyTripCount = monthlyTripCount,
             phoneNumber = phoneNumber,
             address = address,
-            linkedToCompany = linkedToCompany,
+            linkedProAccountId = linkedProAccountId,
+            linkStatus = linkStatus,
+            invitationToken = null,
+            invitedAt = null,
+            linkActivatedAt = null,
             shareProfessionalTrips = shareProfessionalTrips,
             sharePersonalTrips = sharePersonalTrips,
-            sharePersonalInfo = sharePersonalInfo,
+            shareVehicleInfo = shareVehicleInfo,
+            shareExpenses = shareExpenses,
+            considerFullDistance = considerFullDistance,
             createdAt = now,
             updatedAt = now,
             lastSyncedAt = lastSyncedAt,
@@ -354,9 +361,8 @@ class UserDaoTest {
         val enterpriseUser = createTestUser(
             id = "enterprise-user",
             role = "ENTERPRISE",
-            organizationId = "org-123",
-            organizationName = "Test Company",
-            linkedToCompany = true
+            linkedProAccountId = "pro-account-123",
+            linkStatus = "ACTIVE"
         )
 
         // When
@@ -366,9 +372,8 @@ class UserDaoTest {
         // Then
         assertNotNull(retrieved)
         assertEquals("ENTERPRISE", retrieved?.role)
-        assertEquals("org-123", retrieved?.organizationId)
-        assertEquals("Test Company", retrieved?.organizationName)
-        assertTrue(retrieved?.linkedToCompany ?: false)
+        assertEquals("pro-account-123", retrieved?.linkedProAccountId)
+        assertEquals("ACTIVE", retrieved?.linkStatus)
         println("✓ userWithEnterpriseRole_storesCorrectly: Enterprise user stored correctly")
     }
 
@@ -401,7 +406,8 @@ class UserDaoTest {
             id = "sharing-user",
             shareProfessionalTrips = true,
             sharePersonalTrips = false,
-            sharePersonalInfo = true
+            shareVehicleInfo = true,
+            shareExpenses = true
         )
 
         // When
@@ -412,7 +418,8 @@ class UserDaoTest {
         assertNotNull(retrieved)
         assertTrue(retrieved?.shareProfessionalTrips ?: false)
         assertFalse(retrieved?.sharePersonalTrips ?: true)
-        assertTrue(retrieved?.sharePersonalInfo ?: false)
+        assertTrue(retrieved?.shareVehicleInfo ?: false)
+        assertTrue(retrieved?.shareExpenses ?: false)
         println("✓ userSharingPreferences_storesCorrectly: Sharing preferences stored correctly")
     }
 

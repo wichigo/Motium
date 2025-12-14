@@ -39,15 +39,16 @@ import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.calendar.WorkScheduleViewModel
 import com.application.motium.presentation.components.MiniMap
-import com.application.motium.presentation.components.MotiumBottomNavigation
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.MotiumPrimaryTint
 import com.application.motium.presentation.theme.ValidatedGreen
 import com.application.motium.presentation.theme.PendingOrange
+import com.application.motium.MotiumApplication
 import com.application.motium.utils.CalendarUtils
 import com.application.motium.utils.ThemeManager
+import com.application.motium.data.geocoding.NominatimService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -102,6 +103,68 @@ fun CalendarScreen(
         trips = tripRepository.getAllTrips()
     }
 
+    // Background map-matching: Calculate and cache route coordinates for trips without cache
+    // This reuses cache from Home screen if already calculated
+    val nominatimService = remember { NominatimService.getInstance() }
+    var processedTripIds by remember { mutableStateOf(setOf<String>()) }
+
+    LaunchedEffect(trips.map { it.id }.toSet()) {
+        if (trips.isEmpty()) return@LaunchedEffect
+
+        // Find trips that need map-matching (no cached coordinates, have GPS points, not already processed)
+        val tripsNeedingMapMatch = trips.filter { trip ->
+            trip.matchedRouteCoordinates.isNullOrBlank() &&
+            trip.locations.size >= 2 &&
+            trip.id !in processedTripIds
+        }
+
+        if (tripsNeedingMapMatch.isNotEmpty()) {
+            // Mark these trips as being processed to avoid re-triggering
+            processedTripIds = processedTripIds + tripsNeedingMapMatch.map { it.id }.toSet()
+
+            MotiumApplication.logger.d(
+                "🗺️ Calendar background map-matching: ${tripsNeedingMapMatch.size} trips need processing",
+                "CalendarScreen"
+            )
+
+            // Process trips in background, one at a time to avoid overloading OSRM
+            coroutineScope.launch(Dispatchers.IO) {
+                for (trip in tripsNeedingMapMatch) {
+                    try {
+                        val gpsPoints = trip.locations.map { loc ->
+                            Pair(loc.latitude, loc.longitude)
+                        }
+                        val matched = nominatimService.matchRoute(gpsPoints)
+
+                        if (matched != null && matched.isNotEmpty()) {
+                            // Serialize to JSON
+                            val jsonCoords = matched.joinToString(",", "[", "]") { coord ->
+                                "[${coord[0]},${coord[1]}]"
+                            }
+
+                            // Save to database
+                            val updatedTrip = trip.copy(matchedRouteCoordinates = jsonCoords)
+                            tripRepository.saveTrip(updatedTrip)
+
+                            // Update local state to trigger recomposition
+                            trips = trips.map { t ->
+                                if (t.id == trip.id) updatedTrip else t
+                            }
+                        }
+
+                        // Small delay between requests to be nice to OSRM servers
+                        kotlinx.coroutines.delay(500)
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w(
+                            "Failed background map-match for trip ${trip.id}: ${e.message}",
+                            "CalendarScreen"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // Calculate calendar days with trips
     val calendarDays = remember(currentCalendar, trips) {
         generateCalendarDays(currentCalendar, trips)
@@ -137,6 +200,7 @@ fun CalendarScreen(
         } ?: emptyList()
     }
 
+    // Bottom navigation is now handled at app-level in MainActivity
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -152,43 +216,6 @@ fun CalendarScreen(
                     containerColor = MaterialTheme.colorScheme.background
                 )
             )
-        },
-        bottomBar = {
-            if (isPro) {
-                ProBottomNavigation(
-                    currentRoute = "pro_calendar",
-                    onNavigate = { route ->
-                        when (route) {
-                            "pro_home" -> onNavigateToHome()
-                            "pro_calendar" -> { /* Already on calendar */ }
-                            "pro_vehicles" -> onNavigateToVehicles()
-                            "pro_export" -> onNavigateToExport()
-                            "pro_settings" -> onNavigateToSettings()
-                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
-                            "pro_licenses" -> onNavigateToLicenses()
-                            "pro_export_advanced" -> onNavigateToExportAdvanced()
-                        }
-                    },
-                    isDarkMode = isDarkMode
-                )
-            } else {
-                MotiumBottomNavigation(
-                    currentRoute = "calendar",
-                    isPremium = isPremium,
-                    onNavigate = { route ->
-                        when (route) {
-                            "home" -> onNavigateToHome()
-                            "vehicles" -> onNavigateToVehicles()
-                            "export" -> onNavigateToExport()
-                            "settings" -> onNavigateToSettings()
-                        }
-                    },
-                    onPremiumFeatureClick = {
-                        showPremiumDialog = true
-                    },
-                    isDarkMode = isDarkMode
-                )
-            }
         }
     ) { paddingValues ->
         LazyColumn(
@@ -515,8 +542,22 @@ fun CalendarTripCard(
 ) {
     val startLocation = trip.locations.firstOrNull()
     val endLocation = trip.locations.lastOrNull()
-    val startTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.startTime))
-    val endTimeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date(trip.endTime ?: System.currentTimeMillis()))
+    val context = LocalContext.current
+    val is24Hour = android.text.format.DateFormat.is24HourFormat(context)
+    val timePattern = if (is24Hour) "HH:mm" else "hh:mm a"
+    val startTimeStr = SimpleDateFormat(timePattern, Locale.getDefault()).format(Date(trip.startTime))
+    val endTimeStr = SimpleDateFormat(timePattern, Locale.getDefault()).format(Date(trip.endTime ?: System.currentTimeMillis()))
+
+    // Use cached map-matched coordinates if available, otherwise fallback to raw GPS
+    val routeCoordinates = remember(trip.matchedRouteCoordinates, trip.locations) {
+        trip.matchedRouteCoordinates?.let { cached ->
+            try {
+                kotlinx.serialization.json.Json.decodeFromString<List<List<Double>>>(cached)
+            } catch (e: Exception) {
+                null
+            }
+        } ?: trip.locations.map { listOf(it.longitude, it.latitude) }
+    }
 
     Card(
         modifier = Modifier
@@ -545,8 +586,9 @@ fun CalendarTripCard(
                         startLongitude = startLocation.longitude,
                         endLatitude = endLocation.latitude,
                         endLongitude = endLocation.longitude,
-                        routeCoordinates = trip.locations.map { listOf(it.longitude, it.latitude) },
-                        modifier = Modifier.fillMaxSize()
+                        routeCoordinates = routeCoordinates,
+                        modifier = Modifier.fillMaxSize(),
+                        isCompact = true
                     )
                 } else {
                     Icon(
@@ -1221,6 +1263,23 @@ fun TimeSlotRow(
     onTimeChanged: (TimeSlot) -> Unit
 ) {
     var showEditDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val is24Hour = android.text.format.DateFormat.is24HourFormat(context)
+
+    // Helper function to format time based on user's locale preference
+    fun formatTime(hour: Int, minute: Int): String {
+        return if (is24Hour) {
+            String.format("%02d:%02d", hour, minute)
+        } else {
+            val displayHour = when {
+                hour == 0 -> 12
+                hour > 12 -> hour - 12
+                else -> hour
+            }
+            val amPm = if (hour < 12) "AM" else "PM"
+            String.format("%02d:%02d %s", displayHour, minute, amPm)
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1238,15 +1297,7 @@ fun TimeSlotRow(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             ) {
                 Text(
-                    text = if (timeSlot.startHour < 12) {
-                        String.format("%02d:%02d AM",
-                            if (timeSlot.startHour == 0) 12 else timeSlot.startHour,
-                            timeSlot.startMinute)
-                    } else {
-                        String.format("%02d:%02d PM",
-                            if (timeSlot.startHour == 12) 12 else timeSlot.startHour - 12,
-                            timeSlot.startMinute)
-                    },
+                    text = formatTime(timeSlot.startHour, timeSlot.startMinute),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -1260,15 +1311,7 @@ fun TimeSlotRow(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             ) {
                 Text(
-                    text = if (timeSlot.endHour < 12) {
-                        String.format("%02d:%02d AM",
-                            if (timeSlot.endHour == 0) 12 else timeSlot.endHour,
-                            timeSlot.endMinute)
-                    } else {
-                        String.format("%02d:%02d PM",
-                            if (timeSlot.endHour == 12) 12 else timeSlot.endHour - 12,
-                            timeSlot.endMinute)
-                    },
+                    text = formatTime(timeSlot.endHour, timeSlot.endMinute),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodyMedium
                 )

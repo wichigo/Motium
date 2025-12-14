@@ -2,10 +2,10 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
-import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
@@ -22,6 +22,7 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
     private val json = Json { ignoreUnknownKeys = true }
+    private val localUserRepository = LocalUserRepository.getInstance(context)
     private val secureSessionStorage = SecureSessionStorage(context)
 
     companion object {
@@ -36,11 +37,13 @@ class SupabaseExpenseRepository private constructor(private val context: Context
     }
 
     /**
-     * Get the current user ID from auth or secure storage.
+     * Get the current user ID from local user repository or secure storage.
+     * FIX RLS: Uses users.id (from localUserRepository) instead of auth.uid()
+     * because expenses_trips.user_id must match users.id for RLS policies.
      */
     private suspend fun getCurrentUserId(): String? {
-        // Try from Supabase auth first
-        client.auth.currentUserOrNull()?.id?.let { return it }
+        // Try from local user repository first (returns users.id, not auth.uid())
+        localUserRepository.getLoggedInUser()?.id?.let { return it }
         // Fallback to secure session storage
         return secureSessionStorage.restoreSession()?.userId
     }

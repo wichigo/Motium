@@ -74,6 +74,8 @@ class TripDaoTest {
             endAddress = "Tour Eiffel, Paris",
             notes = "Test trip",
             tripType = tripType,
+            reimbursementAmount = null,
+            isWorkHomeTrip = false,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis(),
             lastSyncedAt = lastSyncedAt,

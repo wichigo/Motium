@@ -27,6 +27,26 @@ class SecureSessionManager(context: Context) : SessionManager {
     override suspend fun loadSession(): UserSession? {
         return withContext(Dispatchers.IO) {
             try {
+                // Check if JWT migration is needed (HS256 -> ES256)
+                if (secureStorage.needsJwtMigration()) {
+                    MotiumApplication.logger.w(
+                        "SecureSessionManager: JWT migration detected (HS256 -> ES256). " +
+                        "Forcing token refresh on next request.",
+                        "SecureSessionManager"
+                    )
+                    // Return session with expired time to force refresh
+                    val savedSession = secureStorage.restoreSession()
+                    if (savedSession != null) {
+                        return@withContext UserSession(
+                            accessToken = savedSession.accessToken,
+                            refreshToken = savedSession.refreshToken,
+                            expiresIn = -1, // Force refresh by marking as expired
+                            tokenType = savedSession.tokenType,
+                            user = null
+                        )
+                    }
+                }
+
                 val savedSession = secureStorage.restoreSession()
 
                 if (savedSession != null) {
@@ -111,6 +131,12 @@ class SecureSessionManager(context: Context) : SessionManager {
                 )
 
                 secureStorage.saveSession(sessionData)
+
+                // Mark JWT migration as complete if it was pending
+                // This means we successfully got a new ES256 signed token
+                if (secureStorage.getStoredJwtVersion() < 2) {
+                    secureStorage.markJwtMigrationComplete()
+                }
 
                 MotiumApplication.logger.i(
                     "SecureSessionManager: Session saved successfully (user: $finalUserId, email: $finalUserEmail)",

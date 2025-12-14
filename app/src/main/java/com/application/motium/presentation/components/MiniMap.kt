@@ -1,12 +1,21 @@
 package com.application.motium.presentation.components
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -17,7 +26,6 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.Marker
-import android.util.Log
 
 @Composable
 fun MiniMap(
@@ -29,13 +37,61 @@ fun MiniMap(
     modifier: Modifier = Modifier,
     isCompact: Boolean = false  // For small maps (e.g., 83dp on Home screen)
 ) {
-    // Stroke width adapts to map size: thinner for compact views
-    val strokeWidth = if (isCompact) 4f else 8f
+    // For compact maps in lists, use a lightweight Canvas-based route preview
+    // This avoids creating heavy MapView instances during scrolling
+    if (isCompact && startLatitude != null && startLongitude != null) {
+        CompactRoutePreview(
+            routeCoordinates = routeCoordinates,
+            startLat = startLatitude,
+            startLon = startLongitude,
+            endLat = endLatitude,
+            endLon = endLongitude,
+            modifier = modifier
+        )
+        return
+    }
+
+    // Full MapView for detail screens
+    val strokeWidth = 8f
+    val boundingBoxPadding = 30
     val context = LocalContext.current
 
     // Configure OSMDroid
     LaunchedEffect(Unit) {
         Configuration.getInstance().userAgentValue = "Motium/1.0"
+    }
+
+    // Helper function to calculate bounding box from coordinates
+    fun calculateBoundingBox(
+        coords: List<List<Double>>?,
+        fallbackStartLat: Double,
+        fallbackStartLon: Double,
+        fallbackEndLat: Double?,
+        fallbackEndLon: Double?
+    ): org.osmdroid.util.BoundingBox {
+        val allLats = mutableListOf<Double>()
+        val allLons = mutableListOf<Double>()
+
+        coords?.forEach { coord ->
+            if (coord.size >= 2) {
+                allLats.add(coord[1])
+                allLons.add(coord[0])
+            }
+        }
+
+        allLats.add(fallbackStartLat)
+        allLons.add(fallbackStartLon)
+        if (fallbackEndLat != null && fallbackEndLon != null) {
+            allLats.add(fallbackEndLat)
+            allLons.add(fallbackEndLon)
+        }
+
+        val minLat = allLats.minOrNull()!!
+        val maxLat = allLats.maxOrNull()!!
+        val minLon = allLons.minOrNull()!!
+        val maxLon = allLons.maxOrNull()!!
+
+        return org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon)
     }
 
     Card(
@@ -49,248 +105,98 @@ fun MiniMap(
                 factory = { context ->
                     MapView(context).apply {
                         setTileSource(TileSourceFactory.MAPNIK)
-                        setMultiTouchControls(true)
+                        setMultiTouchControls(false)
+                        minZoomLevel = 5.0
+                        maxZoomLevel = 19.0
 
-                        // MAP FIX: Contraintes de zoom élargies pour supporter les gros trajets
-                        // Zoom 8 = ~160km, Zoom 10 = ~40km, Zoom 13 = ~5km, Zoom 18 = ~150m
-                        minZoomLevel = 8.0  // Permet de voir des trajets jusqu'à ~100km
-                        maxZoomLevel = 18.0
-
-                        // Centre la carte sur le point de départ (temporaire)
                         val startPoint = GeoPoint(startLatitude, startLongitude)
                         controller.setCenter(startPoint)
+                        controller.setZoom(14.0)
 
-                        // Utiliser post() pour s'assurer que la vue est prête avant d'appliquer le zoom
-                        post {
-                            // Ajuster la vue selon les données disponibles
-                            if (endLatitude != null && endLongitude != null) {
-                                // Si on a des coordonnées de route, utiliser celles-ci pour le bounding box
-                                if (!routeCoordinates.isNullOrEmpty()) {
-                                    Log.d("MiniMap", "Factory: Centrage sur route avec ${routeCoordinates.size} points")
-
-                                    val allLats = routeCoordinates.mapNotNull { coord ->
-                                        if (coord.size >= 2) coord[1] else null
-                                    }
-                                    val allLons = routeCoordinates.mapNotNull { coord ->
-                                        if (coord.size >= 2) coord[0] else null
-                                    }
-
-                                    if (allLats.isNotEmpty() && allLons.isNotEmpty()) {
-                                        // MAP FIX: Marges dynamiques proportionnelles pour afficher tout l'itinéraire
-                                        val rawMinLat = allLats.minOrNull()!!
-                                        val rawMaxLat = allLats.maxOrNull()!!
-                                        val rawMinLon = allLons.minOrNull()!!
-                                        val rawMaxLon = allLons.maxOrNull()!!
-
-                                        // Calculer l'étendue du trajet
-                                        val latSpan = rawMaxLat - rawMinLat
-                                        val lonSpan = rawMaxLon - rawMinLon
-
-                                        // Marge = 15% de l'étendue, min 0.002, max 0.05
-                                        val latMargin = (latSpan * 0.15).coerceIn(0.002, 0.05)
-                                        val lonMargin = (lonSpan * 0.15).coerceIn(0.002, 0.05)
-
-                                        val minLat = rawMinLat - latMargin
-                                        val maxLat = rawMaxLat + latMargin
-                                        val minLon = rawMinLon - lonMargin
-                                        val maxLon = rawMaxLon + lonMargin
-
-                                        Log.d("MiniMap", "Factory: Bounding box route: [$minLat, $minLon] -> [$maxLat, $maxLon] (margins: lat=$latMargin, lon=$lonMargin)")
-
-                                        zoomToBoundingBox(
-                                            org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon),
-                                            false
-                                        )
-                                    } else {
-                                        Log.d("MiniMap", "Factory: Coordonnées route invalides, utilisation start/end")
-                                        // Fallback sur start/end si les coordonnées route sont invalides
-                                        val minLat = minOf(startLatitude, endLatitude) - 0.005
-                                        val maxLat = maxOf(startLatitude, endLatitude) + 0.005
-                                        val minLon = minOf(startLongitude, endLongitude) - 0.005
-                                        val maxLon = maxOf(startLongitude, endLongitude) + 0.005
-
-                                        zoomToBoundingBox(
-                                            org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon),
-                                            false
-                                        )
-                                    }
-                                } else {
-                                    Log.d("MiniMap", "Factory: Pas de route, centrage sur start/end")
-                                    // Pas de route, utiliser start/end
-                                    val minLat = minOf(startLatitude, endLatitude) - 0.005
-                                    val maxLat = maxOf(startLatitude, endLatitude) + 0.005
-                                    val minLon = minOf(startLongitude, endLongitude) - 0.005
-                                    val maxLon = maxOf(startLongitude, endLongitude) + 0.005
-
-                                    zoomToBoundingBox(
-                                        org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon),
-                                        false
-                                    )
-                                }
-                            } else {
-                                Log.d("MiniMap", "Factory: Pas de destination, zoom par défaut sur départ")
-                                controller.setZoom(15.0)
-                            }
-                        }
-
-                        // Ajouter des markers pour départ et arrivée
                         if (endLatitude != null && endLongitude != null) {
-                            // Marker de départ (vert)
                             val startMarker = Marker(this).apply {
                                 position = GeoPoint(startLatitude, startLongitude)
-                                title = "Départ"
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                 icon = resources.getDrawable(android.R.drawable.presence_online, null)
                             }
                             overlays.add(startMarker)
 
-                            // Marker d'arrivée (rouge)
                             val endMarker = Marker(this).apply {
                                 position = GeoPoint(endLatitude, endLongitude)
-                                title = "Arrivée"
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                 icon = resources.getDrawable(android.R.drawable.presence_busy, null)
                             }
                             overlays.add(endMarker)
                         }
 
-                        // Afficher l'itinéraire si disponible
                         if (!routeCoordinates.isNullOrEmpty()) {
-                            Log.d("MiniMap", "Affichage route avec ${routeCoordinates.size} points (strokeWidth=$strokeWidth)")
-
                             val polyline = Polyline().apply {
                                 outlinePaint.color = Color.Blue.toArgb()
                                 outlinePaint.strokeWidth = strokeWidth
                             }
-
                             routeCoordinates.forEach { coord ->
                                 if (coord.size >= 2) {
-                                    val point = GeoPoint(coord[1], coord[0]) // lat, lon
-                                    polyline.addPoint(point)
-                                    Log.d("MiniMap", "Point route: ${coord[1]}, ${coord[0]}")
+                                    polyline.addPoint(GeoPoint(coord[1], coord[0]))
                                 }
                             }
-
                             overlays.add(polyline)
-                            Log.d("MiniMap", "Route ajoutée avec ${routeCoordinates.size} points")
-                        } else {
-                            Log.d("MiniMap", "Pas de coordonnées de route disponibles")
+                        }
+
+                        post {
+                            val boundingBox = calculateBoundingBox(
+                                routeCoordinates,
+                                startLatitude,
+                                startLongitude,
+                                endLatitude,
+                                endLongitude
+                            )
+                            zoomToBoundingBox(boundingBox, false, boundingBoxPadding)
                         }
                     }
                 },
                 update = { mapView ->
-                    Log.d("MiniMap", "Map update called - routeCoordinates: ${routeCoordinates?.size} points")
-
-                    // Effacer les anciens overlays
                     mapView.overlays.clear()
 
-                    // Recentrer la carte selon les données disponibles
-                    if (startLatitude != null && startLongitude != null && endLatitude != null && endLongitude != null) {
-                        // Si on a des coordonnées de route, utiliser celles-ci pour le bounding box
-                        if (!routeCoordinates.isNullOrEmpty()) {
-                            Log.d("MiniMap", "Update: Centrage sur route avec ${routeCoordinates.size} points")
-
-                            val allLats = routeCoordinates.mapNotNull { coord ->
-                                if (coord.size >= 2) coord[1] else null
-                            }
-                            val allLons = routeCoordinates.mapNotNull { coord ->
-                                if (coord.size >= 2) coord[0] else null
-                            }
-
-                            if (allLats.isNotEmpty() && allLons.isNotEmpty()) {
-                                // MAP FIX: Marges dynamiques proportionnelles pour afficher tout l'itinéraire
-                                val rawMinLat = allLats.minOrNull()!!
-                                val rawMaxLat = allLats.maxOrNull()!!
-                                val rawMinLon = allLons.minOrNull()!!
-                                val rawMaxLon = allLons.maxOrNull()!!
-
-                                // Calculer l'étendue du trajet
-                                val latSpan = rawMaxLat - rawMinLat
-                                val lonSpan = rawMaxLon - rawMinLon
-
-                                // Marge = 15% de l'étendue, min 0.002, max 0.05
-                                val latMargin = (latSpan * 0.15).coerceIn(0.002, 0.05)
-                                val lonMargin = (lonSpan * 0.15).coerceIn(0.002, 0.05)
-
-                                val minLat = rawMinLat - latMargin
-                                val maxLat = rawMaxLat + latMargin
-                                val minLon = rawMinLon - lonMargin
-                                val maxLon = rawMaxLon + lonMargin
-
-                                Log.d("MiniMap", "Update: Bounding box route: [$minLat, $minLon] -> [$maxLat, $maxLon] (margins: lat=$latMargin, lon=$lonMargin)")
-
-                                mapView.zoomToBoundingBox(
-                                    org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon),
-                                    false
-                                )
-                            } else {
-                                Log.d("MiniMap", "Update: Coordonnées route invalides, utilisation start/end")
-                                // Fallback sur start/end si les coordonnées route sont invalides
-                                val minLat = minOf(startLatitude, endLatitude) - 0.005
-                                val maxLat = maxOf(startLatitude, endLatitude) + 0.005
-                                val minLon = minOf(startLongitude, endLongitude) - 0.005
-                                val maxLon = maxOf(startLongitude, endLongitude) + 0.005
-
-                                mapView.zoomToBoundingBox(
-                                    org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon),
-                                    false
-                                )
-                            }
-                        } else {
-                            Log.d("MiniMap", "Update: Pas de route, centrage sur start/end")
-                            // Pas de route, utiliser start/end
-                            val minLat = minOf(startLatitude, endLatitude) - 0.005
-                            val maxLat = maxOf(startLatitude, endLatitude) + 0.005
-                            val minLon = minOf(startLongitude, endLongitude) - 0.005
-                            val maxLon = maxOf(startLongitude, endLongitude) + 0.005
-
-                            mapView.zoomToBoundingBox(
-                                org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon),
-                                false
-                            )
+                    if (endLatitude != null && endLongitude != null) {
+                        val startMarker = Marker(mapView).apply {
+                            position = GeoPoint(startLatitude, startLongitude)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            icon = mapView.context.resources.getDrawable(android.R.drawable.presence_online, null)
                         }
+                        mapView.overlays.add(startMarker)
+
+                        val endMarker = Marker(mapView).apply {
+                            position = GeoPoint(endLatitude, endLongitude)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            icon = mapView.context.resources.getDrawable(android.R.drawable.presence_busy, null)
+                        }
+                        mapView.overlays.add(endMarker)
                     }
 
-                    // Ajouter les markers si on a les coordonnées
-                    if (startLatitude != null && startLongitude != null) {
-                        if (endLatitude != null && endLongitude != null) {
-                            // Marker de départ
-                            val startMarker = Marker(mapView).apply {
-                                position = GeoPoint(startLatitude, startLongitude)
-                                title = "Départ"
-                                icon = mapView.context.resources.getDrawable(android.R.drawable.presence_online, null)
-                            }
-                            mapView.overlays.add(startMarker)
-
-                            // Marker d'arrivée
-                            val endMarker = Marker(mapView).apply {
-                                position = GeoPoint(endLatitude, endLongitude)
-                                title = "Arrivée"
-                                icon = mapView.context.resources.getDrawable(android.R.drawable.presence_busy, null)
-                            }
-                            mapView.overlays.add(endMarker)
-                        }
-                    }
-
-                    // Ajouter la route si disponible
-                    if (routeCoordinates != null && routeCoordinates.isNotEmpty()) {
-                        Log.d("MiniMap", "Update: Ajout route avec ${routeCoordinates.size} points (strokeWidth=$strokeWidth)")
-
+                    if (!routeCoordinates.isNullOrEmpty()) {
                         val polyline = Polyline().apply {
                             outlinePaint.color = Color.Blue.toArgb()
                             outlinePaint.strokeWidth = strokeWidth
                         }
-
                         routeCoordinates.forEach { coord ->
                             if (coord.size >= 2) {
-                                val point = GeoPoint(coord[1], coord[0]) // lat, lon
-                                polyline.addPoint(point)
+                                polyline.addPoint(GeoPoint(coord[1], coord[0]))
                             }
                         }
-
                         mapView.overlays.add(polyline)
-                        Log.d("MiniMap", "Update: Route ajoutée avec ${routeCoordinates.size} points")
                     }
 
-                    mapView.invalidate()
+                    mapView.post {
+                        val boundingBox = calculateBoundingBox(
+                            routeCoordinates,
+                            startLatitude,
+                            startLongitude,
+                            endLatitude,
+                            endLongitude
+                        )
+                        mapView.zoomToBoundingBox(boundingBox, false, boundingBoxPadding)
+                        mapView.invalidate()
+                    }
                 }
             )
         } else {
@@ -316,6 +222,135 @@ fun MiniMap(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Lightweight Canvas-based route preview for compact maps in scrolling lists.
+ * Much faster than MapView as it doesn't load map tiles or create heavy Android views.
+ */
+@Composable
+private fun CompactRoutePreview(
+    routeCoordinates: List<List<Double>>?,
+    startLat: Double,
+    startLon: Double,
+    endLat: Double?,
+    endLon: Double?,
+    modifier: Modifier = Modifier
+) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val startColor = Color(0xFF4CAF50) // Green for start
+    val endColor = Color(0xFFF44336) // Red for end
+
+    // Collect all points for bounds calculation
+    val allPoints = remember(routeCoordinates, startLat, startLon, endLat, endLon) {
+        val points = mutableListOf<Pair<Double, Double>>()
+
+        // Add route coordinates if available
+        routeCoordinates?.forEach { coord ->
+            if (coord.size >= 2) {
+                points.add(Pair(coord[0], coord[1])) // lon, lat
+            }
+        }
+
+        // If no route, use start/end points
+        if (points.isEmpty()) {
+            points.add(Pair(startLon, startLat))
+            if (endLat != null && endLon != null) {
+                points.add(Pair(endLon, endLat))
+            }
+        }
+
+        points
+    }
+
+    if (allPoints.size < 2) {
+        // Single point - show a marker icon
+        Box(
+            modifier = modifier,
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.LocationOn,
+                contentDescription = null,
+                tint = primaryColor,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    } else {
+        // Draw the route path directly on Canvas
+        Canvas(modifier = modifier.padding(6.dp)) {
+            // Calculate bounds
+            val minLon = allPoints.minOf { it.first }
+            val maxLon = allPoints.maxOf { it.first }
+            val minLat = allPoints.minOf { it.second }
+            val maxLat = allPoints.maxOf { it.second }
+
+            val lonRange = maxLon - minLon
+            val latRange = maxLat - minLat
+
+            // Add padding to bounds (15%)
+            val paddingFactor = 0.15
+            val adjustedMinLon = minLon - lonRange * paddingFactor
+            val adjustedMaxLon = maxLon + lonRange * paddingFactor
+            val adjustedMinLat = minLat - latRange * paddingFactor
+            val adjustedMaxLat = maxLat + latRange * paddingFactor
+            val adjustedLonRange = adjustedMaxLon - adjustedMinLon
+            val adjustedLatRange = adjustedMaxLat - adjustedMinLat
+
+            // Function to convert geo coords to canvas coords
+            fun geoToCanvas(lon: Double, lat: Double): Offset {
+                val x = if (adjustedLonRange > 0) {
+                    ((lon - adjustedMinLon) / adjustedLonRange * size.width).toFloat()
+                } else {
+                    size.width / 2
+                }
+                // Invert Y because canvas Y increases downward, but latitude increases upward
+                val y = if (adjustedLatRange > 0) {
+                    ((adjustedMaxLat - lat) / adjustedLatRange * size.height).toFloat()
+                } else {
+                    size.height / 2
+                }
+                return Offset(x, y)
+            }
+
+            // Draw the route path
+            val path = Path()
+            allPoints.forEachIndexed { index, point ->
+                val canvasPoint = geoToCanvas(point.first, point.second)
+                if (index == 0) {
+                    path.moveTo(canvasPoint.x, canvasPoint.y)
+                } else {
+                    path.lineTo(canvasPoint.x, canvasPoint.y)
+                }
+            }
+
+            drawPath(
+                path = path,
+                color = primaryColor,
+                style = Stroke(
+                    width = 3.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+
+            // Draw start marker (green circle)
+            val startPoint = geoToCanvas(allPoints.first().first, allPoints.first().second)
+            drawCircle(
+                color = startColor,
+                radius = 4.dp.toPx(),
+                center = startPoint
+            )
+
+            // Draw end marker (red circle)
+            val endPoint = geoToCanvas(allPoints.last().first, allPoints.last().second)
+            drawCircle(
+                color = endColor,
+                radius = 4.dp.toPx(),
+                center = endPoint
+            )
         }
     }
 }

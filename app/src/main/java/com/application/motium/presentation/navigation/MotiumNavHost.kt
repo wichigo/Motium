@@ -545,7 +545,16 @@ fun MotiumNavHost(
                 onNavigateToAccountDetails = { accountId ->
                     navController.navigate("pro_account_details/$accountId")
                 },
+                onNavigateToInvitePerson = { navController.navigate("pro_invite_person") },
                 authViewModel = authViewModel
+            )
+        }
+
+        // Invite Person Screen
+        composable("pro_invite_person") {
+            com.application.motium.presentation.pro.accounts.InvitePersonScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onInviteSuccess = { navController.popBackStack() }
             )
         }
 
@@ -557,7 +566,25 @@ fun MotiumNavHost(
             com.application.motium.presentation.pro.accounts.AccountDetailsScreen(
                 accountId = accountId,
                 onNavigateBack = { navController.popBackStack() },
+                onNavigateToUserTrips = { userId ->
+                    navController.navigate("pro_user_trips/$userId")
+                },
                 authViewModel = authViewModel
+            )
+        }
+
+        // Linked User Trips Screen - View trips for a specific linked user
+        composable(
+            route = "pro_user_trips/{userId}",
+            arguments = listOf(navArgument("userId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+            com.application.motium.presentation.pro.accounts.LinkedUserTripsScreen(
+                userId = userId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToTripDetails = { tripId ->
+                    navController.navigate("pro_trip_details/$tripId")
+                }
             )
         }
 

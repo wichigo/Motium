@@ -156,15 +156,51 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     /**
      * SÉCURITÉ: Rafraîchit la session de manière sûre sans race condition.
      * Cette fonction s'exécute dans le sessionMutex lock.
+     *
+     * Si le refresh échoue (ex: migration JWT HS256 -> ES256), tente une reconnexion silencieuse.
      */
     private suspend fun refreshSessionSafe() {
         val refreshToken = secureSessionStorage.getRefreshToken()
         if (refreshToken != null) {
-            MotiumApplication.logger.i("🔄 Refreshing session safely...", "SupabaseAuth")
-            auth.refreshSession(refreshToken)
-            saveCurrentSessionSecurely()
-            syncUserProfileFromSupabase()
-            MotiumApplication.logger.i("✅ Session refreshed successfully", "SupabaseAuth")
+            try {
+                MotiumApplication.logger.i("🔄 Refreshing session safely...", "SupabaseAuth")
+                auth.refreshSession(refreshToken)
+                saveCurrentSessionSecurely()
+                syncUserProfileFromSupabase()
+                MotiumApplication.logger.i("✅ Session refreshed successfully", "SupabaseAuth")
+            } catch (e: Exception) {
+                // Refresh failed - could be due to JWT migration (HS256 -> ES256)
+                MotiumApplication.logger.w(
+                    "⚠️ Session refresh failed: ${e.message}. Attempting silent re-authentication...",
+                    "SupabaseAuth"
+                )
+
+                // Check if this might be a JWT migration issue
+                if (secureSessionStorage.needsJwtMigration()) {
+                    MotiumApplication.logger.w(
+                        "🔄 JWT migration detected (HS256 -> ES256). Old tokens are invalid.",
+                        "SupabaseAuth"
+                    )
+                }
+
+                // Try silent re-authentication with stored credentials
+                val reAuthSuccess = trySilentReAuthentication()
+
+                if (!reAuthSuccess) {
+                    // Silent re-auth failed - clean up and force re-login
+                    MotiumApplication.logger.e(
+                        "❌ Silent re-authentication failed. User must log in again.",
+                        "SupabaseAuth"
+                    )
+                    secureSessionStorage.invalidateSessionForMigration()
+                    localUserRepository.logoutUser()
+                    _authState.value = AuthState(
+                        isAuthenticated = false,
+                        isLoading = false,
+                        error = "Session expirée. Veuillez vous reconnecter."
+                    )
+                }
+            }
         }
     }
 

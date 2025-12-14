@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -16,15 +17,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.lifecycleScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
+import com.application.motium.presentation.components.MotiumBottomNavigation
+import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.navigation.MotiumNavHost
 import com.application.motium.presentation.theme.MotiumTheme
 import com.application.motium.utils.DeepLinkHandler
@@ -177,10 +183,60 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Routes that should NOT show bottom navigation
+private val noNavigationRoutes = setOf("splash", "login", "register", "log_viewer")
+
+// Routes that use Pro navigation (enterprise users)
+private val proRoutes = setOf(
+    "enterprise_home", "pro_home", "pro_calendar", "pro_vehicles", "pro_export", "pro_settings",
+    "pro_linked_accounts", "pro_licenses", "pro_export_advanced",
+    "pro_trip_details", "pro_edit_trip", "pro_add_trip", "pro_add_expense", "pro_expense_details",
+    "pro_account_details", "pro_invite_person", "pro_user_trips"
+)
+
+// Map from current route to the navigation route name for highlighting
+private fun getNavRouteForHighlight(currentRoute: String?): String {
+    if (currentRoute == null) return ""
+
+    // Handle parameterized routes - extract base route
+    val baseRoute = currentRoute.substringBefore("/")
+
+    return when {
+        // Pro routes
+        baseRoute in setOf("enterprise_home", "pro_home") -> "pro_home"
+        baseRoute == "pro_calendar" -> "pro_calendar"
+        baseRoute in setOf("pro_vehicles") -> "pro_vehicles"
+        baseRoute == "pro_export" -> "pro_export"
+        baseRoute == "pro_settings" -> "pro_settings"
+        baseRoute == "pro_linked_accounts" -> "pro_linked_accounts"
+        baseRoute == "pro_licenses" -> "pro_licenses"
+        baseRoute == "pro_export_advanced" -> "pro_export_advanced"
+        // Pro detail screens - highlight parent nav item
+        baseRoute in setOf("pro_trip_details", "pro_edit_trip", "pro_add_trip") -> "pro_home"
+        baseRoute in setOf("pro_add_expense", "pro_expense_details") -> "pro_home"
+        baseRoute in setOf("pro_account_details", "pro_invite_person", "pro_user_trips") -> "pro_linked_accounts"
+
+        // Individual routes
+        baseRoute == "home" -> "home"
+        baseRoute in setOf("calendar", "calendar_planning") -> "calendar"
+        baseRoute == "vehicles" -> "vehicles"
+        baseRoute == "export" -> "export"
+        baseRoute == "settings" -> "settings"
+        // Individual detail screens - highlight home
+        baseRoute in setOf("trip_details", "edit_trip", "add_trip") -> "home"
+        baseRoute in setOf("add_expense", "expense_details", "edit_expense") -> "home"
+
+        else -> baseRoute
+    }
+}
+
 @Composable
 fun MotiumApp() {
     val navController = rememberNavController()
     val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
+
     val authViewModel: AuthViewModel = viewModel {
         AuthViewModel(
             context = context,
@@ -188,11 +244,73 @@ fun MotiumApp() {
         )
     }
 
-    MotiumNavHost(
-        navController = navController,
-        modifier = Modifier.fillMaxSize(),
-        authViewModel = authViewModel
-    )
+    // Track current route
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val baseRoute = currentRoute?.substringBefore("/")
+
+    // Determine if we should show navigation
+    val shouldShowNavigation = baseRoute != null && baseRoute !in noNavigationRoutes
+
+    // Determine if this is a Pro route (for choosing which navigation to show)
+    val isProRoute = baseRoute != null && (baseRoute.startsWith("pro_") || baseRoute == "enterprise_home")
+
+    // Get the route for nav highlighting
+    val navHighlightRoute = getNavRouteForHighlight(currentRoute)
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        MotiumNavHost(
+            navController = navController,
+            modifier = Modifier.fillMaxSize(),
+            authViewModel = authViewModel
+        )
+
+        // App-level bottom navigation - always visible on appropriate screens
+        if (shouldShowNavigation) {
+            Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                if (isProRoute) {
+                    ProBottomNavigation(
+                        currentRoute = navHighlightRoute,
+                        onNavigate = { route ->
+                            // Navigate only if different from current
+                            if (route != navHighlightRoute) {
+                                navController.navigate(route) {
+                                    // Pop up to the start destination of the graph to
+                                    // avoid building up a large stack of destinations
+                                    popUpTo("enterprise_home") {
+                                        saveState = true
+                                    }
+                                    // Avoid multiple copies of the same destination
+                                    launchSingleTop = true
+                                    // Restore state when reselecting a previously selected item
+                                    restoreState = true
+                                }
+                            }
+                        },
+                        isDarkMode = isDarkMode
+                    )
+                } else {
+                    MotiumBottomNavigation(
+                        currentRoute = navHighlightRoute,
+                        onNavigate = { route ->
+                            // Navigate only if different from current
+                            if (route != navHighlightRoute) {
+                                navController.navigate(route) {
+                                    // Pop up to home to avoid building up a large stack
+                                    popUpTo("home") {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        },
+                        isDarkMode = isDarkMode
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Preview(showBackground = true)

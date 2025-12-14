@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.CompanyLinkRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
@@ -18,7 +19,8 @@ import kotlinx.coroutines.launch
 class CompanyLinkViewModel(
     private val context: Context,
     private val companyLinkRepository: CompanyLinkRepository = CompanyLinkRepository.getInstance(context),
-    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context)
+    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context),
+    private val localUserRepository: LocalUserRepository = LocalUserRepository.getInstance(context)
 ) : ViewModel() {
 
     companion object {
@@ -49,9 +51,23 @@ class CompanyLinkViewModel(
     private fun observeAuthAndLoadLinks() {
         viewModelScope.launch {
             authRepository.authState.collect { authState ->
-                val userId = authState.user?.id
+                // Les utilisateurs Pro (ENTERPRISE) n'ont pas de company links
+                // Ils SONT l'entreprise qui crée les liens avec les utilisateurs individuels
+                val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
+                if (isEnterprise) {
+                    MotiumApplication.logger.d("Skipping company links load for ENTERPRISE user", TAG)
+                    _uiState.update { it.copy(companyLinks = emptyList(), isLoading = false) }
+                    return@collect
+                }
+
+                // Utiliser localUserRepository pour obtenir le bon users.id (compatible RLS)
+                val userId = if (authState.user != null && authState.isAuthenticated) {
+                    localUserRepository.getLoggedInUser()?.id
+                } else {
+                    null
+                }
                 currentUserId = userId
-                if (userId != null && authState.isAuthenticated) {
+                if (userId != null) {
                     loadCompanyLinks(userId)
                 } else {
                     _uiState.update { it.copy(companyLinks = emptyList(), isLoading = false) }

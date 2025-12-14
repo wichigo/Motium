@@ -1,6 +1,7 @@
 package com.application.motium.presentation.individual.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -22,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -31,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.ProAccountDto
 import com.application.motium.data.supabase.ProAccountRepository
+import com.application.motium.data.supabase.ProSettingsRepository
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LegalForm
@@ -42,11 +45,10 @@ import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.CompanyLinkCard
 import com.application.motium.presentation.components.LinkActivationDialog
 import com.application.motium.presentation.components.LinkActivationSuccessDialog
-import com.application.motium.presentation.components.MotiumBottomNavigation
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.NoCompanyLinksCard
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.components.UnlinkConfirmationDialog
+import com.application.motium.presentation.components.UpgradeDialog
 import com.application.motium.presentation.settings.CompanyLinkViewModel
 import com.application.motium.presentation.settings.LinkActivationResult
 import com.application.motium.presentation.theme.*
@@ -82,6 +84,7 @@ fun SettingsScreen(
     onNavigateToExportAdvanced: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val themeManager = remember { ThemeManager.getInstance(context) }
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
@@ -116,6 +119,10 @@ fun SettingsScreen(
 
     // Premium dialog state
     var showPremiumDialog by remember { mutableStateOf(false) }
+
+    // Upgrade dialog state (for Stripe subscription)
+    var showUpgradeDialog by remember { mutableStateOf(false) }
+    var isPaymentLoading by remember { mutableStateOf(false) }
 
     // Edit Profile dialog state
     var showEditProfileDialog by remember { mutableStateOf(false) }
@@ -178,10 +185,16 @@ fun SettingsScreen(
     var showProInfoDialog by remember { mutableStateOf(false) }
     var isSavingProAccount by remember { mutableStateOf(false) }
 
+    // Departments state (for ENTERPRISE users)
+    val proSettingsRepository = remember { ProSettingsRepository.getInstance(context) }
+    var departments by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isLoadingDepartments by remember { mutableStateOf(false) }
+
     // Load Pro account data for ENTERPRISE users
     LaunchedEffect(currentUser?.id, currentUser?.role) {
         if (currentUser?.role == UserRole.ENTERPRISE && currentUser.id.isNotEmpty()) {
             isLoadingProAccount = true
+            isLoadingDepartments = true
             val result = proAccountRepository.getProAccount(currentUser.id)
             result.onSuccess { account ->
                 proAccount = account
@@ -194,9 +207,12 @@ fun SettingsScreen(
                     }
                     proBillingAddress = it.billingAddress ?: ""
                     proBillingEmail = it.billingEmail ?: ""
+                    // Load departments
+                    departments = proSettingsRepository.getDepartments(it.id)
                 }
             }
             isLoadingProAccount = false
+            isLoadingDepartments = false
         }
     }
 
@@ -224,43 +240,7 @@ fun SettingsScreen(
                 )
             )
         },
-        bottomBar = {
-            if (isPro) {
-                ProBottomNavigation(
-                    currentRoute = "pro_settings",
-                    onNavigate = { route ->
-                        when (route) {
-                            "pro_home" -> onNavigateToHome()
-                            "pro_calendar" -> onNavigateToCalendar()
-                            "pro_vehicles" -> onNavigateToVehicles()
-                            "pro_export" -> onNavigateToExport()
-                            "pro_settings" -> { /* Already on settings */ }
-                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
-                            "pro_licenses" -> onNavigateToLicenses()
-                            "pro_export_advanced" -> onNavigateToExportAdvanced()
-                        }
-                    },
-                    isDarkMode = isDarkMode
-                )
-            } else {
-                MotiumBottomNavigation(
-                    currentRoute = "settings",
-                    isPremium = isPremium,
-                    onNavigate = { route ->
-                        when (route) {
-                            "home" -> onNavigateToHome()
-                            "calendar" -> onNavigateToCalendar()
-                            "vehicles" -> onNavigateToVehicles()
-                            "export" -> onNavigateToExport()
-                        }
-                    },
-                    onPremiumFeatureClick = {
-                        showPremiumDialog = true
-                    },
-                    isDarkMode = isDarkMode
-                )
-            }
-        },
+        // Bottom navigation is now handled at app-level in MainActivity
         containerColor = backgroundColor
     ) { paddingValues ->
         LazyColumn(
@@ -312,23 +292,56 @@ fun SettingsScreen(
                         onEditClick = { showProInfoDialog = true }
                     )
                 }
+
+                // Departments Section (only for ENTERPRISE users)
+                item {
+                    DepartmentsSection(
+                        departments = departments,
+                        isLoading = isLoadingDepartments,
+                        surfaceColor = surfaceColor,
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor,
+                        onAddDepartment = { newDepartment ->
+                            proAccount?.let { account ->
+                                scope.launch {
+                                    val result = proSettingsRepository.addDepartment(account.id, newDepartment)
+                                    result.onSuccess {
+                                        departments = proSettingsRepository.getDepartments(account.id)
+                                    }
+                                }
+                            }
+                        },
+                        onRemoveDepartment = { department ->
+                            proAccount?.let { account ->
+                                scope.launch {
+                                    val result = proSettingsRepository.removeDepartment(account.id, department)
+                                    result.onSuccess {
+                                        departments = proSettingsRepository.getDepartments(account.id)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
             }
 
-            // Company Link Section
-            item {
-                CompanyLinkSectionNew(
-                    companyLinks = companyLinkUiState.companyLinks,
-                    isLoading = companyLinkUiState.isLoading,
-                    surfaceColor = surfaceColor,
-                    textColor = textColor,
-                    textSecondaryColor = textSecondaryColor,
-                    onPreferencesChange = { linkId, prefs ->
-                        companyLinkViewModel.updateSharingPreferences(linkId, prefs)
-                    },
-                    onUnlinkClick = { link ->
-                        companyLinkViewModel.requestUnlink(link)
-                    }
-                )
+            // Company Link Section (only for Individual users, not Pro)
+            if (!isPro) {
+                item {
+                    CompanyLinkSectionNew(
+                        companyLinks = companyLinkUiState.companyLinks,
+                        isLoading = companyLinkUiState.isLoading,
+                        surfaceColor = surfaceColor,
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor,
+                        onPreferencesChange = { linkId, prefs ->
+                            companyLinkViewModel.updateSharingPreferences(linkId, prefs)
+                        },
+                        onUnlinkClick = { link ->
+                            companyLinkViewModel.requestUnlink(link)
+                        }
+                    )
+                }
             }
 
             // App Appearance Section
@@ -389,16 +402,8 @@ fun SettingsScreen(
                     isPremium = isPremium,
                     surfaceColor = surfaceColor,
                     textColor = textColor,
-                    textSecondaryColor = textSecondaryColor
-                )
-            }
-
-            // Developer Options Section
-            item {
-                DeveloperOptionsSection(
-                    surfaceColor = surfaceColor,
-                    textColor = textColor,
-                    textSecondaryColor = textSecondaryColor
+                    textSecondaryColor = textSecondaryColor,
+                    onUpgradeClick = { showUpgradeDialog = true }
                 )
             }
 
@@ -421,10 +426,31 @@ fun SettingsScreen(
         PremiumDialog(
             onDismiss = { showPremiumDialog = false },
             onUpgrade = {
-                // Already on settings screen, just dismiss
+                // Show upgrade dialog instead
                 showPremiumDialog = false
+                showUpgradeDialog = true
             },
-            featureName = "l'export de données"
+            featureName = "l'export de donnees"
+        )
+    }
+
+    // Upgrade dialog (Stripe subscription)
+    if (showUpgradeDialog) {
+        UpgradeDialog(
+            onDismiss = { showUpgradeDialog = false },
+            onSelectPlan = { isLifetime ->
+                isPaymentLoading = true
+                // TODO: Trigger payment flow via SubscriptionManager
+                // For now, just show a message that backend is not configured
+                android.widget.Toast.makeText(
+                    context,
+                    "Backend de paiement non configure. Integration Stripe a venir.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                isPaymentLoading = false
+                showUpgradeDialog = false
+            },
+            isLoading = isPaymentLoading
         )
     }
 
@@ -1330,76 +1356,58 @@ fun MileageRatesSection(
         )
 
         // Car
-        androidx.compose.animation.AnimatedVisibility(
-            visible = expandedItem == null || expandedItem == "car",
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            MileageRateItemWithIcon(
-                icon = Icons.Default.DirectionsCar,
-                iconBackground = MotiumPrimaryTint,
-                title = "Voiture",
-                rate = "0.636 €/km",
-                surfaceColor = surfaceColor,
-                textColor = textColor,
-                textSecondaryColor = textSecondaryColor,
-                isExpanded = expandedItem == "car",
-                onClick = {
-                    expandedItem = if (expandedItem == "car") null else "car"
-                },
-                detailsContent = {
-                    CarMileageDetails(textColor = textColor, textSecondaryColor = textSecondaryColor)
-                }
-            )
-        }
+        MileageRateItemWithIcon(
+            icon = Icons.Default.DirectionsCar,
+            iconBackground = MotiumPrimaryTint,
+            title = "Voiture",
+            rate = "0.636 €/km",
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor,
+            isExpanded = expandedItem == "car",
+            onClick = {
+                expandedItem = if (expandedItem == "car") null else "car"
+            },
+            detailsContent = {
+                CarMileageDetails(textColor = textColor, textSecondaryColor = textSecondaryColor)
+            }
+        )
 
         // Motorcycle
-        androidx.compose.animation.AnimatedVisibility(
-            visible = expandedItem == null || expandedItem == "motorcycle",
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            MileageRateItemWithIcon(
-                icon = Icons.Default.TwoWheeler,
-                iconBackground = MotiumPrimaryTint,
-                title = "Moto",
-                rate = "0.395 €/km",
-                surfaceColor = surfaceColor,
-                textColor = textColor,
-                textSecondaryColor = textSecondaryColor,
-                isExpanded = expandedItem == "motorcycle",
-                onClick = {
-                    expandedItem = if (expandedItem == "motorcycle") null else "motorcycle"
-                },
-                detailsContent = {
-                    MotorcycleMileageDetails(textColor = textColor, textSecondaryColor = textSecondaryColor)
-                }
-            )
-        }
+        MileageRateItemWithIcon(
+            icon = Icons.Default.TwoWheeler,
+            iconBackground = MotiumPrimaryTint,
+            title = "Moto",
+            rate = "0.395 €/km",
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor,
+            isExpanded = expandedItem == "motorcycle",
+            onClick = {
+                expandedItem = if (expandedItem == "motorcycle") null else "motorcycle"
+            },
+            detailsContent = {
+                MotorcycleMileageDetails(textColor = textColor, textSecondaryColor = textSecondaryColor)
+            }
+        )
 
         // Bicycle
-        androidx.compose.animation.AnimatedVisibility(
-            visible = expandedItem == null || expandedItem == "bicycle",
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            MileageRateItemWithIcon(
-                icon = Icons.Default.PedalBike,
-                iconBackground = MotiumPrimaryTint,
-                title = "Vélo",
-                rate = "0.25 €/km",
-                surfaceColor = surfaceColor,
-                textColor = textColor,
-                textSecondaryColor = textSecondaryColor,
-                isExpanded = expandedItem == "bicycle",
-                onClick = {
-                    expandedItem = if (expandedItem == "bicycle") null else "bicycle"
-                },
-                detailsContent = {
-                    BicycleMileageDetails(textColor = textColor, textSecondaryColor = textSecondaryColor)
-                }
-            )
-        }
+        MileageRateItemWithIcon(
+            icon = Icons.Default.PedalBike,
+            iconBackground = MotiumPrimaryTint,
+            title = "Vélo",
+            rate = "0.25 €/km",
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor,
+            isExpanded = expandedItem == "bicycle",
+            onClick = {
+                expandedItem = if (expandedItem == "bicycle") null else "bicycle"
+            },
+            detailsContent = {
+                BicycleMileageDetails(textColor = textColor, textSecondaryColor = textSecondaryColor)
+            }
+        )
     }
 }
 
@@ -1452,7 +1460,7 @@ fun WorkHomeTripSettingsSection(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "Par défaut, les trajets travail-maison sont plafonnés à 40 km. Activez cette option si vous bénéficiez d'une dérogation.",
+                            "Par défaut, les trajets travail-maison sont plafonnés à 40 km (80 km aller-retour). Activez cette option si vous bénéficiez d'une dérogation.",
                             style = MaterialTheme.typography.bodySmall,
                             color = textSecondaryColor
                         )
@@ -1484,7 +1492,8 @@ fun ConsiderFullDistanceConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = surfaceColor,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         title = {
             Text(
                 "Prendre en compte toute la distance",
@@ -1497,32 +1506,33 @@ fun ConsiderFullDistanceConfirmDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Cette option permet de comptabiliser l'intégralité de vos trajets travail-maison sans le plafond de 40 km.",
+                    "Cette option permet de comptabiliser l'intégralité de vos trajets travail-maison sans le plafond de 40 km (80 km aller-retour).",
                     style = MaterialTheme.typography.bodyMedium,
                     color = textColor
                 )
-                Card(
+                OutlinedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFFFF3E0)
-                    )
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.outlinedCardColors(
+                        containerColor = Color.Transparent
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.Top
                     ) {
                         Icon(
-                            Icons.Default.Warning,
+                            Icons.Default.Info,
                             contentDescription = null,
-                            tint = Color(0xFFE65100),
+                            tint = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Attention : Cette dérogation est réservée aux cas exceptionnels prévus par l'administration fiscale (handicap, horaires atypiques, etc.). Vous devez pouvoir justifier votre situation en cas de contrôle.",
+                            "Cette dérogation est réservée aux cas exceptionnels prévus par l'administration fiscale (handicap, horaires atypiques, etc.). Vous devez pouvoir justifier votre situation en cas de contrôle.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFE65100)
+                            color = textColor.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -1559,8 +1569,25 @@ fun MileageRateItemWithIcon(
     onClick: () -> Unit = {},
     detailsContent: @Composable () -> Unit = {}
 ) {
+    // Smooth rotation animation for the chevron icon
+    val rotationAngle by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 200,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
+        label = "chevron_rotation"
+    )
+
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = androidx.compose.animation.core.tween(
+                    durationMillis = 200,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                )
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = surfaceColor
@@ -1616,18 +1643,28 @@ fun MileageRateItemWithIcon(
                 }
 
                 Icon(
-                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
                     tint = textSecondaryColor,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier
+                        .size(24.dp)
+                        .graphicsLayer { rotationZ = rotationAngle }
                 )
             }
 
             // Détails (visible seulement si expanded)
             androidx.compose.animation.AnimatedVisibility(
                 visible = isExpanded,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
+                enter = expandVertically(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                ) + fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(150)
+                ),
+                exit = shrinkVertically(
+                    animationSpec = androidx.compose.animation.core.tween(150)
+                ) + fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(100)
+                )
             ) {
                 Column(
                     modifier = Modifier
@@ -1946,7 +1983,8 @@ fun SubscriptionSection(
     isPremium: Boolean,
     surfaceColor: Color,
     textColor: Color,
-    textSecondaryColor: Color
+    textSecondaryColor: Color,
+    onUpgradeClick: () -> Unit = {}
 ) {
     val subscriptionType = currentUser?.subscription?.type?.name ?: "FREE"
     val planText = when (subscriptionType) {
@@ -2022,7 +2060,7 @@ fun SubscriptionSection(
 
                 if (!isPremium) {
                     Button(
-                        onClick = { /* Upgrade */ },
+                        onClick = onUpgradeClick,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MotiumPrimary,
                             contentColor = Color.White
@@ -3176,6 +3214,315 @@ private fun ProInfoRow(
                 color = if (value == "Non renseigné") textSecondaryColor else textColor
             )
         }
+    }
+}
+
+/**
+ * Section for managing departments (for ENTERPRISE users)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DepartmentsSection(
+    departments: List<String>,
+    isLoading: Boolean,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onAddDepartment: (String) -> Unit,
+    onRemoveDepartment: (String) -> Unit
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var newDepartmentName by remember { mutableStateOf("") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Départements",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold
+                ),
+                fontSize = 20.sp,
+                color = textColor
+            )
+            TextButton(onClick = { showAddDialog = true }) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Ajouter",
+                    modifier = Modifier.size(18.dp),
+                    tint = MotiumPrimary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Ajouter", color = MotiumPrimary)
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        ) {
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = MotiumPrimary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            } else if (departments.isEmpty()) {
+                // Empty state
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        Icons.Default.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = textSecondaryColor
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "Aucun département",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = textSecondaryColor
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Créez des départements pour organiser vos collaborateurs",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { showAddDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Créer un département")
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    // Header row - clickable to toggle expansion
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { isExpanded = !isExpanded },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Folder,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MotiumPrimary
+                            )
+                            Text(
+                                "${departments.size} département${if (departments.size > 1) "s" else ""}",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = textColor
+                            )
+                        }
+                        Icon(
+                            imageVector = if (isExpanded)
+                                Icons.Default.KeyboardArrowUp
+                            else
+                                Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (isExpanded) "Réduire" else "Développer",
+                            tint = textSecondaryColor
+                        )
+                    }
+
+                    // Departments list - animated visibility
+                    AnimatedVisibility(visible = isExpanded) {
+                        Column(
+                            modifier = Modifier.padding(top = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+                            departments.forEach { department ->
+                                DepartmentRow(
+                                    departmentName = department,
+                                    textColor = textColor,
+                                    textSecondaryColor = textSecondaryColor,
+                                    onRemove = { onRemoveDepartment(department) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add Department Dialog
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showAddDialog = false
+                newDepartmentName = ""
+            },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
+            title = {
+                Text(
+                    "Nouveau département",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = newDepartmentName,
+                    onValueChange = { newDepartmentName = it },
+                    label = { Text("Nom du département") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MotiumPrimary,
+                        focusedLabelColor = MotiumPrimary,
+                        cursorColor = MotiumPrimary
+                    )
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newDepartmentName.isNotBlank()) {
+                            onAddDepartment(newDepartmentName.trim())
+                            showAddDialog = false
+                            newDepartmentName = ""
+                        }
+                    },
+                    enabled = newDepartmentName.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary)
+                ) {
+                    Text("Ajouter")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showAddDialog = false
+                    newDepartmentName = ""
+                }) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun DepartmentRow(
+    departmentName: String,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onRemove: () -> Unit
+) {
+    var showRemoveConfirmation by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MotiumPrimary.copy(alpha = 0.1f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = departmentName.firstOrNull()?.uppercase() ?: "?",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MotiumPrimary
+                )
+            }
+            Text(
+                text = departmentName,
+                style = MaterialTheme.typography.bodyMedium,
+                color = textColor
+            )
+        }
+
+        IconButton(onClick = { showRemoveConfirmation = true }) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = "Supprimer",
+                tint = textSecondaryColor
+            )
+        }
+    }
+
+    // Remove confirmation dialog
+    if (showRemoveConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirmation = false },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
+            title = {
+                Text(
+                    "Supprimer le département ?",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text(
+                    "Le département \"$departmentName\" sera supprimé. Cette action est irréversible.",
+                    color = textSecondaryColor
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRemove()
+                        showRemoveConfirmation = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                ) {
+                    Text("Supprimer")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveConfirmation = false }) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            }
+        )
     }
 }
 

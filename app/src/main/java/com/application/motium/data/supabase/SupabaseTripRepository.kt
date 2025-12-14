@@ -87,11 +87,28 @@ class SupabaseTripRepository(private val context: Context) {
                 "SupabaseTripRepository"
             )
 
-            val vehicleId = trip.vehicleId?.takeIf { it.isNotBlank() } ?: try {
+            var vehicleId = trip.vehicleId?.takeIf { it.isNotBlank() } ?: try {
                 SupabaseVehicleRepository.getInstance(context).getDefaultVehicle(userId)?.id
             } catch (e: Exception) {
                 MotiumApplication.logger.w("Could not get default vehicle: ${e.message}", "SupabaseTripRepository")
                 null
+            }
+
+            // Verify vehicle exists in Supabase to avoid FK constraint violation
+            if (vehicleId != null) {
+                val vehicleExists = try {
+                    SupabaseVehicleRepository.getInstance(context).getVehicleById(vehicleId) != null
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Could not verify vehicle exists: ${e.message}", "SupabaseTripRepository")
+                    false
+                }
+                if (!vehicleExists) {
+                    MotiumApplication.logger.w(
+                        "⚠️ Vehicle $vehicleId not found in Supabase - saving trip without vehicle to avoid FK constraint violation",
+                        "SupabaseTripRepository"
+                    )
+                    vehicleId = null
+                }
             }
 
             val startTimeFormatted = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
@@ -169,7 +186,24 @@ class SupabaseTripRepository(private val context: Context) {
             MotiumApplication.logger.i("Updating trip in Supabase: ${trip.id}", "SupabaseTripRepository")
 
             // Clean vehicleId: convert empty string to null
-            val cleanVehicleId = trip.vehicleId?.takeIf { it.isNotBlank() }
+            var cleanVehicleId = trip.vehicleId?.takeIf { it.isNotBlank() }
+
+            // Verify vehicle exists in Supabase to avoid FK constraint violation
+            if (cleanVehicleId != null) {
+                val vehicleExists = try {
+                    SupabaseVehicleRepository.getInstance(context).getVehicleById(cleanVehicleId) != null
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Could not verify vehicle exists: ${e.message}", "SupabaseTripRepository")
+                    false
+                }
+                if (!vehicleExists) {
+                    MotiumApplication.logger.w(
+                        "⚠️ Vehicle $cleanVehicleId not found in Supabase - updating trip without vehicle to avoid FK constraint violation",
+                        "SupabaseTripRepository"
+                    )
+                    cleanVehicleId = null
+                }
+            }
 
             // Convertir les timestamps en format PostgreSQL TIMESTAMPTZ
             val startTimeFormatted = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
@@ -402,6 +436,90 @@ class SupabaseTripRepository(private val context: Context) {
             createdAt = parseInstant(created_at),
             updatedAt = parseInstant(updated_at)
         )
+    }
+
+    /**
+     * Fetch trips for multiple users within a date range (for Pro export).
+     * Returns a Map of userId -> List<Trip> for grouping by employee.
+     *
+     * @param userIds List of user IDs to fetch trips for
+     * @param startDate Start of the date range (inclusive)
+     * @param endDate End of the date range (inclusive)
+     * @param tripTypes List of trip types to include (e.g., ["PROFESSIONAL", "PERSONAL"])
+     * @return Map of userId to their trips
+     */
+    suspend fun getTripsForUsers(
+        userIds: List<String>,
+        startDate: Instant,
+        endDate: Instant,
+        tripTypes: List<String>
+    ): Result<Map<String, List<Trip>>> = withContext(Dispatchers.IO) {
+        try {
+            if (userIds.isEmpty()) {
+                return@withContext Result.success(emptyMap())
+            }
+
+            MotiumApplication.logger.i(
+                "Fetching trips for ${userIds.size} users from $startDate to $endDate",
+                "SupabaseTripRepository"
+            )
+
+            // Format dates for Supabase query
+            val startTimeFormatted = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(Date(startDate.toEpochMilliseconds()))
+
+            val endTimeFormatted = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(Date(endDate.toEpochMilliseconds()))
+
+            // Fetch trips for all users in the list
+            val allTrips = mutableListOf<SupabaseTrip>()
+
+            // Supabase Kotlin SDK doesn't support IN filter directly, so we batch requests
+            userIds.forEach { userId ->
+                try {
+                    val userTrips = postgres.from("trips")
+                        .select {
+                            filter {
+                                eq("user_id", userId)
+                                gte("start_time", startTimeFormatted)
+                                lte("start_time", endTimeFormatted)
+                                if (tripTypes.isNotEmpty()) {
+                                    isIn("type", tripTypes)
+                                }
+                            }
+                        }
+                        .decodeList<SupabaseTrip>()
+                    allTrips.addAll(userTrips)
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w(
+                        "Error fetching trips for user $userId: ${e.message}",
+                        "SupabaseTripRepository"
+                    )
+                }
+            }
+
+            // Group by user ID and convert to domain objects
+            val tripsByUser = allTrips
+                .map { it.toDomainTrip() }
+                .groupBy { it.userId }
+
+            MotiumApplication.logger.i(
+                "Fetched ${allTrips.size} trips for ${tripsByUser.size} users",
+                "SupabaseTripRepository"
+            )
+
+            Result.success(tripsByUser)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Error fetching trips for multiple users: ${e.message}",
+                "SupabaseTripRepository",
+                e
+            )
+            Result.failure(e)
+        }
     }
 
     companion object {

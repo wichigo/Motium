@@ -4,16 +4,17 @@ import android.content.Context
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.local.dao.CompanyLinkDao
-import com.application.motium.data.local.entities.CompanyLinkEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
 import com.application.motium.data.supabase.SupabaseClient
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LinkStatus
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -30,6 +31,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
 
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     // Room database for offline-first caching
     private val database = MotiumDatabase.getInstance(context)
@@ -313,6 +315,28 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                     }
                 }.decodeList<CompanyLinkDto>()
             response.map { it.toCompanyLink() }
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "CompanyLinkRepository")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return try {
+                        val response = postgres.from("company_links")
+                            .select {
+                                filter {
+                                    eq("user_id", userId)
+                                }
+                            }.decodeList<CompanyLinkDto>()
+                        response.map { it.toCompanyLink() }
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "CompanyLinkRepository", retryError)
+                        emptyList()
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error fetching company links from Supabase: ${e.message}", "CompanyLinkRepository", e)
+            emptyList()
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error fetching company links from Supabase: ${e.message}", "CompanyLinkRepository", e)
             emptyList()

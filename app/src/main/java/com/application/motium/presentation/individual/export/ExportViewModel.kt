@@ -239,4 +239,235 @@ class ExportViewModel(private val context: Context) : ViewModel() {
             onError = onError
         )
     }
+
+    // ================================================================================
+    // QUICK EXPORT SHORTCUTS
+    // ================================================================================
+
+    /**
+     * Quick export presets for common date ranges
+     */
+    enum class QuickExportPeriod {
+        TODAY,      // Aujourd'hui
+        THIS_WEEK,  // Semaine en cours (lundi -> dimanche)
+        THIS_MONTH, // Mois en cours
+        THIS_YEAR   // Année en cours
+    }
+
+    /**
+     * Get start and end dates for a quick export period
+     */
+    private fun getDateRangeForPeriod(period: QuickExportPeriod): Pair<Long, Long> {
+        val calendar = Calendar.getInstance()
+        val endDate: Long
+        val startDate: Long
+
+        when (period) {
+            QuickExportPeriod.TODAY -> {
+                // Today: start of day to now
+                calendar.set(Calendar.HOUR_OF_DAY, 0)
+                calendar.set(Calendar.MINUTE, 0)
+                calendar.set(Calendar.SECOND, 0)
+                calendar.set(Calendar.MILLISECOND, 0)
+                startDate = calendar.timeInMillis
+                endDate = System.currentTimeMillis()
+            }
+            QuickExportPeriod.THIS_WEEK -> {
+                // This week: Monday to now (European week starts on Monday)
+                val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
+                // Calculate days since Monday (Sunday = 1, Monday = 2, ..., Saturday = 7)
+                val daysFromMonday = if (dayOfWeek == Calendar.SUNDAY) 6 else dayOfWeek - Calendar.MONDAY
+                calendar.add(Calendar.DAY_OF_YEAR, -daysFromMonday)
+                calendar.set(Calendar.HOUR_OF_DAY, 0)
+                calendar.set(Calendar.MINUTE, 0)
+                calendar.set(Calendar.SECOND, 0)
+                calendar.set(Calendar.MILLISECOND, 0)
+                startDate = calendar.timeInMillis
+                endDate = System.currentTimeMillis()
+            }
+            QuickExportPeriod.THIS_MONTH -> {
+                // This month: 1st to today
+                calendar.set(Calendar.DAY_OF_MONTH, 1)
+                calendar.set(Calendar.HOUR_OF_DAY, 0)
+                calendar.set(Calendar.MINUTE, 0)
+                calendar.set(Calendar.SECOND, 0)
+                calendar.set(Calendar.MILLISECOND, 0)
+                startDate = calendar.timeInMillis
+                endDate = System.currentTimeMillis()
+            }
+            QuickExportPeriod.THIS_YEAR -> {
+                // This year: January 1st to today
+                calendar.set(Calendar.MONTH, Calendar.JANUARY)
+                calendar.set(Calendar.DAY_OF_MONTH, 1)
+                calendar.set(Calendar.HOUR_OF_DAY, 0)
+                calendar.set(Calendar.MINUTE, 0)
+                calendar.set(Calendar.SECOND, 0)
+                calendar.set(Calendar.MILLISECOND, 0)
+                startDate = calendar.timeInMillis
+                endDate = System.currentTimeMillis()
+            }
+        }
+        return Pair(startDate, endDate)
+    }
+
+    /**
+     * Apply a quick period preset - sets date range and enables all options
+     * User then uses existing export buttons at the bottom
+     */
+    fun applyQuickPeriod(period: QuickExportPeriod) {
+        val (startDate, endDate) = getDateRangeForPeriod(period)
+        _filters.value = _filters.value.copy(
+            startDate = startDate,
+            endDate = endDate,
+            expenseMode = "trips_with_expenses", // Include expenses
+            includePhotos = true // Include photos
+        )
+        loadTrips() // Reload trips with new filters
+    }
+
+    /**
+     * Quick export with all options enabled:
+     * - All trip types (pro + perso)
+     * - Trips with expenses
+     * - Include photos
+     * - Only trips with indemnities (reimbursementAmount > 0 or validated)
+     */
+    fun quickExportPDF(
+        period: QuickExportPeriod,
+        onSuccess: (File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val (startDate, endDate) = getDateRangeForPeriod(period)
+
+            // Load all trips
+            val allTrips = tripRepository.getAllTrips()
+
+            // Filter trips for the period with indemnities only
+            val tripsWithIndemnities = allTrips.filter { trip ->
+                trip.endTime != null &&
+                trip.isValidated &&
+                trip.startTime >= startDate &&
+                trip.startTime <= endDate &&
+                // Only trips with indemnities: either has reimbursementAmount or is validated professional
+                (trip.reimbursementAmount != null && trip.reimbursementAmount > 0) ||
+                (trip.tripType == "PROFESSIONAL" && trip.isValidated)
+            }
+
+            if (tripsWithIndemnities.isEmpty()) {
+                onError("Aucun trajet avec indemnités pour cette période")
+                return@launch
+            }
+
+            // Export with all options
+            exportManager.exportToPDF(
+                trips = tripsWithIndemnities,
+                startDate = startDate,
+                endDate = endDate,
+                expenseMode = "trips_with_expenses", // Include expenses
+                includePhotos = true, // Include photos
+                onSuccess = { file ->
+                    onSuccess(file)
+                    exportManager.shareFile(file)
+                },
+                onError = onError
+            )
+        }
+    }
+
+    /**
+     * Quick export to CSV
+     */
+    fun quickExportCSV(
+        period: QuickExportPeriod,
+        onSuccess: (File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val (startDate, endDate) = getDateRangeForPeriod(period)
+
+            val allTrips = tripRepository.getAllTrips()
+
+            val tripsWithIndemnities = allTrips.filter { trip ->
+                trip.endTime != null &&
+                trip.isValidated &&
+                trip.startTime >= startDate &&
+                trip.startTime <= endDate &&
+                (trip.reimbursementAmount != null && trip.reimbursementAmount > 0) ||
+                (trip.tripType == "PROFESSIONAL" && trip.isValidated)
+            }
+
+            if (tripsWithIndemnities.isEmpty()) {
+                onError("Aucun trajet avec indemnités pour cette période")
+                return@launch
+            }
+
+            exportManager.exportToCSV(
+                trips = tripsWithIndemnities,
+                startDate = startDate,
+                endDate = endDate,
+                expenseMode = "trips_with_expenses",
+                includePhotos = true,
+                onSuccess = { file ->
+                    onSuccess(file)
+                    exportManager.shareFile(file)
+                },
+                onError = onError
+            )
+        }
+    }
+
+    /**
+     * Quick export to Excel
+     */
+    fun quickExportExcel(
+        period: QuickExportPeriod,
+        onSuccess: (File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val (startDate, endDate) = getDateRangeForPeriod(period)
+
+            val allTrips = tripRepository.getAllTrips()
+
+            val tripsWithIndemnities = allTrips.filter { trip ->
+                trip.endTime != null &&
+                trip.isValidated &&
+                trip.startTime >= startDate &&
+                trip.startTime <= endDate &&
+                (trip.reimbursementAmount != null && trip.reimbursementAmount > 0) ||
+                (trip.tripType == "PROFESSIONAL" && trip.isValidated)
+            }
+
+            if (tripsWithIndemnities.isEmpty()) {
+                onError("Aucun trajet avec indemnités pour cette période")
+                return@launch
+            }
+
+            exportManager.exportToExcel(
+                trips = tripsWithIndemnities,
+                startDate = startDate,
+                endDate = endDate,
+                expenseMode = "trips_with_expenses",
+                includePhotos = true,
+                onSuccess = { file ->
+                    onSuccess(file)
+                    exportManager.shareFile(file)
+                },
+                onError = onError
+            )
+        }
+    }
+
+    /**
+     * Get period label for display
+     */
+    fun getPeriodLabel(period: QuickExportPeriod): String {
+        return when (period) {
+            QuickExportPeriod.TODAY -> "Aujourd'hui"
+            QuickExportPeriod.THIS_WEEK -> "Cette semaine"
+            QuickExportPeriod.THIS_MONTH -> "Ce mois"
+            QuickExportPeriod.THIS_YEAR -> "Cette année"
+        }
+    }
 }

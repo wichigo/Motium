@@ -21,9 +21,21 @@ data class ProAccount(
     val billingAddress: String? = null,
     val billingEmail: String? = null,
 
+    // Jour de facturation mensuel (1-28)
+    // Toutes les licences mensuelles sont facturées ce jour
+    @SerialName("billing_day")
+    val billingDay: Int = 5,
+
     // Stripe
     val stripeCustomerId: String? = null
 ) {
+    /**
+     * Vérifie si le jour de facturation est valide (1-28)
+     * On limite à 28 pour éviter les problèmes avec février
+     */
+    val isValidBillingDay: Boolean
+        get() = billingDay in 1..28
+
     /**
      * SIREN = 9 premiers chiffres du SIRET
      */

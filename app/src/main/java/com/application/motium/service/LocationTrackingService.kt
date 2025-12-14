@@ -17,6 +17,7 @@ import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
 import com.application.motium.data.TripRepository
 import com.application.motium.data.VehicleRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.google.android.gms.location.*
@@ -244,6 +245,7 @@ class LocationTrackingService : Service() {
     private lateinit var vehicleRepository: VehicleRepository
     private lateinit var workScheduleRepository: WorkScheduleRepository
     private lateinit var authRepository: SupabaseAuthRepository
+    private lateinit var localUserRepository: LocalUserRepository
     private var isTracking = false
     private var currentSpeedMode: Boolean? = null // null = not set, true = low speed, false = high speed
     private var currentTrip: TripData? = null
@@ -319,6 +321,7 @@ class LocationTrackingService : Service() {
         vehicleRepository = VehicleRepository.getInstance(this)
         workScheduleRepository = WorkScheduleRepository.getInstance(this)
         authRepository = SupabaseAuthRepository.getInstance(this)
+        localUserRepository = LocalUserRepository.getInstance(this)
 
         // Charger l'utilisateur courant et le véhicule par défaut
         loadUserAndDefaultVehicle()
@@ -965,7 +968,9 @@ class LocationTrackingService : Service() {
             enableLights(false)
             enableVibration(false) // Désactiver vibration
             setSound(null, null) // Désactiver son
-            setBlockable(false)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                setBlockable(false)
+            }
         }
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -1952,12 +1957,13 @@ class LocationTrackingService : Service() {
     /**
      * Charge l'utilisateur courant et son véhicule par défaut au démarrage du service.
      * Ces données sont utilisées pour assigner automatiquement le véhicule et le type de trajet.
+     * FIX RLS: Uses users.id (from localUserRepository) instead of auth.uid()
      */
     private fun loadUserAndDefaultVehicle() {
         serviceScope.launch {
             try {
-                // Récupérer l'utilisateur courant
-                val user = authRepository.getCurrentAuthUser()
+                // Récupérer l'utilisateur courant depuis local (users.id, pas auth.uid())
+                val user = localUserRepository.getLoggedInUser()
                 if (user != null) {
                     currentUserId = user.id
                     MotiumApplication.logger.i("✅ User loaded for auto-tracking: ${user.id}", "AutoTracking")

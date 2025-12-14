@@ -30,8 +30,6 @@ import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.model.VehiclePower
 import com.application.motium.domain.model.VehicleType
 import com.application.motium.domain.model.isPremium
-import com.application.motium.presentation.components.MotiumBottomNavigation
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.MotiumPrimaryTint
@@ -207,43 +205,7 @@ fun VehiclesScreen(
                 )
             )
         },
-        bottomBar = {
-            if (isPro) {
-                ProBottomNavigation(
-                    currentRoute = "pro_vehicles",
-                    onNavigate = { route ->
-                        when (route) {
-                            "pro_home" -> onNavigateToHome()
-                            "pro_calendar" -> onNavigateToCalendar()
-                            "pro_vehicles" -> { /* Already on vehicles */ }
-                            "pro_export" -> onNavigateToExport()
-                            "pro_settings" -> onNavigateToSettings()
-                            "pro_linked_accounts" -> onNavigateToLinkedAccounts()
-                            "pro_licenses" -> onNavigateToLicenses()
-                            "pro_export_advanced" -> onNavigateToExportAdvanced()
-                        }
-                    },
-                    isDarkMode = isDarkMode
-                )
-            } else {
-                MotiumBottomNavigation(
-                    currentRoute = "vehicles",
-                    isPremium = isPremium,
-                    onNavigate = { route ->
-                        when (route) {
-                            "home" -> onNavigateToHome()
-                            "calendar" -> onNavigateToCalendar()
-                            "export" -> onNavigateToExport()
-                            "settings" -> onNavigateToSettings()
-                        }
-                    },
-                    onPremiumFeatureClick = {
-                        showPremiumDialog = true
-                    },
-                    isDarkMode = isDarkMode
-                )
-            }
-        },
+        // Bottom navigation is now handled at app-level in MainActivity
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAddVehicleScreen = true },
@@ -275,73 +237,14 @@ fun VehiclesScreen(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 24.dp,
+                    bottom = 100.dp  // Extra padding to scroll past FAB
+                ),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // DEBUG: Afficher le user_id actuel
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFFFF3CD)
-                        ),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = "🐛 DEBUG INFO",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF856404)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "User ID: ${currentUserId ?: "NULL"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF856404),
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                            Text(
-                                text = "Email: ${currentUser?.email ?: "NULL"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF856404)
-                            )
-                            Text(
-                                text = "Vehicles loaded: ${vehicles.size}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF856404)
-                            )
-                            Text(
-                                text = "Premium: ${if (isPremium) "✅ Yes" else "❌ No"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF856404)
-                            )
-
-                            // Afficher un avertissement si non connecté
-                            if (currentUserId == null) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                HorizontalDivider(color = Color(0xFF856404).copy(alpha = 0.3f))
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "⚠️ NOT AUTHENTICATED",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFDC3545)
-                                )
-                                Text(
-                                    text = "Your session has expired. Please sign in again.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFF856404)
-                                )
-                            }
-                        }
-                    }
-                }
-
                 // Message si non connecté
                 if (currentUserId == null && !uiState.isLoading) {
                     item {
@@ -557,6 +460,34 @@ fun ModernVehicleCard(
                                 color = Color.White
                             )
                         }
+                    }
+                }
+
+                // Quick action: Set as default (star button)
+                if (!vehicle.isDefault) {
+                    IconButton(
+                        onClick = onSetDefault,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = "Set as default",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                } else {
+                    // Show filled star for default vehicle (non-clickable)
+                    Box(
+                        modifier = Modifier.size(40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = "Default vehicle",
+                            tint = MotiumPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
 

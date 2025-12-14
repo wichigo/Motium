@@ -26,7 +26,6 @@ import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.domain.model.LinkStatus
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.*
-import com.application.motium.presentation.components.ProBottomNavigation
 import com.application.motium.utils.ThemeManager
 
 /**
@@ -45,6 +44,7 @@ fun LinkedAccountsScreen(
     onNavigateToLicenses: () -> Unit = {},
     onNavigateToExportAdvanced: () -> Unit = {},
     onNavigateToAccountDetails: (String) -> Unit = {},
+    onNavigateToInvitePerson: () -> Unit = {},
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -110,7 +110,7 @@ fun LinkedAccountsScreen(
             },
             floatingActionButton = {
                 FloatingActionButton(
-                    onClick = { viewModel.showInviteDialog() },
+                    onClick = onNavigateToInvitePerson,
                     containerColor = MotiumPrimary,
                     contentColor = Color.White,
                     modifier = Modifier.padding(bottom = 100.dp) // Space for bottom nav
@@ -161,7 +161,7 @@ fun LinkedAccountsScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
-                        onClick = { viewModel.showInviteDialog() },
+                        onClick = onNavigateToInvitePerson,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MotiumPrimary
                         ),
@@ -170,7 +170,7 @@ fun LinkedAccountsScreen(
                     ) {
                         Icon(Icons.Default.PersonAdd, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Inviter un compte", fontWeight = FontWeight.Bold)
+                        Text("Inviter", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -248,34 +248,7 @@ fun LinkedAccountsScreen(
         }
         }
 
-        // Bottom Navigation
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-            ProBottomNavigation(
-                currentRoute = "pro_linked_accounts",
-                onNavigate = { route ->
-                    when (route) {
-                        "pro_home" -> onNavigateToHome()
-                        "pro_calendar" -> onNavigateToCalendar()
-                        "pro_export" -> onNavigateToExport()
-                        "pro_settings" -> onNavigateToSettings()
-                        "pro_linked_accounts" -> { /* Already here */ }
-                        "pro_licenses" -> onNavigateToLicenses()
-                        "pro_vehicles" -> onNavigateToVehicles()
-                        "pro_export_advanced" -> onNavigateToExportAdvanced()
-                    }
-                },
-                isDarkMode = isDarkMode
-            )
-        }
-    }
-
-    // Invite dialog
-    if (uiState.showInviteDialog) {
-        InviteAccountDialog(
-            onDismiss = { viewModel.hideInviteDialog() },
-            onInvite = { email -> viewModel.inviteUser(email) },
-            isLoading = uiState.isInviting
-        )
+        // Bottom navigation is now handled at app-level in MainActivity
     }
 }
 

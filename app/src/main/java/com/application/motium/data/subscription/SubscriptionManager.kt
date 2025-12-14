@@ -30,13 +30,27 @@ class SubscriptionManager private constructor(private val context: Context) {
     companion object {
         private const val TAG = "SubscriptionManager"
 
-        // Price IDs - These should match your Stripe Dashboard
-        const val PRICE_ID_PREMIUM_MONTHLY = "price_premium_monthly" // TODO: Replace with real Stripe price ID
-        const val PRICE_ID_LIFETIME = "price_lifetime" // TODO: Replace with real Stripe price ID
+        // ===== INDIVIDUAL PRICING (TTC - taxes incluses) =====
+        const val INDIVIDUAL_MONTHLY_PRICE = 5.00   // 5€ TTC/mois
+        const val INDIVIDUAL_LIFETIME_PRICE = 100.00 // 100€ TTC one-time
 
-        // Pricing display (in EUR)
-        const val PREMIUM_MONTHLY_PRICE = 4.99
-        const val LIFETIME_PRICE = 49.99
+        // ===== PRO LICENSE PRICING (HT - hors taxes) =====
+        const val PRO_LICENSE_MONTHLY_PRICE_HT = 5.00   // 5€ HT/mois par licence
+        const val PRO_LICENSE_LIFETIME_PRICE_HT = 100.00 // 100€ HT one-time par licence
+
+        // ===== STRIPE PRICE IDs - TODO: Replace with real Stripe price IDs =====
+        // Individual
+        const val PRICE_ID_INDIVIDUAL_MONTHLY = "price_individual_monthly_placeholder"
+        const val PRICE_ID_INDIVIDUAL_LIFETIME = "price_individual_lifetime_placeholder"
+        // Pro licenses
+        const val PRICE_ID_PRO_LICENSE_MONTHLY = "price_pro_license_monthly_placeholder"
+        const val PRICE_ID_PRO_LICENSE_LIFETIME = "price_pro_license_lifetime_placeholder"
+
+        // Legacy constants (for backward compatibility)
+        const val PRICE_ID_PREMIUM_MONTHLY = PRICE_ID_INDIVIDUAL_MONTHLY
+        const val PRICE_ID_LIFETIME = PRICE_ID_INDIVIDUAL_LIFETIME
+        const val PREMIUM_MONTHLY_PRICE = INDIVIDUAL_MONTHLY_PRICE
+        const val LIFETIME_PRICE = INDIVIDUAL_LIFETIME_PRICE
 
         @Volatile
         private var instance: SubscriptionManager? = null
@@ -218,6 +232,101 @@ class SubscriptionManager private constructor(private val context: Context) {
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Payment initialization failed: ${e.message}", TAG, e)
+            _paymentState.value = PaymentState.Error(e.message ?: "Erreur inconnue")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Initialize payment for Individual user subscription
+     * @param userId The user ID
+     * @param email The user's email
+     * @param isLifetime True for lifetime purchase, false for monthly subscription
+     */
+    suspend fun initializeIndividualPayment(
+        userId: String,
+        email: String,
+        isLifetime: Boolean
+    ): Result<PaymentIntentResponse> = withContext(Dispatchers.IO) {
+        try {
+            _paymentState.value = PaymentState.Loading
+
+            val priceId = if (isLifetime) {
+                PRICE_ID_INDIVIDUAL_LIFETIME
+            } else {
+                PRICE_ID_INDIVIDUAL_MONTHLY
+            }
+
+            val price = if (isLifetime) {
+                INDIVIDUAL_LIFETIME_PRICE
+            } else {
+                INDIVIDUAL_MONTHLY_PRICE
+            }
+
+            MotiumApplication.logger.i("Initializing individual payment: $priceId (${price}€)", TAG)
+
+            // TODO: Call Supabase Edge Function to create PaymentIntent
+            // The Edge Function should:
+            // 1. Create or retrieve Stripe customer for userId/email
+            // 2. Create PaymentIntent (one-time) or Subscription (recurring)
+            // 3. Return client_secret for PaymentSheet
+
+            _paymentState.value = PaymentState.Error("Backend payment endpoint not configured")
+            Result.failure(Exception(
+                "Backend payment endpoint not configured. " +
+                    "Please set up Supabase Edge Functions for Stripe."
+            ))
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Individual payment initialization failed: ${e.message}", TAG, e)
+            _paymentState.value = PaymentState.Error(e.message ?: "Erreur inconnue")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Initialize payment for Pro license purchase
+     * @param proAccountId The Pro account ID
+     * @param email The billing email
+     * @param quantity Number of licenses to purchase
+     * @param isLifetime True for lifetime licenses, false for monthly
+     */
+    suspend fun initializeProLicensePayment(
+        proAccountId: String,
+        email: String,
+        quantity: Int,
+        isLifetime: Boolean
+    ): Result<PaymentIntentResponse> = withContext(Dispatchers.IO) {
+        try {
+            _paymentState.value = PaymentState.Loading
+
+            val priceId = if (isLifetime) {
+                PRICE_ID_PRO_LICENSE_LIFETIME
+            } else {
+                PRICE_ID_PRO_LICENSE_MONTHLY
+            }
+
+            val priceHT = if (isLifetime) {
+                PRO_LICENSE_LIFETIME_PRICE_HT * quantity
+            } else {
+                PRO_LICENSE_MONTHLY_PRICE_HT * quantity
+            }
+
+            val priceTTC = priceHT * 1.20 // +20% VAT
+
+            MotiumApplication.logger.i(
+                "Initializing pro license payment: $quantity x $priceId (${priceHT}€ HT / ${priceTTC}€ TTC)",
+                TAG
+            )
+
+            // TODO: Call Supabase Edge Function
+            // Should create PaymentIntent with quantity parameter
+
+            _paymentState.value = PaymentState.Error("Backend payment endpoint not configured")
+            Result.failure(Exception("Backend not configured"))
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Pro license payment initialization failed: ${e.message}", TAG, e)
             _paymentState.value = PaymentState.Error(e.message ?: "Erreur inconnue")
             Result.failure(e)
         }

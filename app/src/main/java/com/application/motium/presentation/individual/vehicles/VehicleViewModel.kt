@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.data.VehicleRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.*
 import com.application.motium.domain.repository.AuthRepository
@@ -16,7 +17,8 @@ import java.util.UUID
 class VehicleViewModel(
     private val context: Context,
     private val vehicleRepository: VehicleRepository = VehicleRepository.getInstance(context),
-    private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context)
+    private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context),
+    private val localUserRepository: LocalUserRepository = LocalUserRepository.getInstance(context)
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(VehicleUiState())
@@ -30,7 +32,12 @@ class VehicleViewModel(
     init {
         viewModelScope.launch {
             authRepository.authState.collect { authState ->
-                val newUserId = authState.user?.id
+                // Utiliser localUserRepository pour obtenir le bon users.id (compatible RLS)
+                val newUserId = if (authState.user != null) {
+                    localUserRepository.getLoggedInUser()?.id
+                } else {
+                    null
+                }
                 if (_userId.value != newUserId) {
                     _userId.value = newUserId
                     if (newUserId != null) {

@@ -201,3 +201,38 @@ $$ LANGUAGE plpgsql;
 -- Calculer l'indemnité pour une moto >125cc ayant parcouru 4 500 km
 -- SELECT calculate_mileage_allowance('MOTORCYCLE', 4500, NULL, 'MORE_THAN_125CC', 2024);
 -- Résultat attendu : 4500 * 0.082 = 369.00€
+
+-- ========================================
+-- ROW LEVEL SECURITY (RLS) Policies
+-- ========================================
+-- Cette table est en lecture seule pour tous les utilisateurs authentifiés.
+-- Seul le service_role (admin) peut modifier les données.
+-- ========================================
+
+-- Activer RLS sur la table
+ALTER TABLE mileage_allowance_rates ENABLE ROW LEVEL SECURITY;
+
+-- Supprimer les anciennes policies si elles existent
+DROP POLICY IF EXISTS "Authenticated users can read mileage rates" ON mileage_allowance_rates;
+DROP POLICY IF EXISTS "Service role can manage mileage rates" ON mileage_allowance_rates;
+
+-- Policy SELECT: Tous les utilisateurs authentifiés peuvent lire les barèmes
+CREATE POLICY "Authenticated users can read mileage rates" ON mileage_allowance_rates
+    FOR SELECT
+    TO authenticated
+    USING (true);
+
+-- Policy ALL: Seul le service_role peut insérer/modifier/supprimer
+-- Note: Cette policy ne s'applique qu'au service_role (bypass RLS par défaut)
+-- mais on la définit explicitement pour la documentation
+CREATE POLICY "Service role can manage mileage rates" ON mileage_allowance_rates
+    FOR ALL
+    TO service_role
+    USING (true)
+    WITH CHECK (true);
+
+-- ========================================
+-- Vérification RLS
+-- ========================================
+-- SELECT tablename, rowsecurity FROM pg_tables WHERE tablename = 'mileage_allowance_rates';
+-- SELECT * FROM pg_policies WHERE tablename = 'mileage_allowance_rates';

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.data.sync.AutoTrackingScheduleWorker
@@ -19,7 +20,8 @@ class WorkScheduleViewModel(
     private val context: Context,
     private val workScheduleRepository: WorkScheduleRepository = WorkScheduleRepository.getInstance(context),
     private val tripRepository: TripRepository = TripRepository.getInstance(context),
-    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context)
+    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context),
+    private val localUserRepository: LocalUserRepository = LocalUserRepository.getInstance(context)
 ) : ViewModel() {
 
     // État des créneaux horaires par jour de la semaine (1-7 ISO format)
@@ -45,7 +47,12 @@ class WorkScheduleViewModel(
         // Observer les changements d'authentification
         viewModelScope.launch {
             authRepository.authState.collect { authState ->
-                val newUserId = authState.user?.id
+                // Utiliser localUserRepository pour obtenir le bon users.id (compatible RLS)
+                val newUserId = if (authState.user != null) {
+                    localUserRepository.getLoggedInUser()?.id
+                } else {
+                    null
+                }
                 if (_userId.value != newUserId) {
                     _userId.value = newUserId
                     if (newUserId != null) {

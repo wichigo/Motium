@@ -147,8 +147,9 @@ class TripRepository private constructor(context: Context) {
                     MotiumApplication.logger.i("🔄 Starting migration of ${oldTrips.size} trips to Room Database", "TripRepository")
 
                     // Obtenir le userId actuel ou le dernier connu
-                    val currentUser = authRepository.getCurrentAuthUser()
-                    val userId = currentUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
+                    // FIX RLS: Utiliser users.id depuis localUserRepository
+                    val localUser = localUserRepository.getLoggedInUser()
+                    val userId = localUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
 
                     if (userId != null) {
                         // Convertir et insérer dans Room
@@ -185,10 +186,10 @@ class TripRepository private constructor(context: Context) {
     suspend fun saveTrip(trip: Trip) = withContext(Dispatchers.IO) {
         try {
             // SECURITY: S'assurer que le trip a un userId
-            // FIX OFFLINE-FIRST: Utiliser le dernier userId connu au lieu de getCurrentAuthUser()
-            // pour éviter les problèmes de timing avec la restauration de session Supabase
-            val currentUser = authRepository.getCurrentAuthUser()
-            val userId = currentUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
+            // FIX RLS: Utiliser users.id (depuis localUserRepository) au lieu de auth.uid()
+            // car trips.user_id doit correspondre à users.id, pas à auth.uid()
+            val localUser = localUserRepository.getLoggedInUser()
+            val userId = localUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
 
             var tripWithUserId = if (trip.userId == null && userId != null) {
                 trip.copy(userId = userId)
@@ -309,7 +310,7 @@ class TripRepository private constructor(context: Context) {
             try {
                 MotiumApplication.logger.i(
                     "🔄 SYNC CHECK: Attempting to sync trip ${tripWithUserId.id} to Supabase\n" +
-                    "   Auth user available: ${currentUser != null}\n" +
+                    "   Local user available: ${localUser != null}\n" +
                     "   Resolved user ID: $userId\n" +
                     "   Trip user ID: ${tripWithUserId.userId}\n" +
                     "   Distance: ${tripWithUserId.getFormattedDistance()}\n" +
@@ -341,7 +342,7 @@ class TripRepository private constructor(context: Context) {
                 } else {
                     MotiumApplication.logger.w(
                         "⚠️ Cannot sync trip - No user ID available: ${tripWithUserId.id}\n" +
-                        "   Auth user: ${currentUser != null}\n" +
+                        "   Local user: ${localUser != null}\n" +
                         "   Last user ID: ${prefs.getString(KEY_LAST_USER_ID, null)}\n" +
                         "   Trip will sync when user authenticates\n" +
                         "   Needs sync: ${tripWithUserId.needsSync}",
@@ -492,10 +493,11 @@ class TripRepository private constructor(context: Context) {
     suspend fun getAllTrips(): List<Trip> = withContext(Dispatchers.IO) {
         try {
             // SECURITY: Obtenir l'utilisateur actuel pour filtrer les trips
-            val currentUser = authRepository.getCurrentAuthUser()
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val localUser = localUserRepository.getLoggedInUser()
 
-            // FIX: Utiliser le dernier userId connu si l'auth n'est pas encore restaurée
-            val userId = currentUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
+            // FIX: Utiliser le dernier userId connu si l'utilisateur local n'est pas disponible
+            val userId = localUser?.id ?: prefs.getString(KEY_LAST_USER_ID, null)
 
             if (userId == null) {
                 MotiumApplication.logger.w("getAllTrips called but no user authenticated and no last userId - returning empty list", "TripRepository")
@@ -503,7 +505,7 @@ class TripRepository private constructor(context: Context) {
             }
 
             // Sauvegarder le userId pour les prochains chargements
-            if (currentUser != null && prefs.getString(KEY_LAST_USER_ID, null) != userId) {
+            if (localUser != null && prefs.getString(KEY_LAST_USER_ID, null) != userId) {
                 prefs.edit().putString(KEY_LAST_USER_ID, userId).apply()
             }
 
@@ -547,7 +549,8 @@ class TripRepository private constructor(context: Context) {
      */
     suspend fun getTripsPaginated(limit: Int = 10, offset: Int = 0): List<Trip> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val userId = localUserRepository.getLoggedInUser()?.id
                 ?: prefs.getString(KEY_LAST_USER_ID, null)
 
             if (userId == null) {
@@ -575,7 +578,8 @@ class TripRepository private constructor(context: Context) {
      */
     suspend fun getTotalTripsCount(): Int = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val userId = localUserRepository.getLoggedInUser()?.id
                 ?: prefs.getString(KEY_LAST_USER_ID, null)
 
             if (userId == null) return@withContext 0
@@ -609,10 +613,11 @@ class TripRepository private constructor(context: Context) {
             }
 
             // Supprimer de Supabase si l'utilisateur est connecté
+            // FIX RLS: Utiliser users.id depuis localUserRepository
             try {
-                val currentUser = authRepository.getCurrentAuthUser()
-                if (currentUser != null) {
-                    val supabaseResult = supabaseTripRepository.deleteTrip(tripId, currentUser.id)
+                val localUser = localUserRepository.getLoggedInUser()
+                if (localUser != null) {
+                    val supabaseResult = supabaseTripRepository.deleteTrip(tripId, localUser.id)
                     if (supabaseResult.isSuccess) {
                         MotiumApplication.logger.i("Trip deleted from Supabase: $tripId", "TripRepository")
                     } else {
@@ -680,8 +685,9 @@ class TripRepository private constructor(context: Context) {
 
     suspend fun syncAllTripsToSupabase(): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authRepository.getCurrentAuthUser()
-            if (currentUser != null) {
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val localUser = localUserRepository.getLoggedInUser()
+            if (localUser != null) {
                 val localTrips = getAllTrips()
 
                 // SYNC OPTIMIZATION: Ne synchroniser que les trips marqués comme "dirty" (needsSync = true)
@@ -693,7 +699,7 @@ class TripRepository private constructor(context: Context) {
                         "TripRepository"
                     )
 
-                    val result = supabaseTripRepository.syncTripsToSupabase(dirtyTrips.toDomainTripList(currentUser.id), currentUser.id)
+                    val result = supabaseTripRepository.syncTripsToSupabase(dirtyTrips.toDomainTripList(localUser.id), localUser.id)
                     if (result.isSuccess) {
                         val syncedCount = result.getOrNull() ?: 0
                         MotiumApplication.logger.i("✅ Successfully synced $syncedCount trips to Supabase", "TripRepository")
@@ -725,7 +731,8 @@ class TripRepository private constructor(context: Context) {
      */
     suspend fun getUnsyncedTripsCount(): Int = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val userId = localUserRepository.getLoggedInUser()?.id
                 ?: prefs.getString(KEY_LAST_USER_ID, null)
 
             if (userId == null) return@withContext 0
@@ -743,7 +750,8 @@ class TripRepository private constructor(context: Context) {
      */
     suspend fun getUnsyncedTrips(): List<Trip> = withContext(Dispatchers.IO) {
         try {
-            val userId = authRepository.getCurrentAuthUser()?.id
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val userId = localUserRepository.getLoggedInUser()?.id
                 ?: prefs.getString(KEY_LAST_USER_ID, null)
 
             if (userId == null) return@withContext emptyList()
@@ -800,7 +808,8 @@ class TripRepository private constructor(context: Context) {
                 return@withContext 0
             }
 
-            val userId = authRepository.getCurrentAuthUser()?.id
+            // FIX RLS: Utiliser users.id depuis localUserRepository
+            val userId = localUserRepository.getLoggedInUser()?.id
                 ?: prefs.getString(KEY_LAST_USER_ID, null)
             if (userId == null) {
                 MotiumApplication.logger.w("Cannot recalculate reimbursements - no user ID", "TripRepository")
@@ -874,8 +883,9 @@ class TripRepository private constructor(context: Context) {
 
     suspend fun syncTripsFromSupabase(userId: String? = null) = withContext(Dispatchers.IO) {
         try {
-            // Utiliser le userId passé en paramètre ou le récupérer depuis authRepository
-            val effectiveUserId = userId ?: authRepository.getCurrentAuthUser()?.id
+            // Utiliser le userId passé en paramètre ou le récupérer depuis localUserRepository
+            // FIX RLS: Utiliser users.id au lieu de auth.uid()
+            val effectiveUserId = userId ?: localUserRepository.getLoggedInUser()?.id
             if (effectiveUserId != null) {
                 MotiumApplication.logger.i("🔄 Fetching trips from Supabase for user: $effectiveUserId", "TripRepository")
 
@@ -1050,7 +1060,27 @@ private fun DomainTrip.toDataTrip(): Trip {
             accuracy = locationPoint.accuracy ?: 10.0f,
             timestamp = locationPoint.timestamp.toEpochMilliseconds()
         )
-    } ?: emptyList()
+    }?.takeIf { it.isNotEmpty() } ?: run {
+        // Fallback: create locations from start/end coordinates if no trace points
+        val locations = mutableListOf<TripLocation>()
+        if (startLatitude != 0.0 || startLongitude != 0.0) {
+            locations.add(TripLocation(
+                latitude = startLatitude,
+                longitude = startLongitude,
+                accuracy = 10.0f,
+                timestamp = startTime.toEpochMilliseconds()
+            ))
+        }
+        if (endLatitude != null && endLongitude != null && (endLatitude != 0.0 || endLongitude != 0.0)) {
+            locations.add(TripLocation(
+                latitude = endLatitude!!,
+                longitude = endLongitude!!,
+                accuracy = 10.0f,
+                timestamp = endTime?.toEpochMilliseconds() ?: System.currentTimeMillis()
+            ))
+        }
+        locations
+    }
 
     return Trip(
         id = id,

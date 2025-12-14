@@ -7,8 +7,8 @@ import com.application.motium.data.local.dao.ExpenseDao
 import com.application.motium.data.local.entities.ExpenseEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.preferences.SecureSessionStorage
-import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.SupabaseExpenseRepository
 import com.application.motium.domain.model.Expense
 import kotlinx.coroutines.Dispatchers
@@ -24,16 +24,18 @@ class ExpenseRepository private constructor(private val context: Context) {
 
     private val database = MotiumDatabase.getInstance(context)
     private val expenseDao: ExpenseDao = database.expenseDao()
-    private val authRepository = SupabaseAuthRepository.getInstance(context)
+    private val localUserRepository = LocalUserRepository.getInstance(context)
     private val supabaseExpenseRepository = SupabaseExpenseRepository.getInstance(context)
     private val secureSessionStorage = SecureSessionStorage(context)
 
     /**
-     * Get the current user ID from auth or secure storage.
+     * Get the current user ID from local user repository or secure storage.
+     * FIX RLS: Uses users.id (from localUserRepository) instead of auth.uid()
+     * because expenses.user_id must match users.id for RLS policies.
      */
     private suspend fun getCurrentUserId(): String? {
-        // Try from Supabase auth first
-        authRepository.getCurrentAuthUser()?.id?.let { return it }
+        // Try from local user repository first (returns users.id, not auth.uid())
+        localUserRepository.getLoggedInUser()?.id?.let { return it }
 
         // Fallback to secure session storage
         return secureSessionStorage.restoreSession()?.userId
@@ -107,6 +109,30 @@ class ExpenseRepository private constructor(private val context: Context) {
             expenseDao.getExpensesBetweenDates(userId, startDate, endDate).map { it.toDomainModel() }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting expenses between dates: ${e.message}", "ExpenseRepository", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Get expenses for a specific user within a date range (for Pro export).
+     * @param userId The user ID to fetch expenses for
+     * @param startDate Start date as epoch milliseconds
+     * @param endDate End date as epoch milliseconds
+     * @return List of expenses for the user within the date range
+     */
+    suspend fun getExpensesForDateRange(
+        userId: String,
+        startDate: Long,
+        endDate: Long
+    ): List<Expense> = withContext(Dispatchers.IO) {
+        try {
+            val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            val startDateStr = dateFormat.format(java.util.Date(startDate))
+            val endDateStr = dateFormat.format(java.util.Date(endDate))
+
+            expenseDao.getExpensesBetweenDates(userId, startDateStr, endDateStr).map { it.toDomainModel() }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting expenses for date range: ${e.message}", "ExpenseRepository", e)
             emptyList()
         }
     }
