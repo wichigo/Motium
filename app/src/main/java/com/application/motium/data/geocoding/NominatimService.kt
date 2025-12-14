@@ -9,6 +9,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import android.util.Log
+import kotlinx.coroutines.delay
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 
 @Serializable
 data class NominatimResult(
@@ -56,8 +60,32 @@ data class RouteResult(
 
 class NominatimService {
 
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .build()
     private val json = Json { ignoreUnknownKeys = true }
+
+    // LRU cache for map matching results (max 50 entries)
+    private val mapMatchCache = object : LinkedHashMap<String, List<List<Double>>>(50, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, List<List<Double>>>): Boolean {
+            return size > 50
+        }
+    }
+
+    // Cache of failed map-match keys to avoid retrying indefinitely
+    // Keys are cleared after 30 minutes to allow retry when server might be back
+    private val failedMapMatchKeys = mutableSetOf<String>()
+    private var lastFailureClearTime = System.currentTimeMillis()
+    private val FAILURE_CACHE_TTL_MS = 30 * 60 * 1000L // 30 minutes
+
+    private fun generateCacheKey(gpsPoints: List<Pair<Double, Double>>): String {
+        val first = gpsPoints.first()
+        val last = gpsPoints.last()
+        val middle = gpsPoints[gpsPoints.size / 2]
+        return "${first.first},${first.second}|${middle.first},${middle.second}|${last.first},${last.second}|${gpsPoints.size}"
+    }
 
     companion object {
         // Seuils de validation pour le geocoding
@@ -156,6 +184,31 @@ class NominatimService {
     }
 
     /**
+     * Retry helper with exponential backoff for network operations
+     */
+    private suspend fun <T> retryWithBackoff(
+        maxAttempts: Int = 3,
+        initialDelayMs: Long = 1000,
+        block: suspend () -> T
+    ): T {
+        var currentDelay = initialDelayMs
+        repeat(maxAttempts - 1) { attempt ->
+            try {
+                return block()
+            } catch (e: SocketTimeoutException) {
+                Log.w("NominatimService", "Attempt ${attempt + 1} timed out, retrying in ${currentDelay}ms")
+                delay(currentDelay)
+                currentDelay *= 2
+            } catch (e: IOException) {
+                Log.w("NominatimService", "Network error on attempt ${attempt + 1}, retrying in ${currentDelay}ms")
+                delay(currentDelay)
+                currentDelay *= 2
+            }
+        }
+        return block() // Final attempt - let exception propagate
+    }
+
+    /**
      * Map Matching: "Snap to Road" - Aligne les points GPS sur les routes réelles
      * Utilise l'API OSRM Match pour créer un tracé qui suit les vraies routes
      * au lieu de tracer des lignes droites entre les points GPS.
@@ -166,6 +219,27 @@ class NominatimService {
     suspend fun matchRoute(gpsPoints: List<Pair<Double, Double>>): List<List<Double>>? = withContext(Dispatchers.IO) {
         if (gpsPoints.size < 2) {
             Log.w("NominatimService", "Map matching requires at least 2 points")
+            return@withContext null
+        }
+
+        // Check cache first
+        val cacheKey = generateCacheKey(gpsPoints)
+        mapMatchCache[cacheKey]?.let { cached ->
+            Log.d("NominatimService", "✅ Map matching cache hit for ${gpsPoints.size} points")
+            return@withContext cached
+        }
+
+        // Clear failed cache periodically (every 30 min) to allow retry
+        val now = System.currentTimeMillis()
+        if (now - lastFailureClearTime > FAILURE_CACHE_TTL_MS) {
+            failedMapMatchKeys.clear()
+            lastFailureClearTime = now
+            Log.d("NominatimService", "Cleared failed map-match cache")
+        }
+
+        // Skip if this key previously failed (avoid retry loop)
+        if (cacheKey in failedMapMatchKeys) {
+            Log.d("NominatimService", "⏭️ Skipping map-match (previously failed): ${gpsPoints.size} points")
             return@withContext null
         }
 
@@ -198,7 +272,10 @@ class NominatimService {
                 .addHeader("User-Agent", "Motium/1.0")
                 .build()
 
-            val response = client.newCall(request).execute()
+            // Single attempt only - public OSRM server is unreliable, don't spam retries
+            val response = retryWithBackoff(maxAttempts = 1) {
+                client.newCall(request).execute()
+            }
 
             if (response.isSuccessful) {
                 val responseBody = response.body?.string() ?: return@withContext null
@@ -219,6 +296,7 @@ class NominatimService {
                 }
 
                 if (coordinates != null && coordinates.isNotEmpty()) {
+                    mapMatchCache[cacheKey] = coordinates
                     Log.d("NominatimService", "✅ Map matching success: ${gpsPoints.size} GPS points → ${coordinates.size} road points")
                     coordinates
                 } else {
@@ -231,6 +309,8 @@ class NominatimService {
             }
         } catch (e: Exception) {
             Log.e("NominatimService", "Map matching error: ${e.message}", e)
+            // Mark as failed to avoid retry loop
+            failedMapMatchKeys.add(cacheKey)
             null
         }
     }
