@@ -249,7 +249,7 @@ fun SettingsScreen(
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp),
-            contentPadding = PaddingValues(vertical = 24.dp)
+            contentPadding = PaddingValues(top = 24.dp, bottom = 100.dp)
         ) {
             // User Profile Section
             item {
