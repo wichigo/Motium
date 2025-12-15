@@ -1,9 +1,8 @@
 package com.application.motium.presentation.components
 
+import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
@@ -16,16 +15,25 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Polyline
-import org.osmdroid.views.overlay.Marker
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.application.motium.utils.Constants
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.Style
+import org.maplibre.android.plugins.annotation.CircleManager
+import org.maplibre.android.plugins.annotation.CircleOptions
+import org.maplibre.android.plugins.annotation.LineManager
+import org.maplibre.android.plugins.annotation.LineOptions
+import org.maplibre.android.utils.ColorUtils
 
 @Composable
 fun MiniMap(
@@ -35,10 +43,10 @@ fun MiniMap(
     endLongitude: Double?,
     routeCoordinates: List<List<Double>>? = null,
     modifier: Modifier = Modifier,
-    isCompact: Boolean = false  // For small maps (e.g., 83dp on Home screen)
+    isCompact: Boolean = false,
+    isInteractive: Boolean = true
 ) {
     // For compact maps in lists, use a lightweight Canvas-based route preview
-    // This avoids creating heavy MapView instances during scrolling
     if (isCompact && startLatitude != null && startLongitude != null) {
         CompactRoutePreview(
             routeCoordinates = routeCoordinates,
@@ -51,48 +59,10 @@ fun MiniMap(
         return
     }
 
-    // Full MapView for detail screens
-    val strokeWidth = 8f
-    val boundingBoxPadding = 30
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Configure OSMDroid
-    LaunchedEffect(Unit) {
-        Configuration.getInstance().userAgentValue = "Motium/1.0"
-    }
-
-    // Helper function to calculate bounding box from coordinates
-    fun calculateBoundingBox(
-        coords: List<List<Double>>?,
-        fallbackStartLat: Double,
-        fallbackStartLon: Double,
-        fallbackEndLat: Double?,
-        fallbackEndLon: Double?
-    ): org.osmdroid.util.BoundingBox {
-        val allLats = mutableListOf<Double>()
-        val allLons = mutableListOf<Double>()
-
-        coords?.forEach { coord ->
-            if (coord.size >= 2) {
-                allLats.add(coord[1])
-                allLons.add(coord[0])
-            }
-        }
-
-        allLats.add(fallbackStartLat)
-        allLons.add(fallbackStartLon)
-        if (fallbackEndLat != null && fallbackEndLon != null) {
-            allLats.add(fallbackEndLat)
-            allLons.add(fallbackEndLon)
-        }
-
-        val minLat = allLats.minOrNull()!!
-        val maxLat = allLats.maxOrNull()!!
-        val minLon = allLons.minOrNull()!!
-        val maxLon = allLons.maxOrNull()!!
-
-        return org.osmdroid.util.BoundingBox(maxLat, maxLon, minLat, minLon)
-    }
+    // MapLibre is initialized in MotiumApplication
 
     Card(
         modifier = modifier
@@ -101,112 +71,69 @@ fun MiniMap(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         if (startLatitude != null && startLongitude != null) {
+            var mapView by remember { mutableStateOf<MapView?>(null) }
+
             AndroidView(
-                factory = { context ->
-                    MapView(context).apply {
-                        setTileSource(TileSourceFactory.MAPNIK)
-                        setMultiTouchControls(false)
-                        minZoomLevel = 5.0
-                        maxZoomLevel = 19.0
-
-                        val startPoint = GeoPoint(startLatitude, startLongitude)
-                        controller.setCenter(startPoint)
-                        controller.setZoom(14.0)
-
-                        if (endLatitude != null && endLongitude != null) {
-                            val startMarker = Marker(this).apply {
-                                position = GeoPoint(startLatitude, startLongitude)
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                icon = resources.getDrawable(android.R.drawable.presence_online, null)
+                factory = { ctx ->
+                    MapView(ctx).also { view ->
+                        mapView = view
+                        view.getMapAsync { map ->
+                            val styleUrl = if (Constants.PrivateServer.USE_PRIVATE_TILES) {
+                                Constants.PrivateServer.MAPLIBRE_STYLE_PRIVATE
+                            } else {
+                                Constants.PrivateServer.MAPLIBRE_STYLE_FALLBACK
                             }
-                            overlays.add(startMarker)
 
-                            val endMarker = Marker(this).apply {
-                                position = GeoPoint(endLatitude, endLongitude)
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                icon = resources.getDrawable(android.R.drawable.presence_busy, null)
-                            }
-                            overlays.add(endMarker)
-                        }
+                            map.setStyle(styleUrl) { style ->
+                                // Configure user interaction based on isInteractive
+                                map.uiSettings.isZoomGesturesEnabled = isInteractive
+                                map.uiSettings.isScrollGesturesEnabled = isInteractive
+                                map.uiSettings.isRotateGesturesEnabled = false
+                                map.uiSettings.isTiltGesturesEnabled = false
 
-                        if (!routeCoordinates.isNullOrEmpty()) {
-                            val polyline = Polyline().apply {
-                                outlinePaint.color = Color.Blue.toArgb()
-                                outlinePaint.strokeWidth = strokeWidth
-                            }
-                            routeCoordinates.forEach { coord ->
-                                if (coord.size >= 2) {
-                                    polyline.addPoint(GeoPoint(coord[1], coord[0]))
+                                // Add route polyline if available
+                                if (!routeCoordinates.isNullOrEmpty()) {
+                                    addRoutePolyline(view, map, style, routeCoordinates)
                                 }
-                            }
-                            overlays.add(polyline)
-                        }
 
-                        post {
-                            val boundingBox = calculateBoundingBox(
-                                routeCoordinates,
-                                startLatitude,
-                                startLongitude,
-                                endLatitude,
-                                endLongitude
-                            )
-                            zoomToBoundingBox(boundingBox, false, boundingBoxPadding)
+                                // Add markers
+                                addMarkers(view, map, style, startLatitude, startLongitude, endLatitude, endLongitude)
+
+                                // Zoom to fit all points
+                                zoomToFitRoute(map, routeCoordinates, startLatitude, startLongitude, endLatitude, endLongitude)
+                            }
                         }
                     }
                 },
-                update = { mapView ->
-                    mapView.overlays.clear()
+                modifier = Modifier.fillMaxSize()
+            )
 
-                    if (endLatitude != null && endLongitude != null) {
-                        val startMarker = Marker(mapView).apply {
-                            position = GeoPoint(startLatitude, startLongitude)
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            icon = mapView.context.resources.getDrawable(android.R.drawable.presence_online, null)
-                        }
-                        mapView.overlays.add(startMarker)
-
-                        val endMarker = Marker(mapView).apply {
-                            position = GeoPoint(endLatitude, endLongitude)
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            icon = mapView.context.resources.getDrawable(android.R.drawable.presence_busy, null)
-                        }
-                        mapView.overlays.add(endMarker)
-                    }
-
-                    if (!routeCoordinates.isNullOrEmpty()) {
-                        val polyline = Polyline().apply {
-                            outlinePaint.color = Color.Blue.toArgb()
-                            outlinePaint.strokeWidth = strokeWidth
-                        }
-                        routeCoordinates.forEach { coord ->
-                            if (coord.size >= 2) {
-                                polyline.addPoint(GeoPoint(coord[1], coord[0]))
-                            }
-                        }
-                        mapView.overlays.add(polyline)
-                    }
-
-                    mapView.post {
-                        val boundingBox = calculateBoundingBox(
-                            routeCoordinates,
-                            startLatitude,
-                            startLongitude,
-                            endLatitude,
-                            endLongitude
-                        )
-                        mapView.zoomToBoundingBox(boundingBox, false, boundingBoxPadding)
-                        mapView.invalidate()
+            // Lifecycle management
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_START -> mapView?.onStart()
+                        Lifecycle.Event.ON_RESUME -> mapView?.onResume()
+                        Lifecycle.Event.ON_PAUSE -> mapView?.onPause()
+                        Lifecycle.Event.ON_STOP -> mapView?.onStop()
+                        Lifecycle.Event.ON_DESTROY -> mapView?.onDestroy()
+                        else -> {}
                     }
                 }
-            )
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                    mapView?.onDestroy()
+                }
+            }
         } else {
-            // Placeholder quand pas de coordonnées
+            // Placeholder when no coordinates
             Box(
                 modifier = Modifier.fillMaxSize(),
-                contentAlignment = androidx.compose.ui.Alignment.Center
+                contentAlignment = Alignment.Center
             ) {
                 Column(
-                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Icon(
                         imageVector = Icons.Default.LocationOn,
@@ -226,9 +153,113 @@ fun MiniMap(
     }
 }
 
+private fun addRoutePolyline(
+    mapView: MapView,
+    map: MapLibreMap,
+    style: Style,
+    routeCoordinates: List<List<Double>>
+) {
+    try {
+        val lineManager = LineManager(mapView, map, style)
+        val latLngs = routeCoordinates.mapNotNull { coord ->
+            if (coord.size >= 2) {
+                LatLng(coord[1], coord[0]) // lat, lon
+            } else null
+        }
+
+        if (latLngs.isNotEmpty()) {
+            lineManager.create(
+                LineOptions()
+                    .withLatLngs(latLngs)
+                    .withLineColor(ColorUtils.colorToRgbaString(AndroidColor.BLUE))
+                    .withLineWidth(4f)
+            )
+        }
+    } catch (e: Exception) {
+        // Fallback: add as GeoJSON source
+        android.util.Log.w("MiniMap", "LineManager not available, route not displayed: ${e.message}")
+    }
+}
+
+private fun addMarkers(
+    mapView: MapView,
+    map: MapLibreMap,
+    style: Style,
+    startLat: Double,
+    startLon: Double,
+    endLat: Double?,
+    endLon: Double?
+) {
+    try {
+        val circleManager = CircleManager(mapView, map, style)
+
+        // Start marker (green)
+        circleManager.create(
+            CircleOptions()
+                .withLatLng(LatLng(startLat, startLon))
+                .withCircleColor(ColorUtils.colorToRgbaString(AndroidColor.GREEN))
+                .withCircleRadius(8f)
+                .withCircleStrokeColor(ColorUtils.colorToRgbaString(AndroidColor.WHITE))
+                .withCircleStrokeWidth(2f)
+        )
+
+        // End marker (red)
+        if (endLat != null && endLon != null) {
+            circleManager.create(
+                CircleOptions()
+                    .withLatLng(LatLng(endLat, endLon))
+                    .withCircleColor(ColorUtils.colorToRgbaString(AndroidColor.RED))
+                    .withCircleRadius(8f)
+                    .withCircleStrokeColor(ColorUtils.colorToRgbaString(AndroidColor.WHITE))
+                    .withCircleStrokeWidth(2f)
+            )
+        }
+    } catch (e: Exception) {
+        android.util.Log.w("MiniMap", "CircleManager not available: ${e.message}")
+    }
+}
+
+private fun zoomToFitRoute(
+    map: MapLibreMap,
+    routeCoordinates: List<List<Double>>?,
+    startLat: Double,
+    startLon: Double,
+    endLat: Double?,
+    endLon: Double?
+) {
+    val boundsBuilder = LatLngBounds.Builder()
+
+    // Add route points
+    routeCoordinates?.forEach { coord ->
+        if (coord.size >= 2) {
+            boundsBuilder.include(LatLng(coord[1], coord[0]))
+        }
+    }
+
+    // Add start/end points
+    boundsBuilder.include(LatLng(startLat, startLon))
+    if (endLat != null && endLon != null) {
+        boundsBuilder.include(LatLng(endLat, endLon))
+    }
+
+    try {
+        val bounds = boundsBuilder.build()
+        map.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, 50))
+    } catch (e: Exception) {
+        // Fallback to center on start point
+        map.moveCamera(
+            CameraUpdateFactory.newCameraPosition(
+                CameraPosition.Builder()
+                    .target(LatLng(startLat, startLon))
+                    .zoom(14.0)
+                    .build()
+            )
+        )
+    }
+}
+
 /**
  * Lightweight Canvas-based route preview for compact maps in scrolling lists.
- * Much faster than MapView as it doesn't load map tiles or create heavy Android views.
  */
 @Composable
 private fun CompactRoutePreview(
@@ -240,33 +271,26 @@ private fun CompactRoutePreview(
     modifier: Modifier = Modifier
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
-    val startColor = Color(0xFF4CAF50) // Green for start
-    val endColor = Color(0xFFF44336) // Red for end
+    val startColor = Color(0xFF4CAF50)
+    val endColor = Color(0xFFF44336)
 
-    // Collect all points for bounds calculation
     val allPoints = remember(routeCoordinates, startLat, startLon, endLat, endLon) {
         val points = mutableListOf<Pair<Double, Double>>()
-
-        // Add route coordinates if available
         routeCoordinates?.forEach { coord ->
             if (coord.size >= 2) {
-                points.add(Pair(coord[0], coord[1])) // lon, lat
+                points.add(Pair(coord[0], coord[1]))
             }
         }
-
-        // If no route, use start/end points
         if (points.isEmpty()) {
             points.add(Pair(startLon, startLat))
             if (endLat != null && endLon != null) {
                 points.add(Pair(endLon, endLat))
             }
         }
-
         points
     }
 
     if (allPoints.size < 2) {
-        // Single point - show a marker icon
         Box(
             modifier = modifier,
             contentAlignment = Alignment.Center
@@ -279,9 +303,7 @@ private fun CompactRoutePreview(
             )
         }
     } else {
-        // Draw the route path directly on Canvas
         Canvas(modifier = modifier.padding(6.dp)) {
-            // Calculate bounds
             val minLon = allPoints.minOf { it.first }
             val maxLon = allPoints.maxOf { it.first }
             val minLat = allPoints.minOf { it.second }
@@ -290,7 +312,6 @@ private fun CompactRoutePreview(
             val lonRange = maxLon - minLon
             val latRange = maxLat - minLat
 
-            // Add padding to bounds (15%)
             val paddingFactor = 0.15
             val adjustedMinLon = minLon - lonRange * paddingFactor
             val adjustedMaxLon = maxLon + lonRange * paddingFactor
@@ -299,14 +320,12 @@ private fun CompactRoutePreview(
             val adjustedLonRange = adjustedMaxLon - adjustedMinLon
             val adjustedLatRange = adjustedMaxLat - adjustedMinLat
 
-            // Function to convert geo coords to canvas coords
             fun geoToCanvas(lon: Double, lat: Double): Offset {
                 val x = if (adjustedLonRange > 0) {
                     ((lon - adjustedMinLon) / adjustedLonRange * size.width).toFloat()
                 } else {
                     size.width / 2
                 }
-                // Invert Y because canvas Y increases downward, but latitude increases upward
                 val y = if (adjustedLatRange > 0) {
                     ((adjustedMaxLat - lat) / adjustedLatRange * size.height).toFloat()
                 } else {
@@ -315,7 +334,6 @@ private fun CompactRoutePreview(
                 return Offset(x, y)
             }
 
-            // Draw the route path
             val path = Path()
             allPoints.forEachIndexed { index, point ->
                 val canvasPoint = geoToCanvas(point.first, point.second)
@@ -336,21 +354,11 @@ private fun CompactRoutePreview(
                 )
             )
 
-            // Draw start marker (green circle)
             val startPoint = geoToCanvas(allPoints.first().first, allPoints.first().second)
-            drawCircle(
-                color = startColor,
-                radius = 4.dp.toPx(),
-                center = startPoint
-            )
+            drawCircle(color = startColor, radius = 4.dp.toPx(), center = startPoint)
 
-            // Draw end marker (red circle)
             val endPoint = geoToCanvas(allPoints.last().first, allPoints.last().second)
-            drawCircle(
-                color = endColor,
-                radius = 4.dp.toPx(),
-                center = endPoint
-            )
+            drawCircle(color = endColor, radius = 4.dp.toPx(), center = endPoint)
         }
     }
 }

@@ -110,8 +110,9 @@ dependencies {
     // Coil for image loading
     implementation("io.coil-kt:coil-compose:2.5.0")
 
-    // OSMDroid for maps
-    implementation(libs.osmdroid.android)
+    // MapLibre for maps (supports MVT vector tiles)
+    implementation("org.maplibre.gl:android-sdk:11.8.4")
+    implementation("org.maplibre.gl:android-plugin-annotation-v9:3.0.1")
 
     // Networking
     implementation(libs.retrofit2.retrofit)

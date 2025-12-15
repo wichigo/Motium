@@ -7,6 +7,7 @@ import com.application.motium.data.sync.LicenseScheduler
 import com.application.motium.data.sync.SyncScheduler
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.utils.AppLogger
+import org.maplibre.android.MapLibre
 
 class MotiumApplication : Application() {
 
@@ -21,6 +22,14 @@ class MotiumApplication : Application() {
         // Initialiser le système de logging
         logger = AppLogger.getInstance(this)
         logger.i("Motium Application started", "Application")
+
+        // Initialiser MapLibre (doit être fait avant toute utilisation de MapView)
+        try {
+            MapLibre.getInstance(this)
+            logger.i("MapLibre initialized successfully", "Application")
+        } catch (e: Exception) {
+            logger.e("Failed to initialize MapLibre: ${e.message}", "Application", e)
+        }
 
         // Initialiser le client Supabase avec le contexte de l'application
         // DOIT être fait avant toute utilisation de Supabase

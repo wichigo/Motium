@@ -1,5 +1,6 @@
 package com.application.motium.data.geocoding
 
+import com.application.motium.utils.Constants
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.*
@@ -106,82 +107,39 @@ class NominatimService {
         try {
             if (query.length < 3) return@withContext emptyList()
 
-            // Utiliser l'API française officielle qui est bien meilleure pour l'autocomplétion
-            val url = "https://api-adresse.data.gouv.fr/search/".toHttpUrl()
+            // Utiliser le serveur Nominatim privé
+            val url = Constants.PrivateServer.NOMINATIM_SEARCH_URL.toHttpUrl()
                 .newBuilder()
                 .addQueryParameter("q", query)
+                .addQueryParameter("format", "json")
                 .addQueryParameter("limit", "8")
-                .addQueryParameter("autocomplete", "1") // Mode autocomplétion
+                .addQueryParameter("countrycodes", Constants.PrivateServer.NOMINATIM_COUNTRY_CODES)
+                .addQueryParameter("addressdetails", "1")
                 .build()
+
+            Log.d("NominatimService", "Search URL: $url")
 
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "Motium/1.0")
+                .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
             val response = client.newCall(request).execute()
 
             if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: "{\"features\":[]}"
-                val frenchResponse = json.decodeFromString<FrenchAddressResponse>(responseBody)
-
-                // Convertir les résultats français vers le format NominatimResult
-                frenchResponse.features.map { feature ->
-                    val props = feature.properties
-                    val coords = feature.geometry.coordinates
-
-                    NominatimResult(
-                        display_name = props.label,
-                        lat = coords[1].toString(), // latitude
-                        lon = coords[0].toString(), // longitude
-                        type = props.type,
-                        importance = props.score
-                    )
-                }
-            } else {
-                Log.e("NominatimService", "French API Error: ${response.code}")
-
-                // Fallback vers Nominatim si l'API française échoue
-                fallbackToNominatim(query)
-            }
-        } catch (e: Exception) {
-            Log.e("NominatimService", "French API error: ${e.message}", e)
-
-            // Fallback vers Nominatim en cas d'erreur
-            fallbackToNominatim(query)
-        }
-    }
-
-    private suspend fun fallbackToNominatim(query: String): List<NominatimResult> {
-        try {
-            val url = "https://nominatim.openstreetmap.org/search".toHttpUrl()
-                .newBuilder()
-                .addQueryParameter("q", query)
-                .addQueryParameter("format", "json")
-                .addQueryParameter("limit", "8")
-                .addQueryParameter("countrycodes", "fr")
-                .addQueryParameter("addressdetails", "1")
-                .build()
-
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("User-Agent", "Motium/1.0")
-                .build()
-
-            val response = client.newCall(request).execute()
-
-            return if (response.isSuccessful) {
                 val responseBody = response.body?.string() ?: "[]"
+                Log.d("NominatimService", "Search response: ${responseBody.take(200)}...")
                 json.decodeFromString<List<NominatimResult>>(responseBody)
             } else {
-                Log.e("NominatimService", "Nominatim fallback error: ${response.code}")
+                Log.e("NominatimService", "Private Nominatim Error: ${response.code}")
                 emptyList()
             }
         } catch (e: Exception) {
-            Log.e("NominatimService", "Nominatim fallback error: ${e.message}", e)
-            return emptyList()
+            Log.e("NominatimService", "Search error: ${e.message}", e)
+            emptyList()
         }
     }
+
 
     /**
      * Retry helper with exponential backoff for network operations
@@ -258,18 +216,18 @@ class NominatimService {
                 "$lon,$lat"
             }
 
-            val url = "https://router.project-osrm.org/match/v1/driving/$coordinatesString".toHttpUrl()
+            val url = "${Constants.PrivateServer.OSRM_MATCH_URL}/$coordinatesString".toHttpUrl()
                 .newBuilder()
                 .addQueryParameter("overview", "full")
                 .addQueryParameter("geometries", "geojson")
                 .addQueryParameter("radiuses", sampledPoints.joinToString(";") { "25" }) // 25m de tolérance
                 .build()
 
-            Log.d("NominatimService", "Map matching ${sampledPoints.size} points...")
+            Log.d("NominatimService", "Map matching ${sampledPoints.size} points on private OSRM...")
 
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "Motium/1.0")
+                .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
             // Single attempt only - public OSRM server is unreliable, don't spam retries
@@ -324,18 +282,18 @@ class NominatimService {
         try {
             Log.d("NominatimService", "Calcul route: ($startLat,$startLon) -> ($endLat,$endLon)")
 
-            // Utiliser OSRM (Open Source Routing Machine) - totalement gratuit, pas de clé API
-            val url = "https://router.project-osrm.org/route/v1/driving/$startLon,$startLat;$endLon,$endLat".toHttpUrl()
+            // Utiliser le serveur OSRM privé
+            val url = "${Constants.PrivateServer.OSRM_ROUTE_URL}/$startLon,$startLat;$endLon,$endLat".toHttpUrl()
                 .newBuilder()
                 .addQueryParameter("overview", "full")
                 .addQueryParameter("geometries", "geojson")
                 .build()
 
-            Log.d("NominatimService", "URL route: $url")
+            Log.d("NominatimService", "URL route (private OSRM): $url")
 
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "Motium/1.0")
+                .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
             val response = client.newCall(request).execute()
@@ -382,85 +340,11 @@ class NominatimService {
 
     /**
      * Reverse geocoding: convertit des coordonnées GPS en adresse lisible
-     * Avec validation de cohérence géographique pour éviter les adresses erronées
+     * Utilise le serveur Nominatim privé
      */
     suspend fun reverseGeocode(latitude: Double, longitude: Double): String? = withContext(Dispatchers.IO) {
         try {
-            // Utiliser l'API française en priorité
-            val url = "https://api-adresse.data.gouv.fr/reverse/".toHttpUrl()
-                .newBuilder()
-                .addQueryParameter("lon", longitude.toString())
-                .addQueryParameter("lat", latitude.toString())
-                .build()
-
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("User-Agent", "Motium/1.0")
-                .build()
-
-            val response = client.newCall(request).execute()
-
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: "{\"features\":[]}"
-                val frenchResponse = json.decodeFromString<FrenchAddressResponse>(responseBody)
-
-                // Valider l'adresse retournée
-                val feature = frenchResponse.features.firstOrNull()
-                if (feature != null) {
-                    val address = feature.properties.label
-                    val score = feature.properties.score
-                    val returnedCoords = feature.geometry.coordinates
-
-                    // Validation 1: Vérifier le score de confiance (> 0.5)
-                    if (score < MIN_GEOCODING_SCORE) {
-                        Log.w("NominatimService", "Low confidence score: $score for ($latitude, $longitude)")
-                        // Essayer Nominatim en fallback
-                        return@withContext reverseGeocodeNominatim(latitude, longitude) ?: address
-                    }
-
-                    // Validation 2: Vérifier la distance entre GPS et adresse retournée
-                    if (returnedCoords.size >= 2) {
-                        val returnedLon = returnedCoords[0]
-                        val returnedLat = returnedCoords[1]
-                        val distance = calculateDistance(latitude, longitude, returnedLat, returnedLon)
-
-                        if (distance > MAX_GEOCODING_DISTANCE_METERS) {
-                            Log.w("NominatimService", "Address too far: ${distance.toInt()}m from GPS point for ($latitude, $longitude)")
-                            // Essayer Nominatim en fallback
-                            val nominatimResult = reverseGeocodeNominatim(latitude, longitude)
-                            return@withContext nominatimResult ?: address
-                        }
-
-                        Log.d("NominatimService", "✅ Geocoding validated: $address (score: $score, distance: ${distance.toInt()}m)")
-                    }
-
-                    address
-                } else {
-                    Log.w("NominatimService", "No address found for ($latitude, $longitude)")
-                    reverseGeocodeNominatim(latitude, longitude)
-                }
-            } else {
-                Log.e("NominatimService", "French reverse API Error: ${response.code}")
-                reverseGeocodeNominatim(latitude, longitude)
-            }
-        } catch (e: Exception) {
-            Log.e("NominatimService", "French reverse geocoding error: ${e.message}", e)
-            reverseGeocodeNominatim(latitude, longitude)
-        }
-    }
-
-    /**
-     * Calcule la distance en mètres entre deux points GPS
-     */
-    private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
-        val results = FloatArray(1)
-        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
-        return results[0]
-    }
-
-    private suspend fun reverseGeocodeNominatim(latitude: Double, longitude: Double): String? {
-        try {
-            val url = "https://nominatim.openstreetmap.org/reverse".toHttpUrl()
+            val url = Constants.PrivateServer.NOMINATIM_REVERSE_URL.toHttpUrl()
                 .newBuilder()
                 .addQueryParameter("lat", latitude.toString())
                 .addQueryParameter("lon", longitude.toString())
@@ -468,24 +352,29 @@ class NominatimService {
                 .addQueryParameter("addressdetails", "1")
                 .build()
 
+            Log.d("NominatimService", "Reverse geocode URL: $url")
+
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "Motium/1.0")
+                .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
             val response = client.newCall(request).execute()
 
-            return if (response.isSuccessful) {
+            if (response.isSuccessful) {
                 val responseBody = response.body?.string() ?: "{}"
+                Log.d("NominatimService", "Reverse response: ${responseBody.take(200)}...")
                 val result = json.decodeFromString<NominatimResult>(responseBody)
+                Log.d("NominatimService", "✅ Reverse geocoded: ${result.display_name}")
                 result.display_name
             } else {
-                Log.e("NominatimService", "Nominatim reverse error: ${response.code}")
+                Log.e("NominatimService", "Reverse geocode error: ${response.code}")
                 null
             }
         } catch (e: Exception) {
-            Log.e("NominatimService", "Nominatim reverse error: ${e.message}", e)
-            return null
+            Log.e("NominatimService", "Reverse geocoding error: ${e.message}", e)
+            null
         }
     }
+
 }

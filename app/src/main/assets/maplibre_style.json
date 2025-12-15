@@ -1,0 +1,144 @@
+{
+  "version": 8,
+  "name": "Motium",
+  "sources": {
+    "protomaps": {
+      "type": "vector",
+      "tiles": ["http://176.168.117.243:8080/europe-ouest/{z}/{x}/{y}.mvt"],
+      "maxzoom": 14
+    }
+  },
+  "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {"background-color": "#f8f4f0"}
+    },
+    {
+      "id": "earth",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "earth",
+      "paint": {"fill-color": "#f0ede8"}
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "water",
+      "paint": {"fill-color": "#a0c8f0"}
+    },
+    {
+      "id": "landuse-park",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "landuse",
+      "filter": ["==", "kind", "park"],
+      "paint": {"fill-color": "#c8e6c8"}
+    },
+    {
+      "id": "landuse-forest",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "landuse",
+      "filter": ["==", "kind", "forest"],
+      "paint": {"fill-color": "#b8d8b0"}
+    },
+    {
+      "id": "landuse-residential",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "landuse",
+      "filter": ["==", "kind", "residential"],
+      "paint": {"fill-color": "#f0e8e0"}
+    },
+    {
+      "id": "natural",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "natural",
+      "paint": {"fill-color": "#d8e8c8"}
+    },
+    {
+      "id": "roads-path",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "roads",
+      "filter": ["==", "kind", "path"],
+      "paint": {"line-color": "#d0c8c0", "line-width": 1, "line-dasharray": [2, 2]}
+    },
+    {
+      "id": "roads-minor",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "roads",
+      "filter": ["in", "kind", "minor_road", "other"],
+      "paint": {"line-color": "#ffffff", "line-width": 2}
+    },
+    {
+      "id": "roads-medium",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "roads",
+      "filter": ["in", "kind", "major_road"],
+      "paint": {"line-color": "#ffe090", "line-width": 3}
+    },
+    {
+      "id": "roads-major",
+      "type": "line",
+      "source": "protomaps",
+      "source-layer": "roads",
+      "filter": ["in", "kind", "highway"],
+      "paint": {"line-color": "#ffb040", "line-width": 4}
+    },
+    {
+      "id": "buildings",
+      "type": "fill",
+      "source": "protomaps",
+      "source-layer": "buildings",
+      "minzoom": 13,
+      "paint": {"fill-color": "#d9d0c9", "fill-outline-color": "#c0b8b0"}
+    },
+    {
+      "id": "place-labels-village",
+      "type": "symbol",
+      "source": "protomaps",
+      "source-layer": "places",
+      "filter": ["==", "kind", "village"],
+      "minzoom": 10,
+      "layout": {
+        "text-field": "{name}",
+        "text-font": ["Open Sans Regular"],
+        "text-size": 11
+      },
+      "paint": {"text-color": "#555555", "text-halo-color": "#ffffff", "text-halo-width": 1}
+    },
+    {
+      "id": "place-labels-town",
+      "type": "symbol",
+      "source": "protomaps",
+      "source-layer": "places",
+      "filter": ["==", "kind", "town"],
+      "layout": {
+        "text-field": "{name}",
+        "text-font": ["Open Sans Regular"],
+        "text-size": 13
+      },
+      "paint": {"text-color": "#444444", "text-halo-color": "#ffffff", "text-halo-width": 1}
+    },
+    {
+      "id": "place-labels-city",
+      "type": "symbol",
+      "source": "protomaps",
+      "source-layer": "places",
+      "filter": ["==", "kind", "city"],
+      "layout": {
+        "text-field": "{name}",
+        "text-font": ["Open Sans Regular"],
+        "text-size": 15
+      },
+      "paint": {"text-color": "#333333", "text-halo-color": "#ffffff", "text-halo-width": 1.5}
+    }
+  ]
+}
