@@ -9,7 +9,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import android.util.Log
 import kotlinx.coroutines.delay
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -21,8 +20,161 @@ data class NominatimResult(
     val lat: String,
     val lon: String,
     val type: String? = null,
-    val importance: Double? = null
+    val importance: Double? = null,
+    val address: NominatimAddress? = null
 )
+
+@Serializable
+data class NominatimAddress(
+    val house_number: String? = null,
+    val road: String? = null,
+    val pedestrian: String? = null,
+    val footway: String? = null,
+    val cycleway: String? = null,
+    val path: String? = null,
+    val neighbourhood: String? = null,
+    val suburb: String? = null,
+    val city: String? = null,
+    val town: String? = null,
+    val village: String? = null,
+    val municipality: String? = null,
+    val postcode: String? = null,
+    val country: String? = null
+) {
+    /**
+     * Formate l'adresse selon le format souhaité:
+     * numéro rue, code postal ville, pays
+     */
+    fun formatAddress(): String {
+        val parts = mutableListOf<String>()
+
+        // Numéro et rue
+        val streetName = road ?: pedestrian ?: footway ?: cycleway ?: path
+        if (house_number != null && streetName != null) {
+            parts.add("$house_number $streetName")
+        } else if (streetName != null) {
+            parts.add(streetName)
+        } else if (neighbourhood != null) {
+            parts.add(neighbourhood)
+        } else if (suburb != null) {
+            parts.add(suburb)
+        }
+
+        // Code postal et ville
+        val cityName = city ?: town ?: village ?: municipality
+        if (postcode != null && cityName != null) {
+            parts.add("$postcode $cityName")
+        } else if (cityName != null) {
+            parts.add(cityName)
+        } else if (postcode != null) {
+            parts.add(postcode)
+        }
+
+        // Pays
+        if (country != null) {
+            parts.add(country)
+        }
+
+        return parts.joinToString(", ")
+    }
+
+    companion object {
+        /**
+         * Regex pour détecter un code postal français (5 chiffres)
+         */
+        private val FRENCH_POSTCODE_REGEX = Regex("\\b(\\d{5})\\b")
+
+        /**
+         * Regex pour détecter un numéro de rue seul (1-4 chiffres, éventuellement avec bis/ter)
+         */
+        private val HOUSE_NUMBER_REGEX = Regex("^\\d{1,4}(\\s*(bis|ter|quater))?$", RegexOption.IGNORE_CASE)
+
+        /**
+         * Reformate une adresse au format long Nominatim vers un format court.
+         * Exemple: "Voie Rapide Urbaine de Chambéry, Gonrat, Chambéry, Savoie, Auvergne-Rhône-Alpes, France métropolitaine, 73000, France"
+         * Devient: "Voie Rapide Urbaine de Chambéry, 73000 Chambéry, France"
+         *
+         * Exemple avec numéro: "25, Rue de Warens, La Garatte, Chambéry, ..., 73000, France"
+         * Devient: "25 Rue de Warens, 73000 Chambéry, France"
+         */
+        fun simplifyLegacyAddress(fullAddress: String?): String {
+            if (fullAddress.isNullOrBlank()) return "Adresse inconnue"
+
+            val parts = fullAddress.split(",").map { it.trim() }
+            if (parts.size <= 3) return fullAddress // Déjà court
+
+            val result = mutableListOf<String>()
+
+            // 1. Construire l'adresse de rue
+            val firstPart = parts.firstOrNull() ?: ""
+            val street: String
+
+            // Si le premier élément est juste un numéro, combiner avec le deuxième (nom de rue)
+            if (HOUSE_NUMBER_REGEX.matches(firstPart) && parts.size > 1) {
+                val streetName = parts[1]
+                street = "$firstPart $streetName"
+            } else {
+                street = firstPart
+            }
+
+            if (street.isNotBlank()) {
+                result.add(street)
+            }
+
+            // 2. Chercher le code postal (5 chiffres)
+            var postcode: String? = null
+            var city: String? = null
+
+            for (i in parts.indices) {
+                val part = parts[i]
+                val postcodeMatch = FRENCH_POSTCODE_REGEX.find(part)
+                if (postcodeMatch != null) {
+                    postcode = postcodeMatch.value
+                    // La ville est souvent juste avant le code postal
+                    // ou c'est le même élément sans le code postal
+                    val partWithoutPostcode = part.replace(postcode, "").trim()
+                    if (partWithoutPostcode.isNotBlank()) {
+                        city = partWithoutPostcode
+                    } else if (i > 0) {
+                        // Chercher une ville dans les éléments précédents
+                        // Éviter les régions, départements, etc.
+                        for (j in (i - 1) downTo 1) {
+                            val candidate = parts[j]
+                            // Exclure les régions et "France métropolitaine"
+                            if (!candidate.contains("Alpes", ignoreCase = true) &&
+                                !candidate.contains("Rhône", ignoreCase = true) &&
+                                !candidate.contains("métropolitaine", ignoreCase = true) &&
+                                !candidate.contains("Savoie", ignoreCase = true) &&
+                                candidate.length < 30
+                            ) {
+                                city = candidate
+                                break
+                            }
+                        }
+                    }
+                    break
+                }
+            }
+
+            // 3. Ajouter code postal + ville
+            if (postcode != null && city != null) {
+                result.add("$postcode $city")
+            } else if (city != null) {
+                result.add(city)
+            } else if (postcode != null) {
+                result.add(postcode)
+            }
+
+            // 4. Pays = dernier élément (généralement "France")
+            val country = parts.lastOrNull()
+            if (!country.isNullOrBlank() && country != firstPart && country != street) {
+                result.add(country)
+            }
+
+            return if (result.isNotEmpty()) result.joinToString(", ") else fullAddress
+        }
+    }
+}
 
 @Serializable
 data class FrenchAddressResponse(
@@ -117,25 +269,20 @@ class NominatimService {
                 .addQueryParameter("addressdetails", "1")
                 .build()
 
-            Log.d("NominatimService", "Search URL: $url")
-
             val request = Request.Builder()
                 .url(url)
                 .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
-            val response = client.newCall(request).execute()
-
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: "[]"
-                Log.d("NominatimService", "Search response: ${responseBody.take(200)}...")
-                json.decodeFromString<List<NominatimResult>>(responseBody)
-            } else {
-                Log.e("NominatimService", "Private Nominatim Error: ${response.code}")
-                emptyList()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: "[]"
+                    json.decodeFromString<List<NominatimResult>>(responseBody)
+                } else {
+                    emptyList()
+                }
             }
         } catch (e: Exception) {
-            Log.e("NominatimService", "Search error: ${e.message}", e)
             emptyList()
         }
     }
@@ -150,15 +297,13 @@ class NominatimService {
         block: suspend () -> T
     ): T {
         var currentDelay = initialDelayMs
-        repeat(maxAttempts - 1) { attempt ->
+        repeat(maxAttempts - 1) { _ ->
             try {
                 return block()
             } catch (e: SocketTimeoutException) {
-                Log.w("NominatimService", "Attempt ${attempt + 1} timed out, retrying in ${currentDelay}ms")
                 delay(currentDelay)
                 currentDelay *= 2
             } catch (e: IOException) {
-                Log.w("NominatimService", "Network error on attempt ${attempt + 1}, retrying in ${currentDelay}ms")
                 delay(currentDelay)
                 currentDelay *= 2
             }
@@ -175,15 +320,15 @@ class NominatimService {
      * @return Liste de coordonnées snappées [longitude, latitude] pour affichage
      */
     suspend fun matchRoute(gpsPoints: List<Pair<Double, Double>>): List<List<Double>>? = withContext(Dispatchers.IO) {
-        if (gpsPoints.size < 2) {
-            Log.w("NominatimService", "Map matching requires at least 2 points")
+        // OSRM map-matching requires at least 3 points to work properly
+        // With only 2 points, it returns HTTP 400
+        if (gpsPoints.size < 3) {
             return@withContext null
         }
 
         // Check cache first
         val cacheKey = generateCacheKey(gpsPoints)
         mapMatchCache[cacheKey]?.let { cached ->
-            Log.d("NominatimService", "✅ Map matching cache hit for ${gpsPoints.size} points")
             return@withContext cached
         }
 
@@ -192,12 +337,10 @@ class NominatimService {
         if (now - lastFailureClearTime > FAILURE_CACHE_TTL_MS) {
             failedMapMatchKeys.clear()
             lastFailureClearTime = now
-            Log.d("NominatimService", "Cleared failed map-match cache")
         }
 
         // Skip if this key previously failed (avoid retry loop)
         if (cacheKey in failedMapMatchKeys) {
-            Log.d("NominatimService", "⏭️ Skipping map-match (previously failed): ${gpsPoints.size} points")
             return@withContext null
         }
 
@@ -223,50 +366,47 @@ class NominatimService {
                 .addQueryParameter("radiuses", sampledPoints.joinToString(";") { "25" }) // 25m de tolérance
                 .build()
 
-            Log.d("NominatimService", "Map matching ${sampledPoints.size} points on private OSRM...")
-
             val request = Request.Builder()
                 .url(url)
                 .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
-            // Single attempt only - public OSRM server is unreliable, don't spam retries
-            val response = retryWithBackoff(maxAttempts = 1) {
+            // Single attempt only - private OSRM server
+            retryWithBackoff(maxAttempts = 1) {
                 client.newCall(request).execute()
-            }
+            }.use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: return@use null
+                    val matchData = json.parseToJsonElement(responseBody).jsonObject
 
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: return@withContext null
-                val matchData = json.parseToJsonElement(responseBody).jsonObject
+                    // Vérifier le code de réponse OSRM
+                    val code = matchData["code"]?.jsonPrimitive?.content
+                    if (code != "Ok") {
+                        failedMapMatchKeys.add(cacheKey)
+                        return@use null
+                    }
 
-                // Vérifier le code de réponse OSRM
-                val code = matchData["code"]?.jsonPrimitive?.content
-                if (code != "Ok") {
-                    Log.w("NominatimService", "OSRM match returned: $code")
-                    return@withContext null
-                }
+                    // Extraire la géométrie du premier matching
+                    val matchings = matchData["matchings"]?.jsonArray?.firstOrNull()?.jsonObject
+                    val geometry = matchings?.get("geometry")?.jsonObject
+                    val coordinates = geometry?.get("coordinates")?.jsonArray?.map { coord ->
+                        coord.jsonArray.map { it.jsonPrimitive.double }
+                    }
 
-                // Extraire la géométrie du premier matching
-                val matchings = matchData["matchings"]?.jsonArray?.firstOrNull()?.jsonObject
-                val geometry = matchings?.get("geometry")?.jsonObject
-                val coordinates = geometry?.get("coordinates")?.jsonArray?.map { coord ->
-                    coord.jsonArray.map { it.jsonPrimitive.double }
-                }
-
-                if (coordinates != null && coordinates.isNotEmpty()) {
-                    mapMatchCache[cacheKey] = coordinates
-                    Log.d("NominatimService", "✅ Map matching success: ${gpsPoints.size} GPS points → ${coordinates.size} road points")
-                    coordinates
+                    if (coordinates != null && coordinates.isNotEmpty()) {
+                        mapMatchCache[cacheKey] = coordinates
+                        coordinates
+                    } else {
+                        failedMapMatchKeys.add(cacheKey)
+                        null
+                    }
                 } else {
-                    Log.w("NominatimService", "No matched geometry returned")
+                    // HTTP error (400, 500, etc.) - mark as failed to prevent retry loop
+                    failedMapMatchKeys.add(cacheKey)
                     null
                 }
-            } else {
-                Log.e("NominatimService", "Map matching error: ${response.code}")
-                null
             }
         } catch (e: Exception) {
-            Log.e("NominatimService", "Map matching error: ${e.message}", e)
             // Mark as failed to avoid retry loop
             failedMapMatchKeys.add(cacheKey)
             null
@@ -280,8 +420,6 @@ class NominatimService {
         endLon: Double
     ): RouteResult? = withContext(Dispatchers.IO) {
         try {
-            Log.d("NominatimService", "Calcul route: ($startLat,$startLon) -> ($endLat,$endLon)")
-
             // Utiliser le serveur OSRM privé
             val url = "${Constants.PrivateServer.OSRM_ROUTE_URL}/$startLon,$startLat;$endLon,$endLat".toHttpUrl()
                 .newBuilder()
@@ -289,51 +427,41 @@ class NominatimService {
                 .addQueryParameter("geometries", "geojson")
                 .build()
 
-            Log.d("NominatimService", "URL route (private OSRM): $url")
-
             val request = Request.Builder()
                 .url(url)
                 .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
-            val response = client.newCall(request).execute()
-            Log.d("NominatimService", "Response code route: ${response.code}")
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: return@use null
 
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: return@withContext null
-                Log.d("NominatimService", "Response body route (${responseBody.length} chars): ${responseBody.take(200)}...")
+                    // Parse la réponse OSRM
+                    val routeData = json.parseToJsonElement(responseBody).jsonObject
+                    val routes = routeData["routes"]?.jsonArray?.firstOrNull()?.jsonObject
 
-                // Parse la réponse OSRM
-                val routeData = json.parseToJsonElement(responseBody).jsonObject
-                val routes = routeData["routes"]?.jsonArray?.firstOrNull()?.jsonObject
+                    if (routes != null) {
+                        val geometry = routes["geometry"]?.jsonObject
+                        val coordinates = geometry?.get("coordinates")?.jsonArray?.map { coord ->
+                            coord.jsonArray.map { it.jsonPrimitive.double }
+                        } ?: emptyList()
 
-                if (routes != null) {
-                    val geometry = routes["geometry"]?.jsonObject
-                    val coordinates = geometry?.get("coordinates")?.jsonArray?.map { coord ->
-                        coord.jsonArray.map { it.jsonPrimitive.double }
-                    } ?: emptyList()
+                        val distance = routes["distance"]?.jsonPrimitive?.double ?: 0.0
+                        val duration = routes["duration"]?.jsonPrimitive?.double ?: 0.0
 
-                    val distance = routes["distance"]?.jsonPrimitive?.double ?: 0.0
-                    val duration = routes["duration"]?.jsonPrimitive?.double ?: 0.0
-
-                    Log.d("NominatimService", "Route trouvée: ${distance}m, ${duration}s, ${coordinates.size} points")
-
-                    RouteResult(
-                        coordinates = coordinates,
-                        distance = distance,
-                        duration = duration
-                    )
+                        RouteResult(
+                            coordinates = coordinates,
+                            distance = distance,
+                            duration = duration
+                        )
+                    } else {
+                        null
+                    }
                 } else {
-                    Log.e("NominatimService", "Pas de routes dans la réponse OSRM")
                     null
                 }
-            } else {
-                val errorBody = response.body?.string() ?: "No error body"
-                Log.e("NominatimService", "Route error ${response.code}: $errorBody")
-                null
             }
         } catch (e: Exception) {
-            Log.e("NominatimService", "Route error: ${e.message}", e)
             null
         }
     }
@@ -341,6 +469,7 @@ class NominatimService {
     /**
      * Reverse geocoding: convertit des coordonnées GPS en adresse lisible
      * Utilise le serveur Nominatim privé
+     * Format: numéro rue, code postal ville, pays
      */
     suspend fun reverseGeocode(latitude: Double, longitude: Double): String? = withContext(Dispatchers.IO) {
         try {
@@ -352,27 +481,23 @@ class NominatimService {
                 .addQueryParameter("addressdetails", "1")
                 .build()
 
-            Log.d("NominatimService", "Reverse geocode URL: $url")
-
             val request = Request.Builder()
                 .url(url)
                 .addHeader("User-Agent", Constants.NOMINATIM_USER_AGENT)
                 .build()
 
-            val response = client.newCall(request).execute()
-
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: "{}"
-                Log.d("NominatimService", "Reverse response: ${responseBody.take(200)}...")
-                val result = json.decodeFromString<NominatimResult>(responseBody)
-                Log.d("NominatimService", "✅ Reverse geocoded: ${result.display_name}")
-                result.display_name
-            } else {
-                Log.e("NominatimService", "Reverse geocode error: ${response.code}")
-                null
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: "{}"
+                    val result = json.decodeFromString<NominatimResult>(responseBody)
+                    // Utiliser le format personnalisé si les détails sont disponibles
+                    result.address?.formatAddress()?.takeIf { it.isNotBlank() }
+                        ?: result.display_name
+                } else {
+                    null
+                }
             }
         } catch (e: Exception) {
-            Log.e("NominatimService", "Reverse geocoding error: ${e.message}", e)
             null
         }
     }

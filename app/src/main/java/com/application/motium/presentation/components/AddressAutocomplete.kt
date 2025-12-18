@@ -118,17 +118,16 @@ fun AddressAutocomplete(
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = Color.White
                 )
             ) {
-                LazyColumn {
+                LazyColumn(
+                    modifier = Modifier.background(Color.White)
+                ) {
                     items(suggestions) { suggestion ->
                         AddressSuggestionItem(
                             suggestion = suggestion,
                             onClick = {
-                                println("DEBUG: Address suggestion clicked: ${suggestion.display_name}")
-                                android.util.Log.d("DEBUG_ROUTE", "Address suggestion clicked: ${suggestion.display_name}")
-
                                 // Fermer d'abord les suggestions pour éviter le double-clic
                                 showSuggestions = false
                                 suggestions = emptyList()
@@ -136,12 +135,14 @@ fun AddressAutocomplete(
                                 // Marquer comme changement programmatique
                                 isProgrammaticChange = true
 
-                                // Ensuite mettre à jour la valeur et notifier
-                                onValueChange(suggestion.display_name)
-                                onAddressSelected(suggestion)
+                                // Utiliser le format personnalisé si disponible
+                                val formattedAddress = suggestion.address?.formatAddress()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: suggestion.display_name
 
-                                println("DEBUG: Address coordinates: lat=${suggestion.lat}, lon=${suggestion.lon}")
-                                android.util.Log.d("DEBUG_ROUTE", "Address coordinates: lat=${suggestion.lat}, lon=${suggestion.lon}")
+                                // Ensuite mettre à jour la valeur et notifier
+                                onValueChange(formattedAddress)
+                                onAddressSelected(suggestion)
                             }
                         )
                     }
@@ -156,12 +157,15 @@ private fun AddressSuggestionItem(
     suggestion: NominatimResult,
     onClick: () -> Unit
 ) {
-    // L'API française renvoie déjà l'adresse complète bien formatée
-    val fullAddress = suggestion.display_name
+    // Utiliser le format personnalisé: numéro rue, code postal ville, pays
+    val formattedAddress = suggestion.address?.formatAddress()
+        ?.takeIf { it.isNotBlank() }
+        ?: suggestion.display_name
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(Color.White)
             .clickable { onClick() }
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -169,7 +173,7 @@ private fun AddressSuggestionItem(
         Icon(
             imageVector = Icons.Default.LocationOn,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = MotiumPrimary,
             modifier = Modifier.size(20.dp)
         )
 
@@ -177,10 +181,10 @@ private fun AddressSuggestionItem(
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = fullAddress,
+                text = formattedAddress,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = Color(0xFF1F2937), // Dark gray for text
                 maxLines = 2
             )
         }

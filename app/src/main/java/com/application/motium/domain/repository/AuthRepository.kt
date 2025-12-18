@@ -21,6 +21,14 @@ interface AuthRepository {
     suspend fun confirmEmail(token: String): AuthResult<Unit>
 
     suspend fun createUserProfile(authUser: AuthUser, name: String, isEnterprise: Boolean = false, organizationName: String = ""): AuthResult<User>
+    suspend fun createUserProfileWithTrial(
+        userId: String,
+        name: String,
+        isProfessional: Boolean = false,
+        organizationName: String = "",
+        verifiedPhone: String,
+        deviceFingerprintId: String? = null
+    ): AuthResult<User>
     suspend fun getUserProfile(userId: String): AuthResult<User>
     suspend fun updateUserProfile(user: User): AuthResult<User>
 

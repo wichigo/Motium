@@ -366,127 +366,86 @@ class TripRepository private constructor(context: Context) {
     }
 
     /**
-     * Sealed class representing trip limit check result
+     * Result of checking trip access
      */
-    sealed class TripLimitCheckResult {
-        data class Allowed(val remaining: Int?, val isUnlimited: Boolean) : TripLimitCheckResult()
-        data class LimitReached(val limit: Int, val current: Int) : TripLimitCheckResult()
-        data class Error(val message: String) : TripLimitCheckResult()
+    sealed class TripAccessCheckResult {
+        data class Allowed(val isInTrial: Boolean, val trialDaysRemaining: Int?) : TripAccessCheckResult()
+        data class AccessDenied(val reason: String) : TripAccessCheckResult()
+        data class Error(val message: String) : TripAccessCheckResult()
     }
 
     /**
-     * Check if user can create a new trip based on subscription limits.
-     * FREE users: 20 trips/month
-     * PREMIUM/LIFETIME: Unlimited
+     * Check if user can create a new trip based on subscription status.
+     * TRIAL: Allowed while trial active
+     * PREMIUM/LIFETIME: Always allowed
+     * EXPIRED: Not allowed
      */
-    suspend fun canCreateTrip(): TripLimitCheckResult = withContext(Dispatchers.IO) {
+    suspend fun canCreateTrip(): TripAccessCheckResult = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser()
-                ?: return@withContext TripLimitCheckResult.Error("Utilisateur non connecté")
+                ?: return@withContext TripAccessCheckResult.Error("Utilisateur non connecté")
 
             val subscription = user.subscription
-            val tripLimit = subscription.getTripLimit()
 
-            if (tripLimit == null) {
-                // Unlimited trips (Premium or Lifetime)
-                return@withContext TripLimitCheckResult.Allowed(
-                    remaining = null,
-                    isUnlimited = true
-                )
-            }
-
-            val currentCount = user.monthlyTripCount
-            val remaining = tripLimit - currentCount
-
-            if (remaining > 0) {
-                TripLimitCheckResult.Allowed(
-                    remaining = remaining,
-                    isUnlimited = false
+            if (subscription.hasValidAccess()) {
+                TripAccessCheckResult.Allowed(
+                    isInTrial = subscription.isInTrial(),
+                    trialDaysRemaining = subscription.daysLeftInTrial()
                 )
             } else {
-                TripLimitCheckResult.LimitReached(
-                    limit = tripLimit,
-                    current = currentCount
+                TripAccessCheckResult.AccessDenied(
+                    reason = if (subscription.type == SubscriptionType.EXPIRED) {
+                        "Votre essai gratuit est terminé"
+                    } else {
+                        "Abonnement requis"
+                    }
                 )
             }
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error checking trip limit: ${e.message}", "TripRepository", e)
-            TripLimitCheckResult.Error("Erreur: ${e.message}")
+            MotiumApplication.logger.e("Error checking trip access: ${e.message}", "TripRepository", e)
+            TripAccessCheckResult.Error("Erreur: ${e.message}")
         }
     }
 
     /**
-     * Get remaining trips count for the current month.
-     * Returns null if unlimited.
+     * Get remaining trial days for the current user.
+     * Returns null if subscribed or not in trial.
      */
-    suspend fun getRemainingTripsCount(): Int? = withContext(Dispatchers.IO) {
+    suspend fun getTrialDaysRemaining(): Int? = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser() ?: return@withContext null
-            val tripLimit = user.subscription.getTripLimit() ?: return@withContext null
-            val remaining = tripLimit - user.monthlyTripCount
-            maxOf(0, remaining)
+            user.subscription.daysLeftInTrial()
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting remaining trips: ${e.message}", "TripRepository", e)
+            MotiumApplication.logger.e("Error getting trial days: ${e.message}", "TripRepository", e)
             null
         }
     }
 
     /**
-     * Increment the monthly trip count after a successful trip save.
-     * Only increments for FREE users (Premium/Lifetime have unlimited trips).
-     * Note: Supabase sync will happen via normal user profile sync mechanisms.
+     * Save a trip with access checking.
+     * Returns false if access is denied (expired trial or no subscription).
      */
-    private suspend fun incrementMonthlyTripCount() = withContext(Dispatchers.IO) {
-        try {
-            val user = localUserRepository.getLoggedInUser() ?: return@withContext
-
-            // Only track for FREE users
-            if (user.subscription.type != SubscriptionType.FREE) {
-                return@withContext
-            }
-
-            val newCount = user.monthlyTripCount + 1
-            val updatedUser = user.copy(monthlyTripCount = newCount)
-            localUserRepository.updateUser(updatedUser)
-
-            MotiumApplication.logger.i(
-                "📊 Monthly trip count incremented: $newCount/${user.subscription.getTripLimit() ?: "∞"}",
-                "TripRepository"
-            )
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error incrementing trip count: ${e.message}", "TripRepository", e)
-        }
-    }
-
-    /**
-     * Save a trip with limit checking.
-     * Returns false if the trip limit has been reached.
-     */
-    suspend fun saveTripWithLimitCheck(trip: Trip): Boolean = withContext(Dispatchers.IO) {
-        // Check limit first
-        when (val limitCheck = canCreateTrip()) {
-            is TripLimitCheckResult.LimitReached -> {
+    suspend fun saveTripWithAccessCheck(trip: Trip): Boolean = withContext(Dispatchers.IO) {
+        // Check access first
+        when (val accessCheck = canCreateTrip()) {
+            is TripAccessCheckResult.AccessDenied -> {
                 MotiumApplication.logger.w(
-                    "⚠️ Trip limit reached: ${limitCheck.current}/${limitCheck.limit}. Trip not saved.",
+                    "Access denied: ${accessCheck.reason}. Trip not saved.",
                     "TripRepository"
                 )
                 return@withContext false
             }
-            is TripLimitCheckResult.Error -> {
-                MotiumApplication.logger.e("Error checking trip limit: ${limitCheck.message}", "TripRepository")
+            is TripAccessCheckResult.Error -> {
+                MotiumApplication.logger.e("Error checking trip access: ${accessCheck.message}", "TripRepository")
                 // Allow saving in case of error (fail-open)
             }
-            is TripLimitCheckResult.Allowed -> {
+            is TripAccessCheckResult.Allowed -> {
                 // Continue to save
             }
         }
 
         // Save the trip
         saveTrip(trip)
-
-        // Increment count after successful save
-        incrementMonthlyTripCount()
-
         true
     }
 

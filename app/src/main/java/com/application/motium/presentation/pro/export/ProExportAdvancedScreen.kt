@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -131,6 +133,12 @@ fun ProExportAdvancedScreen(
                 CircularProgressIndicator(color = MotiumPrimary)
             }
         } else {
+            // State for dropdowns
+            var departmentsDropdownExpanded by remember { mutableStateOf(false) }
+            var departmentSearchQuery by remember { mutableStateOf("") }
+            var accountsDropdownExpanded by remember { mutableStateOf(false) }
+            var accountSearchQuery by remember { mutableStateOf("") }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -138,6 +146,457 @@ fun ProExportAdvancedScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
+                // Departments section (dropdown with search)
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "Départements",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = textColor
+                        )
+
+                        // Dropdown field
+                        val selectedDeptCount = uiState.selectedDepartments.size
+                        val totalDeptCount = uiState.availableDepartments.size
+                        val deptDisplayText = when {
+                            uiState.availableDepartments.isEmpty() -> "Aucun département"
+                            selectedDeptCount == 0 -> "Sélectionner des départements"
+                            selectedDeptCount == totalDeptCount -> "Tous les départements ($totalDeptCount)"
+                            selectedDeptCount == 1 -> uiState.selectedDepartments.first()
+                            else -> "$selectedDeptCount départements sélectionnés"
+                        }
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = deptDisplayText,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Départements") },
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = {
+                                    Icon(
+                                        if (departmentsDropdownExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Business, contentDescription = null, tint = MotiumPrimary)
+                                },
+                                enabled = false,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    disabledTextColor = textColor,
+                                    disabledBorderColor = if (departmentsDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = if (departmentsDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledContainerColor = Color.Transparent
+                                ),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        if (uiState.availableDepartments.isNotEmpty()) {
+                                            departmentsDropdownExpanded = !departmentsDropdownExpanded
+                                        }
+                                    }
+                            )
+                        }
+
+                        // Expandable departments list
+                        AnimatedVisibility(
+                            visible = departmentsDropdownExpanded,
+                            enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
+                            exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
+                        ) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isDarkMode) Color(0xFF1F2937) else Color.White
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.background(if (isDarkMode) Color(0xFF1F2937) else Color.White)
+                                ) {
+                                    // Search field
+                                    OutlinedTextField(
+                                        value = departmentSearchQuery,
+                                        onValueChange = { departmentSearchQuery = it },
+                                        placeholder = { Text("Rechercher...") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Search,
+                                                contentDescription = null,
+                                                tint = textSecondaryColor
+                                            )
+                                        },
+                                        trailingIcon = {
+                                            if (departmentSearchQuery.isNotEmpty()) {
+                                                IconButton(onClick = { departmentSearchQuery = "" }) {
+                                                    Icon(
+                                                        Icons.Default.Clear,
+                                                        contentDescription = "Effacer",
+                                                        tint = textSecondaryColor
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = MotiumPrimary,
+                                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            cursorColor = MotiumPrimary
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        singleLine = true
+                                    )
+
+                                    // Select all / Deselect all
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { viewModel.toggleSelectAllDepartments() }
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = uiState.allDepartmentsSelected,
+                                            onCheckedChange = { viewModel.toggleSelectAllDepartments() },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = MotiumPrimary,
+                                                checkmarkColor = Color.White,
+                                                uncheckedColor = Color.Gray
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            if (uiState.allDepartmentsSelected) "Désélectionner tout" else "Sélectionner tout",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MotiumPrimary
+                                        )
+                                    }
+
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                    )
+
+                                    // Filtered departments list
+                                    val filteredDepartments = uiState.availableDepartments.filter { dept ->
+                                        departmentSearchQuery.isEmpty() ||
+                                        dept.contains(departmentSearchQuery, ignoreCase = true)
+                                    }
+
+                                    if (filteredDepartments.isEmpty()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(24.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                "Aucun résultat",
+                                                color = textSecondaryColor
+                                            )
+                                        }
+                                    } else {
+                                        Column(
+                                            modifier = Modifier
+                                                .heightIn(max = 200.dp)
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            filteredDepartments.forEachIndexed { index, dept ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable { viewModel.toggleDepartmentSelection(dept) }
+                                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Checkbox(
+                                                        checked = uiState.selectedDepartments.contains(dept),
+                                                        onCheckedChange = { viewModel.toggleDepartmentSelection(dept) },
+                                                        colors = CheckboxDefaults.colors(
+                                                            checkedColor = MotiumPrimary,
+                                                            checkmarkColor = Color.White,
+                                                            uncheckedColor = Color.Gray
+                                                        )
+                                                    )
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Icon(
+                                                        Icons.Default.Business,
+                                                        contentDescription = null,
+                                                        tint = MotiumPrimary.copy(alpha = 0.7f),
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        dept,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = textColor
+                                                    )
+                                                }
+                                                if (index < filteredDepartments.size - 1) {
+                                                    HorizontalDivider(
+                                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Done button
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { departmentsDropdownExpanded = false },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Terminé", fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Accounts section (dropdown with search)
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "Comptes",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = textColor
+                        )
+
+                        // Dropdown field - uses filteredUsers (filtered by department)
+                        val filteredUsers = uiState.filteredUsers
+                        val selectedInFiltered = filteredUsers.count { it.userId in uiState.selectedUserIds }
+                        val totalCount = filteredUsers.size
+                        val displayText = when {
+                            filteredUsers.isEmpty() -> "Aucun compte (filtré)"
+                            selectedInFiltered == 0 -> "Sélectionner des comptes"
+                            selectedInFiltered == totalCount -> "Tous les comptes ($totalCount)"
+                            selectedInFiltered == 1 -> filteredUsers.find { it.userId in uiState.selectedUserIds }?.displayName ?: "1 compte"
+                            else -> "$selectedInFiltered comptes sélectionnés"
+                        }
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = displayText,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Collaborateurs") },
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = {
+                                    Icon(
+                                        if (accountsDropdownExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.People, contentDescription = null, tint = MotiumPrimary)
+                                },
+                                enabled = false,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    disabledTextColor = textColor,
+                                    disabledBorderColor = if (accountsDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = if (accountsDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledContainerColor = Color.Transparent
+                                ),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        if (filteredUsers.isNotEmpty()) {
+                                            accountsDropdownExpanded = !accountsDropdownExpanded
+                                        }
+                                    }
+                            )
+                        }
+
+                        // Expandable accounts list
+                        AnimatedVisibility(
+                            visible = accountsDropdownExpanded,
+                            enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
+                            exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
+                        ) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isDarkMode) Color(0xFF1F2937) else Color.White
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.background(if (isDarkMode) Color(0xFF1F2937) else Color.White)
+                                ) {
+                                    // Search field
+                                    OutlinedTextField(
+                                        value = accountSearchQuery,
+                                        onValueChange = { accountSearchQuery = it },
+                                        placeholder = { Text("Rechercher...") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Search,
+                                                contentDescription = null,
+                                                tint = textSecondaryColor
+                                            )
+                                        },
+                                        trailingIcon = {
+                                            if (accountSearchQuery.isNotEmpty()) {
+                                                IconButton(onClick = { accountSearchQuery = "" }) {
+                                                    Icon(
+                                                        Icons.Default.Clear,
+                                                        contentDescription = "Effacer",
+                                                        tint = textSecondaryColor
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = MotiumPrimary,
+                                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            cursorColor = MotiumPrimary
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        singleLine = true
+                                    )
+
+                                    // Select all / Deselect all button
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { viewModel.toggleSelectAll() }
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = uiState.allSelected,
+                                            onCheckedChange = { viewModel.toggleSelectAll() },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = MotiumPrimary,
+                                                checkmarkColor = Color.White,
+                                                uncheckedColor = if (isDarkMode) Color.Gray else Color.Gray
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            if (uiState.allSelected) "Désélectionner tout" else "Sélectionner tout",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MotiumPrimary
+                                        )
+                                    }
+
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                    )
+
+                                    // Filtered users list (from department-filtered users)
+                                    val searchFilteredUsers = filteredUsers.filter { user ->
+                                        accountSearchQuery.isEmpty() ||
+                                        user.displayName.contains(accountSearchQuery, ignoreCase = true) ||
+                                        user.userEmail.contains(accountSearchQuery, ignoreCase = true)
+                                    }
+
+                                    if (searchFilteredUsers.isEmpty()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(24.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                "Aucun résultat",
+                                                color = textSecondaryColor
+                                            )
+                                        }
+                                    } else {
+                                        Column(
+                                            modifier = Modifier
+                                                .heightIn(max = 250.dp)
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            searchFilteredUsers.forEachIndexed { index, user ->
+                                                UserSelectionRow(
+                                                    user = user,
+                                                    isSelected = uiState.selectedUserIds.contains(user.userId),
+                                                    onToggle = { viewModel.toggleUserSelection(user.userId) },
+                                                    textColor = textColor,
+                                                    textSecondaryColor = textSecondaryColor
+                                                )
+                                                if (index < searchFilteredUsers.size - 1) {
+                                                    HorizontalDivider(
+                                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Done button
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { accountsDropdownExpanded = false },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Terminé", fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Quick selection section
+                item {
+                    ProQuickExportSection(
+                        viewModel = viewModel,
+                        isExporting = uiState.isExporting
+                    )
+                }
+
                 // Period section
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -157,6 +616,7 @@ fun ProExportAdvancedScreen(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         if (selectedField == "start" && showDatePicker) {
                                             showDatePicker = false
@@ -195,6 +655,7 @@ fun ProExportAdvancedScreen(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         if (selectedField == "end" && showDatePicker) {
                                             showDatePicker = false
@@ -345,84 +806,6 @@ fun ProExportAdvancedScreen(
                     }
                 }
 
-                // Accounts section
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "Comptes",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = textColor
-                            )
-                            TextButton(onClick = { viewModel.toggleSelectAll() }) {
-                                Text(
-                                    if (uiState.allSelected) "Désélectionner" else "Tout sélectionner",
-                                    color = MotiumPrimary,
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
-
-                        if (uiState.linkedUsers.isEmpty()) {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                                shape = RoundedCornerShape(16.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        "Aucun compte lié actif",
-                                        color = textSecondaryColor
-                                    )
-                                }
-                            }
-                        } else {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                                shape = RoundedCornerShape(16.dp)
-                            ) {
-                                Column {
-                                    uiState.linkedUsers.forEachIndexed { index, user ->
-                                        UserSelectionRow(
-                                            user = user,
-                                            isSelected = uiState.selectedUserIds.contains(user.userId),
-                                            onToggle = { viewModel.toggleUserSelection(user.userId) },
-                                            textColor = textColor,
-                                            textSecondaryColor = textSecondaryColor
-                                        )
-                                        if (index < uiState.linkedUsers.size - 1) {
-                                            HorizontalDivider(
-                                                modifier = Modifier.padding(horizontal = 16.dp),
-                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Quick selection section
-                item {
-                    ProQuickExportSection(
-                        viewModel = viewModel,
-                        isExporting = uiState.isExporting
-                    )
-                }
-
                 // Filters section
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -472,6 +855,8 @@ fun ProExportAdvancedScreen(
                                 Box(
                                     modifier = Modifier
                                         .matchParentSize()
+                                        .padding(top = 8.dp)
+                                        .clip(RoundedCornerShape(16.dp))
                                         .clickable { tripTypeExpanded = !tripTypeExpanded }
                                 )
 
@@ -546,6 +931,8 @@ fun ProExportAdvancedScreen(
                                 Box(
                                     modifier = Modifier
                                         .matchParentSize()
+                                        .padding(top = 8.dp)
+                                        .clip(RoundedCornerShape(16.dp))
                                         .clickable { expenseExpanded = !expenseExpanded }
                                 )
 
@@ -735,7 +1122,8 @@ private fun UserSelectionRow(
             onCheckedChange = { onToggle() },
             colors = CheckboxDefaults.colors(
                 checkedColor = MotiumPrimary,
-                checkmarkColor = Color.White
+                checkmarkColor = Color.White,
+                uncheckedColor = Color.Gray
             )
         )
 
@@ -853,12 +1241,12 @@ private fun ProCalendarGrid(
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
+                                        .clip(CircleShape)
                                         .background(
                                             when {
                                                 isStartDay || isEndDay -> MotiumPrimary
                                                 else -> Color.Transparent
-                                            },
-                                            CircleShape
+                                            }
                                         )
                                         .clickable { onDateSelected(dayNumber) },
                                     contentAlignment = Alignment.Center

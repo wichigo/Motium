@@ -37,10 +37,15 @@ import com.application.motium.data.supabase.ProSettingsRepository
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LegalForm
+import com.application.motium.domain.model.License
+import com.application.motium.domain.model.LicenseStatus
 import com.application.motium.domain.model.LinkStatus
+import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.UserRole
 import com.application.motium.domain.model.isPremium
+import com.application.motium.data.supabase.LicenseRepository
+import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.CompanyLinkCard
 import com.application.motium.presentation.components.LinkActivationDialog
@@ -190,6 +195,16 @@ fun SettingsScreen(
     var departments by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingDepartments by remember { mutableStateOf(false) }
 
+    // Pro License state (for ENTERPRISE users)
+    val licenseRepository = remember { LicenseRepository.getInstance(context) }
+    val supabaseAuthRepository = remember { SupabaseAuthRepository.getInstance(context) }
+    var ownerLicense by remember { mutableStateOf<License?>(null) }
+    var availableLicenses by remember { mutableStateOf<List<License>>(emptyList()) }
+    var isLoadingLicense by remember { mutableStateOf(false) }
+    var isAssigningLicense by remember { mutableStateOf(false) }
+    var showLicenseSelectionDialog by remember { mutableStateOf(false) }
+    var cachedProAccountId by remember { mutableStateOf<String?>(null) }
+
     // Load Pro account data for ENTERPRISE users
     LaunchedEffect(currentUser?.id, currentUser?.role) {
         if (currentUser?.role == UserRole.ENTERPRISE && currentUser.id.isNotEmpty()) {
@@ -209,6 +224,21 @@ fun SettingsScreen(
                     proBillingEmail = it.billingEmail ?: ""
                     // Load departments
                     departments = proSettingsRepository.getDepartments(it.id)
+
+                    // Load owner's license
+                    cachedProAccountId = it.id
+                    isLoadingLicense = true
+                    try {
+                        val ownerLicenseResult = licenseRepository.getLicenseForAccount(it.id, currentUser.id)
+                        ownerLicense = ownerLicenseResult.getOrNull()
+
+                        // Load available licenses for assignment
+                        val availableResult = licenseRepository.getAvailableLicenses(it.id)
+                        availableLicenses = availableResult.getOrElse { emptyList() }
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.e("Error loading license: ${e.message}", "SettingsScreen", e)
+                    }
+                    isLoadingLicense = false
                 }
             }
             isLoadingProAccount = false
@@ -395,16 +425,32 @@ fun SettingsScreen(
                 )
             }
 
-            // Subscription Section
+            // Subscription Section - different for Individual vs Pro
             item {
-                SubscriptionSection(
-                    currentUser = currentUser,
-                    isPremium = isPremium,
-                    surfaceColor = surfaceColor,
-                    textColor = textColor,
-                    textSecondaryColor = textSecondaryColor,
-                    onUpgradeClick = { showUpgradeDialog = true }
-                )
+                if (currentUser?.role == UserRole.ENTERPRISE) {
+                    // Pro users see their license status
+                    ProLicenseSection(
+                        ownerLicense = ownerLicense,
+                        availableLicenses = availableLicenses,
+                        isLoading = isLoadingLicense,
+                        isAssigning = isAssigningLicense,
+                        surfaceColor = surfaceColor,
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor,
+                        onSelectLicense = { showLicenseSelectionDialog = true },
+                        onNavigateToLicenses = onNavigateToLicenses
+                    )
+                } else {
+                    // Individual users see subscription/trial status
+                    SubscriptionSection(
+                        currentUser = currentUser,
+                        isPremium = isPremium,
+                        surfaceColor = surfaceColor,
+                        textColor = textColor,
+                        textSecondaryColor = textSecondaryColor,
+                        onUpgradeClick = { showUpgradeDialog = true }
+                    )
+                }
             }
 
             // Logout Section
@@ -451,6 +497,42 @@ fun SettingsScreen(
                 showUpgradeDialog = false
             },
             isLoading = isPaymentLoading
+        )
+    }
+
+    // License selection dialog (for Pro users)
+    if (showLicenseSelectionDialog && availableLicenses.isNotEmpty()) {
+        LicenseSelectionDialog(
+            availableLicenses = availableLicenses,
+            isAssigning = isAssigningLicense,
+            onDismiss = { showLicenseSelectionDialog = false },
+            onSelectLicense = { license ->
+                // Assign the selected license to the owner
+                isAssigningLicense = true
+                scope.launch {
+                    try {
+                        cachedProAccountId?.let { proAccountId ->
+                            currentUser?.id?.let { userId ->
+                                val result = licenseRepository.assignLicenseToOwner(proAccountId, userId)
+                                result.fold(
+                                    onSuccess = { assignedLicense ->
+                                        ownerLicense = assignedLicense
+                                        availableLicenses = availableLicenses.filter { it.id != assignedLicense.id }
+                                        Toast.makeText(context, "Licence attribuée avec succès", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onFailure = { e ->
+                                        Toast.makeText(context, "Erreur: ${e.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Erreur: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                    isAssigningLicense = false
+                    showLicenseSelectionDialog = false
+                }
+            }
         )
     }
 
@@ -1986,19 +2068,37 @@ fun SubscriptionSection(
     textSecondaryColor: Color,
     onUpgradeClick: () -> Unit = {}
 ) {
-    val subscriptionType = currentUser?.subscription?.type?.name ?: "FREE"
-    val planText = when (subscriptionType) {
-        "LIFETIME" -> "Lifetime Premium"
-        "PREMIUM" -> "Premium"
-        "FREE" -> "Free"
-        else -> subscriptionType
+    val subscriptionType = currentUser?.subscription?.type
+    val trialDaysRemaining = currentUser?.subscription?.daysLeftInTrial()
+    val isInTrial = subscriptionType == SubscriptionType.TRIAL && (trialDaysRemaining ?: 0) > 0
+    val isExpired = subscriptionType == SubscriptionType.EXPIRED ||
+                    (subscriptionType == SubscriptionType.TRIAL && (trialDaysRemaining ?: 0) <= 0)
+
+    val planText = when {
+        subscriptionType == SubscriptionType.LIFETIME -> "Premium à vie"
+        subscriptionType == SubscriptionType.PREMIUM -> "Premium"
+        isInTrial -> "Essai gratuit"
+        isExpired -> "Essai expiré"
+        else -> "Aucun abonnement"
     }
-    val planIcon = if (isPremium) "👑" else "⭐"
-    val planColor = if (isPremium) Color(0xFFFFD700) else MotiumPrimaryTint
+
+    val planIcon = when {
+        isPremium -> "👑"
+        isInTrial -> "⏳"
+        isExpired -> "⚠️"
+        else -> "⭐"
+    }
+
+    val planColor = when {
+        isPremium -> Color(0xFFFFD700)
+        isInTrial -> MotiumPrimary
+        isExpired -> Color(0xFFFF5252)
+        else -> MotiumPrimaryTint
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Subscription",
+            text = "Abonnement",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -2014,70 +2114,496 @@ fun SubscriptionSection(
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .padding(16.dp)
             ) {
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(planColor),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            text = planIcon,
-                            fontSize = 24.sp
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(planColor.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = planIcon,
+                                fontSize = 24.sp
+                            )
+                        }
+
+                        Column {
+                            Text(
+                                text = "Forfait actuel",
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                fontSize = 16.sp,
+                                color = textColor
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = planText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontSize = 14.sp,
+                                color = planColor,
+                                fontWeight = if (isPremium) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
                     }
 
-                    Column {
-                        Text(
-                            text = "Current Plan",
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                fontWeight = FontWeight.SemiBold
+                    if (!isPremium) {
+                        Button(
+                            onClick = onUpgradeClick,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isExpired) Color(0xFFFF5252) else MotiumPrimary,
+                                contentColor = Color.White
                             ),
-                            fontSize = 16.sp,
-                            color = textColor
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = planText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontSize = 14.sp,
-                            color = if (isPremium) Color(0xFFFFD700) else textSecondaryColor,
-                            fontWeight = if (isPremium) FontWeight.Bold else FontWeight.Normal
-                        )
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                if (isExpired) "S'abonner" else "Upgrade",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
                 }
 
-                if (!isPremium) {
-                    Button(
-                        onClick = onUpgradeClick,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MotiumPrimary,
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(20.dp),
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "Upgrade",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp
+                // Trial countdown
+                if (isInTrial && trialDaysRemaining != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Countdown card
+                    val countdownColor = when {
+                        trialDaysRemaining <= 1 -> Color(0xFFFF5252)
+                        trialDaysRemaining <= 3 -> Color(0xFFFF9800)
+                        else -> MotiumPrimary
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = countdownColor.copy(alpha = 0.1f)
                         )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Temps restant",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = textSecondaryColor
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (trialDaysRemaining == 1) "1 jour" else "$trialDaysRemaining jours",
+                                    style = MaterialTheme.typography.headlineMedium.copy(
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = countdownColor
+                                )
+                            }
+
+                            Icon(
+                                imageVector = Icons.Default.Timer,
+                                contentDescription = null,
+                                tint = countdownColor,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Profitez de toutes les fonctionnalités pendant votre essai gratuit.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+
+                // Expired message
+                if (isExpired) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFF5252).copy(alpha = 0.1f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color(0xFFFF5252),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Votre essai est terminé",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = Color(0xFFFF5252)
+                                )
+                                Text(
+                                    text = "Abonnez-vous pour continuer à utiliser Motium",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = textSecondaryColor
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Pro License Section - Shows owner's license status for Enterprise users
+ */
+@Composable
+fun ProLicenseSection(
+    ownerLicense: License?,
+    availableLicenses: List<License>,
+    isLoading: Boolean,
+    isAssigning: Boolean,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onSelectLicense: () -> Unit,
+    onNavigateToLicenses: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            text = "Mon abonnement",
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.Bold
+            ),
+            fontSize = 20.sp,
+            color = textColor
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = surfaceColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = MotiumPrimary)
+                    }
+                } else if (ownerLicense != null) {
+                    // Owner has a license
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        if (ownerLicense.isLifetime) Color(0xFFFFD700).copy(alpha = 0.2f)
+                                        else MotiumPrimary.copy(alpha = 0.2f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (ownerLicense.isLifetime) "👑" else "✓",
+                                    fontSize = 24.sp
+                                )
+                            }
+
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Licence active",
+                                        style = MaterialTheme.typography.bodyLarge.copy(
+                                            fontWeight = FontWeight.SemiBold
+                                        ),
+                                        fontSize = 16.sp,
+                                        color = textColor
+                                    )
+                                    if (ownerLicense.isLifetime) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Surface(
+                                            color = Color(0xFFFFD700),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                "À VIE",
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.Black
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (ownerLicense.isLifetime)
+                                        "Accès illimité à vie"
+                                    else
+                                        "${String.format("%.2f", ownerLicense.priceMonthlyTTC)} €/mois",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontSize = 14.sp,
+                                    color = if (ownerLicense.isLifetime) Color(0xFFFFD700) else textSecondaryColor
+                                )
+                            }
+                        }
+
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = if (ownerLicense.isLifetime) Color(0xFFFFD700) else MotiumPrimary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                } else {
+                    // No license - show option to assign one
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Color(0xFFFF9800).copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(text = "⚠️", fontSize = 24.sp)
+                            }
+
+                            Column {
+                                Text(
+                                    text = "Aucune licence",
+                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    fontSize = 16.sp,
+                                    color = textColor
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (availableLicenses.isNotEmpty())
+                                        "${availableLicenses.size} licence(s) disponible(s)"
+                                    else
+                                        "Aucune licence disponible",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontSize = 14.sp,
+                                    color = textSecondaryColor
+                                )
+                            }
+                        }
+
+                        if (availableLicenses.isNotEmpty()) {
+                            Button(
+                                onClick = onSelectLicense,
+                                enabled = !isAssigning,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MotiumPrimary,
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(20.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                if (isAssigning) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text(
+                                        "Choisir",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Link to licenses page
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToLicenses() }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Gérer les licences",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MotiumPrimary
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MotiumPrimary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Dialog for selecting a license to assign to the owner
+ */
+@Composable
+fun LicenseSelectionDialog(
+    availableLicenses: List<License>,
+    isAssigning: Boolean,
+    onDismiss: () -> Unit,
+    onSelectLicense: (License) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                "Choisir une licence",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Sélectionnez la licence à vous attribuer:",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                availableLicenses.forEach { license ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isAssigning) { onSelectLicense(license) },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (license.isLifetime)
+                                Color(0xFFFFD700).copy(alpha = 0.1f)
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Licence #${license.id.take(8)}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    if (license.isLifetime) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Surface(
+                                            color = Color(0xFFFFD700),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                "À VIE",
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.Black
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = if (license.isLifetime)
+                                        "Accès illimité"
+                                    else
+                                        "${String.format("%.2f", license.priceMonthlyTTC)} €/mois",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler")
+            }
+        }
+    )
 }
 
 @Composable

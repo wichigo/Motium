@@ -8,75 +8,81 @@ data class User(
     val email: String,
     val role: UserRole,
     val subscription: Subscription,
-    val monthlyTripCount: Int = 0,
     val phoneNumber: String = "",
     val address: String = "",
 
-    // Liaison avec un compte Pro (pour les utilisateurs Individual)
-    val linkedProAccountId: String? = null,  // ID du compte Pro auquel l'utilisateur est lié
-    val linkStatus: LinkStatus? = null,      // pending/active/revoked
-    val invitationToken: String? = null,     // Token d'invitation (si pending)
-    val invitedAt: Instant? = null,          // Date d'invitation
-    val linkActivatedAt: Instant? = null,    // Date d'activation du lien
-
-    // Préférences de partage (contrôlées par l'utilisateur Individual)
-    val shareProfessionalTrips: Boolean = true,  // Pro voit les trajets pro
-    val sharePersonalTrips: Boolean = false,     // Pro ne voit PAS les trajets perso par défaut
-    val shareVehicleInfo: Boolean = true,        // Pro voit les véhicules
-    val shareExpenses: Boolean = false,          // Pro ne voit PAS les dépenses par défaut
+    // Vérification téléphone et device pour anti-abus
+    val phoneVerified: Boolean = false,
+    val verifiedPhone: String? = null,
+    val deviceFingerprintId: String? = null,
 
     // Paramètre fiscal : prendre en compte toute la distance travail-maison (sans plafond 40km)
     val considerFullDistance: Boolean = false,
 
     val createdAt: Instant,
     val updatedAt: Instant
-) {
-    /** L'utilisateur est-il lié à un compte Pro ? */
-    val isLinkedToCompany: Boolean
-        get() = linkedProAccountId != null && linkStatus == LinkStatus.ACTIVE
-}
+)
+// Note: Les champs de liaison Pro (linkedProAccountId, linkStatus, préférences de partage, etc.)
+// sont maintenant gérés dans la table company_links et le modèle CompanyLink
 
 /** Statut de la liaison avec un compte Pro */
 enum class LinkStatus {
     PENDING,   // Invitation envoyée, en attente d'acceptation
     ACTIVE,    // Liaison active, compte lié et fonctionnel
-    UNLINKED,  // Utilisateur s'est délié (conserve contact mais perd accès aux trajets)
+    INACTIVE,  // Utilisateur s'est délié (conserve contact mais perd accès aux trajets)
     REVOKED    // Liaison révoquée par le Pro
 }
 
 data class Subscription(
     val type: SubscriptionType,
     val expiresAt: Instant?,
+    val trialStartedAt: Instant? = null,
+    val trialEndsAt: Instant? = null,
     val stripeCustomerId: String? = null,
     val stripeSubscriptionId: String? = null
 ) {
     /**
-     * Check if subscription is active (not expired)
+     * Check if subscription/trial is active (not expired)
      */
     fun isActive(): Boolean {
+        val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
         return when (type) {
-            SubscriptionType.FREE -> true // Free is always "active"
-            SubscriptionType.LIFETIME -> true // Lifetime never expires
-            SubscriptionType.PREMIUM -> expiresAt?.let { expiry ->
-                Instant.fromEpochMilliseconds(System.currentTimeMillis()) < expiry
-            } ?: false
+            SubscriptionType.TRIAL -> trialEndsAt?.let { now < it } ?: false
+            SubscriptionType.EXPIRED -> false
+            SubscriptionType.LIFETIME -> true
+            SubscriptionType.PREMIUM -> expiresAt?.let { now < it } ?: false
         }
     }
 
     /**
-     * Check if user can export data
+     * Check if user is currently in trial period
      */
-    fun canExport(): Boolean = type.canExport() && isActive()
+    fun isInTrial(): Boolean = type == SubscriptionType.TRIAL && isActive()
 
     /**
-     * Check if user has unlimited trips
+     * Get days remaining in trial (null if not in trial)
      */
-    fun hasUnlimitedTrips(): Boolean = type.hasUnlimitedTrips() && isActive()
+    fun daysLeftInTrial(): Int? {
+        if (type != SubscriptionType.TRIAL || trialEndsAt == null) return null
+        val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+        val diffMs = trialEndsAt.toEpochMilliseconds() - now.toEpochMilliseconds()
+        return (diffMs / (1000 * 60 * 60 * 24)).toInt().coerceAtLeast(0)
+    }
 
     /**
-     * Get trip limit (null = unlimited)
+     * Check if user has valid access (active trial or subscription)
      */
-    fun getTripLimit(): Int? = if (isActive()) type.tripLimit else SubscriptionType.FREE.tripLimit
+    fun hasValidAccess(): Boolean = isActive()
+
+    /**
+     * Check if user can export data (all active subscriptions can export)
+     */
+    fun canExport(): Boolean = isActive()
+
+    /**
+     * Check if user has unlimited trips (all active subscriptions have unlimited)
+     */
+    fun hasUnlimitedTrips(): Boolean = isActive()
 }
 
 enum class UserRole(val displayName: String) {
@@ -84,18 +90,25 @@ enum class UserRole(val displayName: String) {
     ENTERPRISE("Enterprise")
 }
 
-enum class SubscriptionType(val displayName: String, val tripLimit: Int?) {
-    FREE("Gratuit", 20),
-    PREMIUM("Premium", null),
-    LIFETIME("À vie", null);
+enum class SubscriptionType(val displayName: String) {
+    TRIAL("Essai gratuit"),    // 7-day free trial with full access
+    EXPIRED("Expiré"),         // Trial or subscription expired - no access
+    PREMIUM("Premium"),        // Monthly subscription
+    LIFETIME("À vie");         // One-time lifetime purchase
 
-    /**
-     * Check if this subscription type allows export functionality
-     */
-    fun canExport(): Boolean = this != FREE
-
-    /**
-     * Check if this subscription type has unlimited trips
-     */
-    fun hasUnlimitedTrips(): Boolean = tripLimit == null
+    companion object {
+        /**
+         * Parse subscription type from string, with fallback for legacy FREE type
+         */
+        fun fromString(value: String): SubscriptionType {
+            return when (value.uppercase()) {
+                "FREE" -> TRIAL  // Legacy: FREE becomes TRIAL
+                else -> try {
+                    valueOf(value.uppercase())
+                } catch (e: IllegalArgumentException) {
+                    EXPIRED
+                }
+            }
+        }
+    }
 }

@@ -4,10 +4,14 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
+import com.application.motium.data.security.DeviceFingerprintManager
+import com.application.motium.data.supabase.DeviceFingerprintRepository
+import com.application.motium.data.supabase.PhoneVerificationRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.*
 import com.application.motium.domain.repository.AuthRepository
 import com.application.motium.service.SupabaseConnectionService
+import com.application.motium.utils.CredentialManagerHelper
 import com.application.motium.utils.GoogleSignInHelper
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -15,7 +19,10 @@ import kotlinx.coroutines.launch
 class AuthViewModel(
     private val context: Context,
     private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context),
-    private val googleSignInHelper: GoogleSignInHelper? = null
+    private val googleSignInHelper: GoogleSignInHelper? = null,
+    private val deviceFingerprintRepository: DeviceFingerprintRepository = DeviceFingerprintRepository.getInstance(context),
+    private val phoneVerificationRepository: PhoneVerificationRepository = PhoneVerificationRepository.getInstance(context),
+    private val deviceFingerprintManager: DeviceFingerprintManager = DeviceFingerprintManager.getInstance(context)
 ) : ViewModel() {
 
     val authState: StateFlow<AuthState> = authRepository.authState
@@ -38,7 +45,12 @@ class AuthViewModel(
             val result = authRepository.signIn(LoginRequest(email, password))
             when (result) {
                 is AuthResult.Success -> {
-                    _loginState.value = _loginState.value.copy(isLoading = false, isSuccess = true)
+                    _loginState.value = _loginState.value.copy(
+                        isLoading = false,
+                        isSuccess = true,
+                        // Signal to save credentials after successful login
+                        credentialsToSave = CredentialsToSave(email, password)
+                    )
 
                     // Démarrer le service de connexion permanente après connexion réussie
                     MotiumApplication.logger.i("✅ Login successful - starting connection service", "AuthViewModel")
@@ -103,6 +115,111 @@ class AuthViewModel(
         }
     }
 
+    /**
+     * Complete registration with phone verification and device fingerprint.
+     * Called after phone verification is complete.
+     */
+    fun signUpWithVerification(
+        email: String,
+        password: String,
+        name: String,
+        isProfessional: Boolean = false,
+        organizationName: String = "",
+        verifiedPhone: String
+    ) {
+        viewModelScope.launch {
+            _registerState.value = _registerState.value.copy(isLoading = true, error = null)
+
+            try {
+                // Get device fingerprint
+                val deviceId = deviceFingerprintManager.getDeviceId()
+
+                // Create the user account
+                val userRole = if (isProfessional) UserRole.ENTERPRISE else UserRole.INDIVIDUAL
+                val result = authRepository.signUp(RegisterRequest(email, password, name, userRole))
+
+                when (result) {
+                    is AuthResult.Success -> {
+                        val userId = result.data.id
+
+                        // Register device fingerprint
+                        if (deviceId != null) {
+                            deviceFingerprintRepository.registerDevice(userId)
+                                .onFailure { e ->
+                                    MotiumApplication.logger.w(
+                                        "Failed to register device fingerprint: ${e.message}",
+                                        "AuthViewModel"
+                                    )
+                                }
+                        }
+
+                        // Register verified phone
+                        phoneVerificationRepository.registerVerifiedPhone(verifiedPhone, userId)
+                            .onFailure { e ->
+                                MotiumApplication.logger.w(
+                                    "Failed to register verified phone: ${e.message}",
+                                    "AuthViewModel"
+                                )
+                            }
+
+                        // Create user profile with trial subscription
+                        val profileResult = authRepository.createUserProfileWithTrial(
+                            userId = userId,
+                            name = name,
+                            isProfessional = isProfessional,
+                            organizationName = organizationName,
+                            verifiedPhone = verifiedPhone,
+                            deviceFingerprintId = deviceId
+                        )
+
+                        when (profileResult) {
+                            is AuthResult.Success -> {
+                                _registerState.value = _registerState.value.copy(
+                                    isLoading = false,
+                                    isSuccess = true
+                                )
+
+                                MotiumApplication.logger.i(
+                                    "Registration with verification successful",
+                                    "AuthViewModel"
+                                )
+                                SupabaseConnectionService.startService(context)
+                            }
+                            is AuthResult.Error -> {
+                                _registerState.value = _registerState.value.copy(
+                                    isLoading = false,
+                                    error = profileResult.message
+                                )
+                            }
+                            AuthResult.Loading -> {
+                                _registerState.value = _registerState.value.copy(isLoading = true)
+                            }
+                        }
+                    }
+                    is AuthResult.Error -> {
+                        _registerState.value = _registerState.value.copy(
+                            isLoading = false,
+                            error = result.message
+                        )
+                    }
+                    AuthResult.Loading -> {
+                        _registerState.value = _registerState.value.copy(isLoading = true)
+                    }
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e(
+                    "Registration failed: ${e.message}",
+                    "AuthViewModel",
+                    e
+                )
+                _registerState.value = _registerState.value.copy(
+                    isLoading = false,
+                    error = "Registration failed: ${e.message}"
+                )
+            }
+        }
+    }
+
     fun signInWithGoogle(idToken: String) {
         viewModelScope.launch {
             _loginState.value = _loginState.value.copy(isLoading = true, error = null)
@@ -151,6 +268,9 @@ class AuthViewModel(
             // Arrêter le service de connexion permanente avant déconnexion
             MotiumApplication.logger.i("🔌 Stopping connection service before sign out", "AuthViewModel")
             SupabaseConnectionService.stopService(context)
+
+            // Clear credential state to signal logout to password managers
+            CredentialManagerHelper.getInstance(context).clearCredentialState()
 
             authRepository.signOut()
         }
@@ -239,6 +359,13 @@ class AuthViewModel(
         _loginState.value = _loginState.value.copy(error = null)
     }
 
+    /**
+     * Clear credentials after save attempt (success or failure)
+     */
+    fun clearCredentialsToSave() {
+        _loginState.value = _loginState.value.copy(credentialsToSave = null)
+    }
+
     fun clearRegisterError() {
         _registerState.value = _registerState.value.copy(error = null)
     }
@@ -255,7 +382,16 @@ class AuthViewModel(
 data class LoginUiState(
     val isLoading: Boolean = false,
     val isSuccess: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val credentialsToSave: CredentialsToSave? = null
+)
+
+/**
+ * Data class to hold credentials that should be saved after successful login
+ */
+data class CredentialsToSave(
+    val email: String,
+    val password: String
 )
 
 data class RegisterUiState(

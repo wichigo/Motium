@@ -16,6 +16,7 @@ import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -101,6 +102,9 @@ fun NewHomeScreen(
     var hasMoreTrips by remember { mutableStateOf(true) }
     var shouldLoadMore by remember { mutableStateOf(false) }
 
+    // Track if we've synced with Supabase this session (survives recomposition)
+    var hasSyncedWithSupabase by rememberSaveable { mutableStateOf(false) }
+
     // Statistiques du jour
     val todayTrips = remember(trips) {
         val today = Calendar.getInstance()
@@ -176,10 +180,15 @@ fun NewHomeScreen(
             }
 
             // 3. Synchroniser avec Supabase en arrière-plan (si authentifié)
-            if (authState.isAuthenticated) {
+            // Utiliser authState.user au lieu de currentUser (capture plus récente après while loop)
+            val freshUser = authState.user
+            if (authState.isAuthenticated && freshUser != null && !hasSyncedWithSupabase) {
+                hasSyncedWithSupabase = true
+                MotiumApplication.logger.i("🔄 Initial sync triggered for user ${freshUser.id}", "HomeScreen")
+
                 coroutineScope.launch(Dispatchers.IO) {
-                    tripRepository.syncTripsFromSupabase()
-                    expenseRepository.syncFromSupabase()
+                    tripRepository.syncTripsFromSupabase(freshUser.id)
+                    expenseRepository.syncFromSupabase(freshUser.id)
                     // Recharger après synchro pour afficher les nouveaux trajets
                     val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
                     trips = syncedTrips
@@ -188,18 +197,18 @@ fun NewHomeScreen(
                 }
 
                 // Charger le mode de tracking et les horaires depuis Supabase
-                currentUser?.let { user ->
-                    coroutineScope.launch(Dispatchers.IO) {
-                        val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
-                        val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
-                        // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
-                        tripRepository.setTrackingMode(supabaseMode)
-                        trackingMode = supabaseMode
+                coroutineScope.launch(Dispatchers.IO) {
+                    MotiumApplication.logger.i("🔄 Loading auto-tracking settings from Supabase for user ${freshUser.id}", "HomeScreen")
+                    val settings = workScheduleRepository.getAutoTrackingSettings(freshUser.id)
+                    val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                    // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
+                    tripRepository.setTrackingMode(supabaseMode)
+                    trackingMode = supabaseMode
+                    MotiumApplication.logger.i("✅ Auto-tracking mode loaded: $supabaseMode", "HomeScreen")
 
-                        // Vérifier si l'utilisateur a des horaires définis
-                        val schedules = workScheduleRepository.getWorkSchedules(user.id)
-                        hasWorkSchedules = schedules.isNotEmpty()
-                    }
+                    // Vérifier si l'utilisateur a des horaires définis
+                    val schedules = workScheduleRepository.getWorkSchedules(freshUser.id)
+                    hasWorkSchedules = schedules.isNotEmpty()
                 }
             }
 
@@ -212,17 +221,37 @@ fun NewHomeScreen(
     }
 
     // Re-sync when auth state changes to authenticated (handles delayed session restoration)
-    LaunchedEffect(authState.isAuthenticated) {
-        if (authState.isAuthenticated && currentUser != null) {
-            MotiumApplication.logger.i("🔄 Auth state changed to authenticated, syncing trips from Supabase", "HomeScreen")
+    // Uses hasSyncedWithSupabase flag (rememberSaveable) to avoid re-syncing on navigation back
+    LaunchedEffect(authState.isAuthenticated, hasSyncedWithSupabase) {
+        val user = authState.user
+        if (authState.isAuthenticated && user != null && !hasSyncedWithSupabase) {
+            MotiumApplication.logger.i("🔄 Auth state changed to authenticated, syncing from Supabase", "HomeScreen")
+            hasSyncedWithSupabase = true
             coroutineScope.launch(Dispatchers.IO) {
-                tripRepository.syncTripsFromSupabase(currentUser.id)
-                expenseRepository.syncFromSupabase(currentUser.id)
+                // Sync trips and expenses
+                tripRepository.syncTripsFromSupabase(user.id)
+                expenseRepository.syncFromSupabase(user.id)
+
                 // Recharger après synchro pour afficher les nouveaux trajets
                 val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
                 trips = syncedTrips
                 currentOffset = syncedTrips.size
                 hasMoreTrips = syncedTrips.size >= 10
+            }
+
+            // Charger le mode de tracking et les horaires depuis Supabase
+            coroutineScope.launch(Dispatchers.IO) {
+                MotiumApplication.logger.i("🔄 Loading auto-tracking settings from Supabase for user ${user.id}", "HomeScreen")
+                val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
+                val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
+                tripRepository.setTrackingMode(supabaseMode)
+                trackingMode = supabaseMode
+                MotiumApplication.logger.i("✅ Auto-tracking mode loaded: $supabaseMode", "HomeScreen")
+
+                // Vérifier si l'utilisateur a des horaires définis
+                val schedules = workScheduleRepository.getWorkSchedules(user.id)
+                hasWorkSchedules = schedules.isNotEmpty()
             }
         }
     }
@@ -235,21 +264,17 @@ fun NewHomeScreen(
     LaunchedEffect(trips.map { it.id }.toSet()) {
         if (trips.isEmpty()) return@LaunchedEffect
 
-        // Find trips that need map-matching (no cached coordinates, have GPS points, not already processed)
+        // Find trips that need map-matching (no cached coordinates, have enough GPS points, not already processed)
+        // OSRM requires at least 3 points for map-matching
         val tripsNeedingMapMatch = trips.filter { trip ->
             trip.matchedRouteCoordinates.isNullOrBlank() &&
-            trip.locations.size >= 2 &&
+            trip.locations.size >= 3 &&
             trip.id !in processedTripIds
         }
 
         if (tripsNeedingMapMatch.isNotEmpty()) {
             // Mark these trips as being processed to avoid re-triggering
             processedTripIds = processedTripIds + tripsNeedingMapMatch.map { it.id }.toSet()
-
-            MotiumApplication.logger.d(
-                "🗺️ Background map-matching: ${tripsNeedingMapMatch.size} trips need processing",
-                "HomeScreen"
-            )
 
             // Process trips in background, one at a time to avoid overloading OSRM
             coroutineScope.launch(Dispatchers.IO) {
@@ -274,20 +299,12 @@ fun NewHomeScreen(
                             trips = trips.map { t ->
                                 if (t.id == trip.id) updatedTrip else t
                             }
-
-                            MotiumApplication.logger.d(
-                                "✅ Background map-match: trip ${trip.id.take(8)}... (${matched.size} points)",
-                                "HomeScreen"
-                            )
                         }
 
                         // Small delay between requests to be nice to OSRM servers
                         kotlinx.coroutines.delay(500)
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.w(
-                            "Failed background map-match for trip ${trip.id}: ${e.message}",
-                            "HomeScreen"
-                        )
+                    } catch (_: Exception) {
+                        // Silently ignore - failure cache in NominatimService prevents retries
                     }
                 }
             }
@@ -707,6 +724,7 @@ fun StatItem(value: String, label: String, highlightColor: Color, textColor: Col
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewHomeTripCard(
     trip: Trip,
@@ -736,9 +754,8 @@ fun NewHomeTripCard(
     }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)

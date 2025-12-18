@@ -2,9 +2,11 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.Trip
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -19,6 +21,7 @@ class SupabaseTripRepository(private val context: Context) {
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
     private val json = Json { ignoreUnknownKeys = true }
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     @Serializable
     data class GpsPoint(
@@ -351,6 +354,61 @@ class SupabaseTripRepository(private val context: Context) {
     }
 
     /**
+     * Fetch validated trips for a user with pagination support.
+     * @param userId The user ID to fetch trips for
+     * @param limit Number of trips to fetch per page
+     * @param offset Number of trips to skip (for pagination)
+     * @param validatedOnly If true, only fetch validated trips
+     * @return Result containing list of trips and whether there are more to load
+     */
+    suspend fun getTripsWithPagination(
+        userId: String,
+        limit: Int = 20,
+        offset: Int = 0,
+        validatedOnly: Boolean = false
+    ): Result<PaginatedTripsResult> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i(
+                "Fetching trips (limit=$limit, offset=$offset, validatedOnly=$validatedOnly) for user: $userId",
+                "SupabaseTripRepository"
+            )
+
+            val query = postgres.from("trips")
+                .select {
+                    filter {
+                        eq("user_id", userId)
+                        if (validatedOnly) {
+                            eq("is_validated", true)
+                        }
+                    }
+                    order("start_time", io.github.jan.supabase.postgrest.query.Order.DESCENDING)
+                    range(offset.toLong(), (offset + limit - 1).toLong())
+                }
+
+            val supabaseTrips = query.decodeList<SupabaseTrip>()
+
+            MotiumApplication.logger.i("Fetched ${supabaseTrips.size} trips (page offset=$offset)", "SupabaseTripRepository")
+
+            val domainTrips = supabaseTrips.map { it.toDomainTrip() }
+            val hasMore = supabaseTrips.size == limit // If we got exactly limit trips, there might be more
+
+            Result.success(PaginatedTripsResult(trips = domainTrips, hasMore = hasMore))
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error fetching paginated trips: ${e.message}", "SupabaseTripRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Result class for paginated trips
+     */
+    data class PaginatedTripsResult(
+        val trips: List<Trip>,
+        val hasMore: Boolean
+    )
+
+    /**
      * Fetch a single trip by ID from Supabase.
      * Useful to restore GPS trace from cloud when local data is corrupted.
      */
@@ -380,6 +438,77 @@ class SupabaseTripRepository(private val context: Context) {
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error fetching trip $tripId from Supabase: ${e.message}", "SupabaseTripRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch a single trip by ID from Supabase for a linked user.
+     * Used by Pro account owners to view trips of their linked users.
+     * RLS policy ensures only authorized access is allowed.
+     *
+     * @param tripId The trip ID to fetch
+     * @param linkedUserId The ID of the linked user who owns the trip
+     * @return The trip if found and accessible, null otherwise
+     */
+    suspend fun getTripByIdForLinkedUser(tripId: String, linkedUserId: String): Result<Trip?> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("Fetching linked user trip $tripId (user: $linkedUserId) from Supabase", "SupabaseTripRepository")
+
+            val supabaseTrips = postgres.from("trips")
+                .select {
+                    filter {
+                        eq("id", tripId)
+                        eq("user_id", linkedUserId)
+                    }
+                }
+                .decodeList<SupabaseTrip>()
+
+            if (supabaseTrips.isEmpty()) {
+                MotiumApplication.logger.w("Linked user trip $tripId not found in Supabase", "SupabaseTripRepository")
+                return@withContext Result.success(null)
+            }
+
+            val domainTrip = supabaseTrips.first().toDomainTrip()
+            val tracePointsCount = domainTrip.tracePoints?.size ?: 0
+            MotiumApplication.logger.i("✅ Fetched linked user trip $tripId from Supabase with $tracePointsCount GPS points", "SupabaseTripRepository")
+
+            Result.success(domainTrip)
+
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired for linked user trip fetch, refreshing token...", "SupabaseTripRepository")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return@withContext try {
+                        val supabaseTrips = postgres.from("trips")
+                            .select {
+                                filter {
+                                    eq("id", tripId)
+                                    eq("user_id", linkedUserId)
+                                }
+                            }
+                            .decodeList<SupabaseTrip>()
+
+                        if (supabaseTrips.isEmpty()) {
+                            MotiumApplication.logger.w("Linked user trip $tripId not found after token refresh", "SupabaseTripRepository")
+                            Result.success(null)
+                        } else {
+                            val domainTrip = supabaseTrips.first().toDomainTrip()
+                            MotiumApplication.logger.i("✅ Fetched linked user trip after token refresh", "SupabaseTripRepository")
+                            Result.success(domainTrip)
+                        }
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "SupabaseTripRepository", retryError)
+                        Result.failure(retryError)
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error fetching linked user trip $tripId: ${e.message}", "SupabaseTripRepository", e)
+            Result.failure(e)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error fetching linked user trip $tripId from Supabase: ${e.message}", "SupabaseTripRepository", e)
             Result.failure(e)
         }
     }

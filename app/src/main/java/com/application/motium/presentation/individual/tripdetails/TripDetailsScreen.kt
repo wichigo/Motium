@@ -39,6 +39,7 @@ import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
 import com.application.motium.utils.MileageAllowanceCalculator
+import com.application.motium.data.geocoding.NominatimAddress
 import com.application.motium.data.geocoding.NominatimService
 import com.application.motium.domain.model.TripType
 import com.application.motium.domain.model.VehicleType
@@ -50,6 +51,7 @@ import java.util.*
 @Composable
 fun TripDetailsScreen(
     tripId: String,
+    linkedUserId: String? = null, // Optional: ID of linked user when viewing their trips as Pro owner
     onNavigateBack: () -> Unit = {},
     onNavigateToEdit: (String) -> Unit = {},
     authViewModel: AuthViewModel = viewModel()
@@ -82,43 +84,91 @@ fun TripDetailsScreen(
 
     // Charger le trip et les expenses au démarrage
     // Include currentUser?.id as dependency to retry when auth becomes available
-    LaunchedEffect(tripId, currentUser?.id) {
+    LaunchedEffect(tripId, currentUser?.id, linkedUserId) {
         coroutineScope.launch {
-            // Chargement direct par ID (rapide, utilise Room)
-            var loadedTrip = tripRepository.getTripById(tripId)
+            var loadedTrip: Trip? = null
 
-            // Check if local trip has suspiciously few GPS points - try to restore from Supabase
-            if (loadedTrip != null && loadedTrip.locations.size <= 5) {
-                // Try to get userId from auth state, fallback to secure storage
-                val userId = currentUser?.id ?: secureSessionStorage.restoreSession()?.userId
-                MotiumApplication.logger.d("TripDetailsScreen: Checking GPS restoration - localPoints=${loadedTrip.locations.size}, userId=$userId", "TripDetailsScreen")
-                if (!userId.isNullOrEmpty()) {
-                    MotiumApplication.logger.i("⚠️ Local trip has only ${loadedTrip.locations.size} points, trying to restore from Supabase...", "TripDetailsScreen")
-                    try {
-                        val supabaseResult = supabaseTripRepository.getTripById(tripId, userId)
-                        if (supabaseResult.isSuccess) {
-                            val supabaseTrip = supabaseResult.getOrNull()
-                            val supabasePointsCount = supabaseTrip?.tracePoints?.size ?: 0
-                            if (supabasePointsCount > loadedTrip.locations.size) {
-                                MotiumApplication.logger.i("✅ Restored GPS trace from Supabase: ${loadedTrip.locations.size} → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "TripDetailsScreen")
-                                val restoredLocations = supabaseTrip.tracePoints!!.map { point ->
-                                    TripLocation(
-                                        latitude = point.latitude,
-                                        longitude = point.longitude,
-                                        accuracy = point.accuracy ?: 10.0f,
-                                        timestamp = point.timestamp.toEpochMilliseconds()
+            // If linkedUserId is provided, fetch directly from Supabase (Pro viewing linked user's trip)
+            if (!linkedUserId.isNullOrEmpty()) {
+                MotiumApplication.logger.i("Fetching linked user trip: tripId=$tripId, linkedUserId=$linkedUserId", "TripDetailsScreen")
+                try {
+                    val supabaseResult = supabaseTripRepository.getTripByIdForLinkedUser(tripId, linkedUserId)
+                    if (supabaseResult.isSuccess) {
+                        val supabaseTrip = supabaseResult.getOrNull()
+                        if (supabaseTrip != null) {
+                            // Convert domain Trip to data Trip
+                            val traceLocations = supabaseTrip.tracePoints?.map { point ->
+                                TripLocation(
+                                    latitude = point.latitude,
+                                    longitude = point.longitude,
+                                    accuracy = point.accuracy ?: 10.0f,
+                                    timestamp = point.timestamp.toEpochMilliseconds()
+                                )
+                            } ?: listOf(
+                                TripLocation(supabaseTrip.startLatitude, supabaseTrip.startLongitude, 10f, supabaseTrip.startTime.toEpochMilliseconds()),
+                                TripLocation(supabaseTrip.endLatitude ?: supabaseTrip.startLatitude, supabaseTrip.endLongitude ?: supabaseTrip.startLongitude, 10f, supabaseTrip.endTime?.toEpochMilliseconds() ?: supabaseTrip.startTime.toEpochMilliseconds())
+                            )
+
+                            loadedTrip = Trip(
+                                id = supabaseTrip.id,
+                                startTime = supabaseTrip.startTime.toEpochMilliseconds(),
+                                endTime = supabaseTrip.endTime?.toEpochMilliseconds(),
+                                locations = traceLocations,
+                                totalDistance = supabaseTrip.distanceKm * 1000,
+                                isValidated = supabaseTrip.isValidated,
+                                vehicleId = supabaseTrip.vehicleId,
+                                startAddress = supabaseTrip.startAddress,
+                                endAddress = supabaseTrip.endAddress,
+                                tripType = supabaseTrip.type.name,
+                                reimbursementAmount = supabaseTrip.reimbursementAmount,
+                                isWorkHomeTrip = supabaseTrip.isWorkHomeTrip,
+                                createdAt = supabaseTrip.createdAt.toEpochMilliseconds(),
+                                updatedAt = supabaseTrip.updatedAt.toEpochMilliseconds(),
+                                userId = supabaseTrip.userId
+                            )
+                            MotiumApplication.logger.i("✅ Loaded linked user trip from Supabase: ${traceLocations.size} GPS points", "TripDetailsScreen")
+                        }
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e("Failed to fetch linked user trip: ${e.message}", "TripDetailsScreen", e)
+                }
+            } else {
+                // Standard flow: load from local Room database first
+                loadedTrip = tripRepository.getTripById(tripId)
+
+                // Check if local trip has suspiciously few GPS points - try to restore from Supabase
+                if (loadedTrip != null && loadedTrip.locations.size <= 5) {
+                    // Try to get userId from auth state, fallback to secure storage
+                    val userId = currentUser?.id ?: secureSessionStorage.restoreSession()?.userId
+                    MotiumApplication.logger.d("TripDetailsScreen: Checking GPS restoration - localPoints=${loadedTrip.locations.size}, userId=$userId", "TripDetailsScreen")
+                    if (!userId.isNullOrEmpty()) {
+                        MotiumApplication.logger.i("⚠️ Local trip has only ${loadedTrip.locations.size} points, trying to restore from Supabase...", "TripDetailsScreen")
+                        try {
+                            val supabaseResult = supabaseTripRepository.getTripById(tripId, userId)
+                            if (supabaseResult.isSuccess) {
+                                val supabaseTrip = supabaseResult.getOrNull()
+                                val supabasePointsCount = supabaseTrip?.tracePoints?.size ?: 0
+                                if (supabasePointsCount > loadedTrip.locations.size) {
+                                    MotiumApplication.logger.i("✅ Restored GPS trace from Supabase: ${loadedTrip.locations.size} → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "TripDetailsScreen")
+                                    val restoredLocations = supabaseTrip.tracePoints!!.map { point ->
+                                        TripLocation(
+                                            latitude = point.latitude,
+                                            longitude = point.longitude,
+                                            accuracy = point.accuracy ?: 10.0f,
+                                            timestamp = point.timestamp.toEpochMilliseconds()
+                                        )
+                                    }
+                                    // Restore both locations AND distance from Supabase
+                                    val restoredDistanceMeters = supabaseTrip.distanceKm * 1000
+                                    loadedTrip = loadedTrip.copy(
+                                        locations = restoredLocations,
+                                        totalDistance = restoredDistanceMeters
                                     )
                                 }
-                                // Restore both locations AND distance from Supabase
-                                val restoredDistanceMeters = supabaseTrip.distanceKm * 1000
-                                loadedTrip = loadedTrip.copy(
-                                    locations = restoredLocations,
-                                    totalDistance = restoredDistanceMeters
-                                )
                             }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Failed to restore GPS trace: ${e.message}", "TripDetailsScreen", e)
                         }
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.e("Failed to restore GPS trace: ${e.message}", "TripDetailsScreen", e)
                     }
                 }
             }
@@ -448,17 +498,17 @@ fun TripDetailsScreen(
 
                         HorizontalDivider(color = subTextColor.copy(alpha = 0.2f))
 
-                        // Adresses
+                        // Adresses (reformatées en format court)
                         DetailRow(
                             label = "Départ",
-                            value = currentTrip.startAddress ?: "Adresse inconnue",
+                            value = NominatimAddress.simplifyLegacyAddress(currentTrip.startAddress),
                             textColor = textColor,
                             subTextColor = subTextColor
                         )
 
                         DetailRow(
                             label = "Arrivée",
-                            value = currentTrip.endAddress ?: "Adresse inconnue",
+                            value = NominatimAddress.simplifyLegacyAddress(currentTrip.endAddress),
                             textColor = textColor,
                             subTextColor = subTextColor
                         )

@@ -2,25 +2,26 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.LinkStatus
 import com.application.motium.domain.model.SharingPreferences
-import com.application.motium.domain.model.User
 import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
+import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
  * Repository for managing linked users (Individual users linked to Pro accounts)
- * Data is stored directly on the users table (no separate linked_accounts table)
+ * Data is stored in the company_links table, with user details from users table.
  */
 class LinkedAccountRepository private constructor(
-    @Suppress("UNUSED_PARAMETER") context: Context
+    private val context: Context
 ) {
     private val supabaseClient = SupabaseClient.client
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     companion object {
         @Volatile
@@ -35,21 +36,50 @@ class LinkedAccountRepository private constructor(
 
     /**
      * Get all users linked to a Pro account
-     * Queries users table directly with linked_pro_account_id filter
+     * Queries company_links table with linked_pro_account_id filter
      */
     suspend fun getLinkedUsers(proAccountId: String): Result<List<LinkedUserDto>> = withContext(Dispatchers.IO) {
         try {
-            val response = supabaseClient.from("users")
-                .select() {
+            MotiumApplication.logger.i("Fetching linked users for Pro account: $proAccountId", "LinkedAccountRepo")
+
+            // Query company_links with embedded user data
+            // Using simple join syntax - PostgREST auto-detects the FK relationship
+            val response = supabaseClient.from("company_links")
+                .select(Columns.raw("*, users(id, name, email, phone_number)")) {
                     filter {
                         eq("linked_pro_account_id", proAccountId)
                     }
                 }
-                .decodeList<UserDto>()
+                .decodeList<CompanyLinkWithUserDto>()
                 .map { it.toLinkedUserDto() }
 
-            MotiumApplication.logger.i("Found ${response.size} linked users for Pro account", "LinkedAccountRepo")
+            MotiumApplication.logger.i("Found ${response.size} linked users for Pro account $proAccountId", "LinkedAccountRepo")
             Result.success(response)
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "LinkedAccountRepo")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return@withContext try {
+                        val response = supabaseClient.from("company_links")
+                            .select(Columns.raw("*, users(id, name, email, phone_number)")) {
+                                filter {
+                                    eq("linked_pro_account_id", proAccountId)
+                                }
+                            }
+                            .decodeList<CompanyLinkWithUserDto>()
+                            .map { it.toLinkedUserDto() }
+                        MotiumApplication.logger.i("Linked users loaded after token refresh", "LinkedAccountRepo")
+                        Result.success(response)
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "LinkedAccountRepo", retryError)
+                        Result.failure(retryError)
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error getting linked users: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting linked users: ${e.message}", "LinkedAccountRepo", e)
             Result.failure(e)
@@ -57,17 +87,17 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Get a linked user by ID
+     * Get a linked user by user ID (returns link info + user details)
      */
     suspend fun getLinkedUserById(userId: String): Result<LinkedUserDto> = withContext(Dispatchers.IO) {
         try {
-            val response = supabaseClient.from("users")
-                .select() {
+            val response = supabaseClient.from("company_links")
+                .select(Columns.raw("*, users(id, name, email, phone_number)")) {
                     filter {
-                        eq("id", userId)
+                        eq("user_id", userId)
                     }
                 }
-                .decodeSingle<UserDto>()
+                .decodeSingle<CompanyLinkWithUserDto>()
 
             Result.success(response.toLinkedUserDto())
         } catch (e: Exception) {
@@ -77,26 +107,62 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Invite a user by email - updates the user's link fields
+     * Get a linked user by link ID
      */
-    suspend fun inviteUser(proAccountId: String, email: String): Result<String?> = withContext(Dispatchers.IO) {
+    suspend fun getLinkedUserByLinkId(linkId: String): Result<LinkedUserDto> = withContext(Dispatchers.IO) {
+        try {
+            val response = supabaseClient.from("company_links")
+                .select(Columns.raw("*, users(id, name, email, phone_number)")) {
+                    filter {
+                        eq("id", linkId)
+                    }
+                }
+                .decodeSingle<CompanyLinkWithUserDto>()
+
+            Result.success(response.toLinkedUserDto())
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting linked user by link ID: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Invite a user by email - creates entry in company_links
+     */
+    suspend fun inviteUser(proAccountId: String, companyName: String, email: String): Result<String?> = withContext(Dispatchers.IO) {
         try {
             // Generate invitation token
             val invitationToken = java.util.UUID.randomUUID().toString()
             val now = java.time.Instant.now().toString()
 
-            // Update user with invitation
-            supabaseClient.from("users")
-                .update({
-                    set("linked_pro_account_id", proAccountId)
-                    set("link_status", "pending")
-                    set("invitation_token", invitationToken)
-                    set("invited_at", now)
-                }) {
+            // First check if user exists
+            val existingUsers = supabaseClient.from("users")
+                .select() {
                     filter {
                         eq("email", email)
                     }
                 }
+                .decodeList<MinimalUserDto>()
+
+            val userId: String
+            if (existingUsers.isNotEmpty()) {
+                userId = existingUsers.first().id
+            } else {
+                // User doesn't exist - cannot create invitation without user
+                return@withContext Result.failure(Exception("User with email $email not found"))
+            }
+
+            // Create company_link entry
+            val linkInsert = CompanyLinkInsertDto(
+                user_id = userId,
+                linked_pro_account_id = proAccountId,
+                company_name = companyName,
+                status = "PENDING",
+                invitation_token = invitationToken,
+                linked_at = now
+            )
+
+            supabaseClient.from("company_links").insert(linkInsert)
 
             MotiumApplication.logger.i("Invitation sent to $email", "LinkedAccountRepo")
             Result.success(invitationToken)
@@ -108,9 +174,11 @@ class LinkedAccountRepository private constructor(
 
     /**
      * Invite a user with additional details (full name, phone, department)
+     * Creates user if not exists, then creates company_link
      */
     suspend fun inviteUserWithDetails(
         proAccountId: String,
+        companyName: String,
         email: String,
         fullName: String,
         phone: String? = null,
@@ -128,45 +196,59 @@ class LinkedAccountRepository private constructor(
                         eq("email", email)
                     }
                 }
-                .decodeList<UserDto>()
+                .decodeList<MinimalUserDto>()
 
+            val userId: String
             if (existingUsers.isNotEmpty()) {
-                // User exists - update with invitation and additional info
+                userId = existingUsers.first().id
+                // Update user info if provided
                 supabaseClient.from("users")
                     .update({
-                        set("linked_pro_account_id", proAccountId)
-                        set("link_status", "pending")
-                        set("invitation_token", invitationToken)
-                        set("invited_at", now)
                         set("name", fullName)
                         if (phone != null) set("phone_number", phone)
-                        if (department != null) set("department", department)
                     }) {
+                        filter {
+                            eq("id", userId)
+                        }
+                    }
+                MotiumApplication.logger.i("Updated existing user $email", "LinkedAccountRepo")
+            } else {
+                // User doesn't exist - create a placeholder user
+                val userInsert = mapOf(
+                    "email" to email,
+                    "name" to fullName,
+                    "phone_number" to (phone ?: ""),
+                    "role" to "INDIVIDUAL",
+                    "subscription_type" to "FREE"
+                )
+                supabaseClient.from("users").insert(userInsert)
+
+                // Get the newly created user ID
+                val newUser = supabaseClient.from("users")
+                    .select() {
                         filter {
                             eq("email", email)
                         }
                     }
-
-                MotiumApplication.logger.i("Invitation sent to existing user $email", "LinkedAccountRepo")
-            } else {
-                // User doesn't exist - create a placeholder user
-                // This user will complete their profile when they accept the invitation
-                supabaseClient.from("users")
-                    .insert(mapOf(
-                        "email" to email,
-                        "name" to fullName,
-                        "phone_number" to (phone ?: ""),
-                        "department" to (department ?: ""),
-                        "linked_pro_account_id" to proAccountId,
-                        "link_status" to "pending",
-                        "invitation_token" to invitationToken,
-                        "invited_at" to now,
-                        "role" to "INDIVIDUAL"
-                    ))
-
-                MotiumApplication.logger.i("Created placeholder user and sent invitation to $email", "LinkedAccountRepo")
+                    .decodeSingle<MinimalUserDto>()
+                userId = newUser.id
+                MotiumApplication.logger.i("Created placeholder user $email", "LinkedAccountRepo")
             }
 
+            // Create company_link entry
+            val linkInsert = CompanyLinkInsertDto(
+                user_id = userId,
+                linked_pro_account_id = proAccountId,
+                company_name = companyName,
+                department = department,
+                status = "PENDING",
+                invitation_token = invitationToken,
+                linked_at = now
+            )
+
+            supabaseClient.from("company_links").insert(linkInsert)
+
+            MotiumApplication.logger.i("Invitation created for $email in company_links", "LinkedAccountRepo")
             Result.success(invitationToken)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error inviting user with details: ${e.message}", "LinkedAccountRepo", e)
@@ -175,20 +257,49 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Revoke access for a linked user
+     * Revoke access for a linked user (Pro-initiated)
      */
-    suspend fun revokeUser(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun revokeUser(linkId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            supabaseClient.from("users")
+            val now = java.time.Instant.now().toString()
+
+            supabaseClient.from("company_links")
                 .update({
-                    set("link_status", "revoked")
+                    set("status", "REVOKED")
+                    set("unlinked_at", now)
                 }) {
                     filter {
-                        eq("id", userId)
+                        eq("id", linkId)
                     }
                 }
 
-            MotiumApplication.logger.i("User $userId access revoked", "LinkedAccountRepo")
+            MotiumApplication.logger.i("Link $linkId access revoked", "LinkedAccountRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error revoking link: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Revoke access by user ID (finds the link first)
+     */
+    suspend fun revokeUserByUserId(userId: String, proAccountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val now = java.time.Instant.now().toString()
+
+            supabaseClient.from("company_links")
+                .update({
+                    set("status", "REVOKED")
+                    set("unlinked_at", now)
+                }) {
+                    filter {
+                        eq("user_id", userId)
+                        eq("linked_pro_account_id", proAccountId)
+                    }
+                }
+
+            MotiumApplication.logger.i("User $userId access revoked from Pro $proAccountId", "LinkedAccountRepo")
             Result.success(Unit)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error revoking user: ${e.message}", "LinkedAccountRepo", e)
@@ -197,21 +308,21 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Accept an invitation - updates the user's link status
+     * Accept an invitation - updates the link status in company_links
      */
     suspend fun acceptInvitation(token: String): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
             val now = java.time.Instant.now().toString()
 
-            supabaseClient.from("users")
+            supabaseClient.from("company_links")
                 .update({
-                    set("link_status", "active")
+                    set("status", "ACTIVE")
                     set("invitation_token", null as String?)
-                    set("link_activated_at", now)
+                    set("linked_activated_at", now)
                 }) {
                     filter {
                         eq("invitation_token", token)
-                        eq("link_status", "pending")
+                        eq("status", "PENDING")
                     }
                 }
 
@@ -224,22 +335,52 @@ class LinkedAccountRepository private constructor(
     }
 
     /**
-     * Update sharing preferences for the current user
+     * Update sharing preferences for a company link
      */
     suspend fun updateSharingPreferences(
-        userId: String,
+        linkId: String,
         preferences: SharingPreferences
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            supabaseClient.from("users")
+            supabaseClient.from("company_links")
                 .update({
                     set("share_professional_trips", preferences.shareProfessionalTrips)
                     set("share_personal_trips", preferences.sharePersonalTrips)
-                    set("share_vehicle_info", preferences.shareVehicleInfo)
+                    set("share_personal_info", preferences.shareVehicleInfo) // mapped to share_personal_info in DB
                     set("share_expenses", preferences.shareExpenses)
                 }) {
                     filter {
-                        eq("id", userId)
+                        eq("id", linkId)
+                    }
+                }
+
+            MotiumApplication.logger.i("Sharing preferences updated for link $linkId", "LinkedAccountRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error updating sharing preferences: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Update sharing preferences by user ID
+     */
+    suspend fun updateSharingPreferencesByUserId(
+        userId: String,
+        proAccountId: String,
+        preferences: SharingPreferences
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            supabaseClient.from("company_links")
+                .update({
+                    set("share_professional_trips", preferences.shareProfessionalTrips)
+                    set("share_personal_trips", preferences.sharePersonalTrips)
+                    set("share_personal_info", preferences.shareVehicleInfo)
+                    set("share_expenses", preferences.shareExpenses)
+                }) {
+                    filter {
+                        eq("user_id", userId)
+                        eq("linked_pro_account_id", proAccountId)
                     }
                 }
 
@@ -254,22 +395,47 @@ class LinkedAccountRepository private constructor(
     /**
      * Unlink user from Pro account (user-initiated)
      */
-    suspend fun unlinkFromPro(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun unlinkFromPro(linkId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            supabaseClient.from("users")
+            val now = java.time.Instant.now().toString()
+
+            supabaseClient.from("company_links")
                 .update({
-                    set("linked_pro_account_id", null as String?)
-                    set("link_status", null as String?)
-                    set("invitation_token", null as String?)
-                    set("invited_at", null as String?)
-                    set("link_activated_at", null as String?)
+                    set("status", "INACTIVE")
+                    set("unlinked_at", now)
                 }) {
                     filter {
-                        eq("id", userId)
+                        eq("id", linkId)
                     }
                 }
 
-            MotiumApplication.logger.i("User $userId unlinked from Pro", "LinkedAccountRepo")
+            MotiumApplication.logger.i("Link $linkId unlinked from Pro", "LinkedAccountRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error unlinking from Pro: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Unlink by user ID
+     */
+    suspend fun unlinkFromProByUserId(userId: String, proAccountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val now = java.time.Instant.now().toString()
+
+            supabaseClient.from("company_links")
+                .update({
+                    set("status", "INACTIVE")
+                    set("unlinked_at", now)
+                }) {
+                    filter {
+                        eq("user_id", userId)
+                        eq("linked_pro_account_id", proAccountId)
+                    }
+                }
+
+            MotiumApplication.logger.i("User $userId unlinked from Pro $proAccountId", "LinkedAccountRepo")
             Result.success(Unit)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error unlinking user: ${e.message}", "LinkedAccountRepo", e)
@@ -278,11 +444,94 @@ class LinkedAccountRepository private constructor(
     }
 }
 
+// ==================== DTOs ====================
+
 /**
- * DTO returned by the get_linked_users RPC function
+ * DTO for company_links with embedded user data from foreign key join
+ */
+@Serializable
+data class CompanyLinkWithUserDto(
+    val id: String,
+    val user_id: String,
+    val linked_pro_account_id: String,
+    val company_name: String,
+    val department: String? = null,
+    val status: String,
+    val share_professional_trips: Boolean = true,
+    val share_personal_trips: Boolean = false,
+    val share_personal_info: Boolean = true,
+    val share_expenses: Boolean = false,
+    val invitation_token: String? = null,
+    val linked_at: String? = null,
+    val linked_activated_at: String? = null,
+    val unlinked_at: String? = null,
+    val created_at: String? = null,
+    val updated_at: String? = null,
+    val users: EmbeddedUserDto? = null  // Embedded user data from join
+) {
+    fun toLinkedUserDto(): LinkedUserDto = LinkedUserDto(
+        linkId = id,
+        userId = user_id,
+        userName = users?.name,
+        userEmail = users?.email ?: "",
+        userPhone = users?.phone_number,
+        department = department,
+        linkStatus = status,
+        invitedAt = linked_at,
+        linkActivatedAt = linked_activated_at,
+        shareProfessionalTrips = share_professional_trips,
+        sharePersonalTrips = share_personal_trips,
+        shareVehicleInfo = share_personal_info,
+        shareExpenses = share_expenses
+    )
+}
+
+/**
+ * Embedded user data from foreign key join
+ */
+@Serializable
+data class EmbeddedUserDto(
+    val id: String,
+    val name: String? = null,
+    val email: String,
+    val phone_number: String? = null
+)
+
+/**
+ * DTO for inserting a new company link
+ */
+@Serializable
+data class CompanyLinkInsertDto(
+    val user_id: String,
+    val linked_pro_account_id: String,
+    val company_name: String,
+    val department: String? = null,
+    val status: String = "PENDING",
+    val share_professional_trips: Boolean = true,
+    val share_personal_trips: Boolean = false,
+    val share_personal_info: Boolean = true,
+    val share_expenses: Boolean = false,
+    val invitation_token: String? = null,
+    val linked_at: String? = null
+)
+
+/**
+ * Minimal user DTO for checking user existence
+ */
+@Serializable
+data class MinimalUserDto(
+    val id: String,
+    val email: String,
+    val name: String? = null
+)
+
+/**
+ * DTO representing a linked user with their link info
  */
 @Serializable
 data class LinkedUserDto(
+    @SerialName("link_id")
+    val linkId: String,
     @SerialName("user_id")
     val userId: String,
     @SerialName("user_name")
@@ -291,6 +540,7 @@ data class LinkedUserDto(
     val userEmail: String,
     @SerialName("user_phone")
     val userPhone: String? = null,
+    val department: String? = null,
     @SerialName("link_status")
     val linkStatus: String?,
     @SerialName("invited_at")
@@ -318,48 +568,6 @@ data class LinkedUserDto(
         get() = status == LinkStatus.ACTIVE
 
     fun toSharingPreferences(): SharingPreferences = SharingPreferences(
-        shareProfessionalTrips = shareProfessionalTrips,
-        sharePersonalTrips = sharePersonalTrips,
-        shareVehicleInfo = shareVehicleInfo,
-        shareExpenses = shareExpenses
-    )
-}
-
-/**
- * Minimal DTO for users table queries
- */
-@Serializable
-data class UserDto(
-    val id: String,
-    val name: String?,
-    val email: String,
-    @SerialName("phone_number")
-    val phoneNumber: String? = null,
-    @SerialName("linked_pro_account_id")
-    val linkedProAccountId: String? = null,
-    @SerialName("link_status")
-    val linkStatus: String? = null,
-    @SerialName("invited_at")
-    val invitedAt: String? = null,
-    @SerialName("link_activated_at")
-    val linkActivatedAt: String? = null,
-    @SerialName("share_professional_trips")
-    val shareProfessionalTrips: Boolean = true,
-    @SerialName("share_personal_trips")
-    val sharePersonalTrips: Boolean = false,
-    @SerialName("share_vehicle_info")
-    val shareVehicleInfo: Boolean = true,
-    @SerialName("share_expenses")
-    val shareExpenses: Boolean = false
-) {
-    fun toLinkedUserDto(): LinkedUserDto = LinkedUserDto(
-        userId = id,
-        userName = name,
-        userEmail = email,
-        userPhone = phoneNumber,
-        linkStatus = linkStatus,
-        invitedAt = invitedAt,
-        linkActivatedAt = linkActivatedAt,
         shareProfessionalTrips = shareProfessionalTrips,
         sharePersonalTrips = sharePersonalTrips,
         shareVehicleInfo = shareVehicleInfo,

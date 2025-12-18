@@ -298,6 +298,10 @@ class LocationTrackingService : Service() {
     private var lastSignificantMoveTime: Long = 0
     private var lastSignificantLocation: Location? = null
 
+    // GPS RECOVERY FIX: Track GPS availability for tunnel/indoor recovery
+    private var lastGpsAvailable: Boolean = true
+    private var gpsUnavailableSince: Long? = null
+
     // Système de debounce pour arrêts (période de grâce de 2 minutes)
     private val stopDebounceHandler = Handler(Looper.getMainLooper())
     private var stopPendingStartTime: Long? = null
@@ -918,10 +922,15 @@ class LocationTrackingService : Service() {
             }
 
             else -> {
-                // Fallback pour compatibilité
+                // BATTERY FIX: Fallback case should NOT start GPS in STANDBY mode
+                // GPS is only started when ActivityRecognition detects vehicle movement (ACTION_START_BUFFERING)
                 startForegroundService()
-                startLocationUpdates()
                 startNotificationWatch()
+                // DO NOT call startLocationUpdates() here - GPS will start when needed
+                MotiumApplication.logger.d(
+                    "Service started with action: $action - GPS NOT started (STANDBY mode, waiting for activity detection)",
+                    "LocationService"
+                )
             }
         }
 
@@ -1172,10 +1181,57 @@ class LocationTrackingService : Service() {
                 super.onLocationAvailability(locationAvailability)
 
                 val isAvailable = locationAvailability.isLocationAvailable
-                MotiumApplication.logger.i("Location availability: $isAvailable", "LocationService")
 
-                // Ne pas mettre à jour la notification pour éviter vibrations constantes
-                // Le GPS non disponible est déjà loggé
+                // GPS RECOVERY FIX: Track availability changes and recover when GPS comes back
+                val wasUnavailable = !lastGpsAvailable && isAvailable
+                val becameUnavailable = lastGpsAvailable && !isAvailable
+                lastGpsAvailable = isAvailable
+
+                when {
+                    becameUnavailable -> {
+                        gpsUnavailableSince = System.currentTimeMillis()
+                        MotiumApplication.logger.w(
+                            "📡 GPS UNAVAILABLE (tunnel/indoor?) - Tracking state: $tripState",
+                            "GPSRecovery"
+                        )
+                    }
+                    wasUnavailable -> {
+                        val unavailableDuration = gpsUnavailableSince?.let {
+                            (System.currentTimeMillis() - it) / 1000
+                        } ?: 0
+                        gpsUnavailableSince = null
+
+                        MotiumApplication.logger.i(
+                            "📡 GPS AVAILABLE again (after ${unavailableDuration}s) - Tracking state: $tripState",
+                            "GPSRecovery"
+                        )
+
+                        // CRITICAL FIX: Re-request location updates if we're in an active trip state
+                        // Samsung One UI may have killed our callbacks while GPS was unavailable
+                        if (tripState == TripState.TRIP_ACTIVE || tripState == TripState.BUFFERING ||
+                            tripState == TripState.STOP_PENDING || tripState == TripState.FINALIZING) {
+
+                            MotiumApplication.logger.i(
+                                "🔧 GPS RECOVERY: Re-requesting location updates after signal restoration",
+                                "GPSRecovery"
+                            )
+
+                            // Re-apply current GPS frequency to ensure callbacks are registered
+                            val isTripMode = tripState != TripState.STANDBY
+                            serviceScope.launch {
+                                // Small delay to let GPS stabilize after becoming available
+                                kotlinx.coroutines.delay(1000)
+                                updateGPSFrequency(tripMode = isTripMode)
+                            }
+                        }
+                    }
+                    else -> {
+                        MotiumApplication.logger.d(
+                            "GPS availability unchanged: $isAvailable (state: $tripState)",
+                            "LocationService"
+                        )
+                    }
+                }
             }
         }
     }
@@ -2129,8 +2185,8 @@ class LocationTrackingService : Service() {
                     endAddress = endAddress
                 )
 
-                // Save trip with subscription limit check
-                val tripSaved = tripRepository.saveTripWithLimitCheck(tripToSave)
+                // Save trip with subscription access check
+                val tripSaved = tripRepository.saveTripWithAccessCheck(tripToSave)
 
                 if (tripSaved) {
                     MotiumApplication.logger.i(
@@ -2144,11 +2200,11 @@ class LocationTrackingService : Service() {
                     )
                 } else {
                     MotiumApplication.logger.w(
-                        "⚠️ Trip NOT saved - monthly limit reached. " +
+                        "⚠️ Trip NOT saved - subscription expired or no valid access. " +
                         "Trip: ${trip.locations.size} points, ${String.format("%.2f", trip.totalDistance / 1000)} km",
                         "DatabaseSave"
                     )
-                    // Show notification that trip was not saved due to limit
+                    // Show notification that trip was not saved due to no valid access
                     showTripLimitNotification()
                 }
             } catch (e: Exception) {

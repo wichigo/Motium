@@ -115,6 +115,47 @@ class ProAccountRepository private constructor(
     }
 
     /**
+     * Create a new Pro account with trial period
+     */
+    suspend fun createProAccountWithTrial(
+        userId: String,
+        companyName: String,
+        trialStartedAt: String,
+        trialEndsAt: String,
+        siret: String? = null,
+        vatNumber: String? = null,
+        legalForm: String? = null,
+        billingAddress: String? = null,
+        billingEmail: String? = null
+    ): Result<ProAccountDto> = withContext(Dispatchers.IO) {
+        try {
+            val newAccount = ProAccountInsertDto(
+                userId = userId,
+                companyName = companyName,
+                siret = siret,
+                vatNumber = vatNumber,
+                legalForm = legalForm,
+                billingAddress = billingAddress,
+                billingEmail = billingEmail,
+                trialStartedAt = trialStartedAt,
+                trialEndsAt = trialEndsAt
+            )
+
+            val response = supabaseClient.from("pro_accounts")
+                .insert(newAccount) {
+                    select()
+                }
+                .decodeSingle<ProAccountDto>()
+
+            MotiumApplication.logger.i("Pro account with trial created for user $userId (trial ends: $trialEndsAt)", "ProAccountRepo")
+            Result.success(response)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error creating pro account with trial: ${e.message}", "ProAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Update Pro account
      */
     suspend fun updateProAccount(
@@ -220,6 +261,10 @@ data class ProAccountDto(
     val billingEmail: String? = null,
     @SerialName("stripe_customer_id")
     val stripeCustomerId: String? = null,
+    @SerialName("trial_started_at")
+    val trialStartedAt: String? = null,
+    @SerialName("trial_ends_at")
+    val trialEndsAt: String? = null,
     @SerialName("created_at")
     val createdAt: String? = null,
     @SerialName("updated_at")
@@ -257,5 +302,9 @@ data class ProAccountInsertDto(
     @SerialName("billing_address")
     val billingAddress: String? = null,
     @SerialName("billing_email")
-    val billingEmail: String? = null
+    val billingEmail: String? = null,
+    @SerialName("trial_started_at")
+    val trialStartedAt: String? = null,
+    @SerialName("trial_ends_at")
+    val trialEndsAt: String? = null
 )

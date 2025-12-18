@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -155,6 +156,7 @@ fun ExportScreen(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable {
                                     if (selectedField == "start" && showDatePicker) {
                                         showDatePicker = false
@@ -193,6 +195,7 @@ fun ExportScreen(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable {
                                     if (selectedField == "end" && showDatePicker) {
                                         showDatePicker = false
@@ -398,6 +401,8 @@ fun ExportScreen(
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         vehicleExpanded = !vehicleExpanded
                                         selectedField = if (vehicleExpanded) "vehicle" else null
@@ -478,6 +483,8 @@ fun ExportScreen(
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         tripTypeExpanded = !tripTypeExpanded
                                         selectedField = if (tripTypeExpanded) "tripType" else null
@@ -570,6 +577,8 @@ fun ExportScreen(
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         expenseModeExpanded = !expenseModeExpanded
                                         selectedField = if (expenseModeExpanded) "expenseMode" else null
@@ -657,6 +666,8 @@ fun ExportScreen(
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         includePhotosExpanded = !includePhotosExpanded
                                         selectedField = if (includePhotosExpanded) "includePhotos" else null
@@ -1096,12 +1107,12 @@ private fun CalendarGrid(
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
+                                        .clip(CircleShape)
                                         .background(
                                             when {
                                                 isStartDay || isEndDay -> MotiumPrimary
                                                 else -> Color.Transparent
-                                            },
-                                            CircleShape
+                                            }
                                         )
                                         .clickable { onDateSelected(dayNumber) },
                                     contentAlignment = Alignment.Center

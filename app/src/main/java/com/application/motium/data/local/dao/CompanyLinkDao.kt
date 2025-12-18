@@ -41,6 +41,7 @@ interface CompanyLinkDao {
         SET shareProfessionalTrips = :sharePro,
             sharePersonalTrips = :sharePerso,
             sharePersonalInfo = :shareInfo,
+            shareExpenses = :shareExpenses,
             updatedAt = :updatedAt,
             needsSync = 1
         WHERE id = :linkId
@@ -50,6 +51,7 @@ interface CompanyLinkDao {
         sharePro: Boolean,
         sharePerso: Boolean,
         shareInfo: Boolean,
+        shareExpenses: Boolean,
         updatedAt: String
     )
 
@@ -124,10 +126,10 @@ interface CompanyLinkDao {
     suspend fun getCompanyLinkById(linkId: String): CompanyLinkEntity?
 
     /**
-     * Check if user is linked to a specific company.
+     * Check if user is linked to a specific Pro account.
      */
-    @Query("SELECT EXISTS(SELECT 1 FROM company_links WHERE userId = :userId AND companyId = :companyId AND status = 'ACTIVE')")
-    suspend fun isLinkedToCompany(userId: String, companyId: String): Boolean
+    @Query("SELECT EXISTS(SELECT 1 FROM company_links WHERE userId = :userId AND linkedProAccountId = :proAccountId AND status = 'ACTIVE')")
+    suspend fun isLinkedToProAccount(userId: String, proAccountId: String): Boolean
 
     /**
      * Get count of active company links for a user.

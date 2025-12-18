@@ -8,6 +8,14 @@ import com.application.motium.data.sync.SyncScheduler
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.utils.AppLogger
 import org.maplibre.android.MapLibre
+import org.maplibre.android.module.http.HttpRequestUtil
+import okhttp3.OkHttpClient
+import okhttp3.Cache
+import okhttp3.CacheControl
+import okhttp3.Interceptor
+import okhttp3.Response
+import java.io.File
+import java.util.concurrent.TimeUnit
 
 class MotiumApplication : Application() {
 
@@ -26,7 +34,83 @@ class MotiumApplication : Application() {
         // Initialiser MapLibre (doit être fait avant toute utilisation de MapView)
         try {
             MapLibre.getInstance(this)
-            logger.i("MapLibre initialized successfully", "Application")
+
+            // Configure HTTP cache for MapLibre (fonts, sprites, tiles)
+            // This reduces network requests by caching resources locally
+            val cacheDir = File(cacheDir, "maplibre_http_cache")
+            val cacheSize = 100L * 1024 * 1024 // 100 MB cache for offline mode
+
+            // Cache-first interceptor: Use cached version without network validation
+            // Only fetch from network if not in cache (first load)
+            val cacheFirstInterceptor = Interceptor { chain ->
+                val request = chain.request()
+                val url = request.url.toString()
+
+                // Identify cacheable static assets
+                val isStaticAsset = url.contains("/fonts/") ||
+                        url.contains("/sprites/") ||
+                        url.endsWith(".pbf") ||
+                        url.endsWith(".mvt") ||
+                        (url.endsWith(".png") && url.contains("sprite"))
+
+                if (isStaticAsset) {
+                    // Try cache-only first (no network validation)
+                    val cacheOnlyRequest = request.newBuilder()
+                        .cacheControl(CacheControl.Builder()
+                            .onlyIfCached()
+                            .maxStale(365, TimeUnit.DAYS)
+                            .build())
+                        .build()
+
+                    val cacheResponse = chain.proceed(cacheOnlyRequest)
+
+                    // If cache hit (not 504), return cached response
+                    if (cacheResponse.code != 504) {
+                        return@Interceptor cacheResponse
+                    }
+
+                    // Cache miss - close failed response and fetch from network
+                    cacheResponse.close()
+                    chain.proceed(request)
+                } else {
+                    // For non-static assets (style.json), use network with cache fallback
+                    chain.proceed(request)
+                }
+            }
+
+            // Network interceptor to force long cache headers on responses
+            val forceCacheHeadersInterceptor = Interceptor { chain ->
+                val response = chain.proceed(chain.request())
+                val url = chain.request().url.toString()
+
+                val isStaticAsset = url.contains("/fonts/") ||
+                        url.contains("/sprites/") ||
+                        url.endsWith(".pbf") ||
+                        url.endsWith(".mvt") ||
+                        (url.endsWith(".png") && url.contains("sprite"))
+
+                if (isStaticAsset && response.isSuccessful) {
+                    // Override cache headers to cache for 1 year
+                    response.newBuilder()
+                        .removeHeader("Pragma")
+                        .removeHeader("Cache-Control")
+                        .header("Cache-Control", "public, max-age=31536000")
+                        .build()
+                } else {
+                    response
+                }
+            }
+
+            val httpClient = OkHttpClient.Builder()
+                .cache(Cache(cacheDir, cacheSize))
+                .addInterceptor(cacheFirstInterceptor)
+                .addNetworkInterceptor(forceCacheHeadersInterceptor)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .build()
+            HttpRequestUtil.setOkHttpClient(httpClient)
+
+            logger.i("MapLibre initialized with 100MB cache-first HTTP cache", "Application")
         } catch (e: Exception) {
             logger.e("Failed to initialize MapLibre: ${e.message}", "Application", e)
         }

@@ -213,11 +213,11 @@ class CompanyLinkViewModel(
 
             result.fold(
                 onSuccess = {
-                    // Update local state to show UNLINKED status
+                    // Update local state to show INACTIVE status
                     _uiState.update { state ->
                         val updatedLinks = state.companyLinks.map { l ->
                             if (l.id == link.id) {
-                                l.copy(status = LinkStatus.UNLINKED)
+                                l.copy(status = LinkStatus.INACTIVE)
                             } else l
                         }
                         state.copy(companyLinks = updatedLinks, isLoading = false)

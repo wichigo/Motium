@@ -5,10 +5,11 @@ import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.data.sync.SyncScheduler
+import com.application.motium.data.sync.TokenRefreshCoordinator
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import com.application.motium.domain.model.AuthResult
 import com.application.motium.domain.model.AuthState
 import com.application.motium.domain.model.AuthUser
-import com.application.motium.domain.model.LinkStatus
 import com.application.motium.domain.model.LoginRequest
 import com.application.motium.domain.model.RegisterRequest
 import com.application.motium.domain.model.Subscription
@@ -31,12 +32,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import com.application.motium.MotiumApplication
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonObject
+import kotlin.time.Duration.Companion.days
 
 class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
@@ -45,6 +48,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     private val postgres = client.postgrest
     private val secureSessionStorage = SecureSessionStorage(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     companion object {
         @Volatile
@@ -69,22 +73,17 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val name: String,
         val email: String,
         val role: String,
-        val subscription_type: String = "FREE",
+        val subscription_type: String = "TRIAL",
         val subscription_expires_at: String? = null,
+        val trial_started_at: String? = null,
+        val trial_ends_at: String? = null,
         val stripe_customer_id: String? = null,
         val stripe_subscription_id: String? = null,
-        val monthly_trip_count: Int = 0,
-        // Pro link fields
-        val linked_pro_account_id: String? = null,
-        val link_status: String? = null,
-        val invitation_token: String? = null,
-        val invited_at: String? = null,
-        val link_activated_at: String? = null,
-        // Sharing preferences
-        val share_professional_trips: Boolean = true,
-        val share_personal_trips: Boolean = false,
-        val share_vehicle_info: Boolean = true,
-        val share_expenses: Boolean = false,
+        val phone_verified: Boolean = false,
+        val verified_phone: String? = null,
+        val device_fingerprint_id: String? = null,
+        // Note: Pro link fields (linked_pro_account_id, link_status, sharing preferences, etc.)
+        // are now managed in the company_links table
         val created_at: String,
         val updated_at: String
     )
@@ -596,6 +595,87 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
 
+    /**
+     * Create user profile with 7-day trial subscription.
+     * Used during registration after phone verification.
+     */
+    override suspend fun createUserProfileWithTrial(
+        userId: String,
+        name: String,
+        isProfessional: Boolean,
+        organizationName: String,
+        verifiedPhone: String,
+        deviceFingerprintId: String?
+    ): AuthResult<User> {
+        return try {
+            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+            val trialEnds = now.plus(7.days)
+            val nowString = now.toString()
+            val trialEndsString = trialEnds.toString()
+
+            val role = if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
+
+            // Get current auth user email
+            val authUser = auth.currentUserOrNull()
+            val email = authUser?.email ?: ""
+
+            val userProfile = UserProfile(
+                auth_id = userId,
+                name = name,
+                email = email,
+                role = role,
+                subscription_type = "TRIAL",
+                trial_started_at = nowString,
+                trial_ends_at = trialEndsString,
+                phone_verified = true,
+                verified_phone = verifiedPhone,
+                device_fingerprint_id = deviceFingerprintId,
+                created_at = nowString,
+                updated_at = nowString
+            )
+
+            postgres.from("users").insert(userProfile)
+            val createdProfile = postgres.from("users")
+                .select { filter { UserProfile::auth_id eq userId } }
+                .decodeSingle<UserProfile>()
+
+            val user = createdProfile.toDomainUser()
+
+            // If it's an ENTERPRISE account, create a pro_account with trial
+            if (isProfessional && organizationName.isNotBlank()) {
+                try {
+                    val proAccountRepo = ProAccountRepository.getInstance(context)
+                    proAccountRepo.createProAccountWithTrial(
+                        userId = user.id,
+                        companyName = organizationName,
+                        trialStartedAt = nowString,
+                        trialEndsAt = trialEndsString
+                    )
+                    MotiumApplication.logger.i("✅ Pro account with trial created for ${user.email}", "SupabaseAuth")
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e("Error creating pro account: ${e.message}", "SupabaseAuth", e)
+                }
+            }
+
+            // Save user to local database
+            localUserRepository.saveUser(user, isLocallyConnected = true)
+            MotiumApplication.logger.i("✅ User profile with trial saved locally", "SupabaseAuth")
+
+            // Update UI state
+            _authState.value = AuthState(
+                isAuthenticated = true,
+                authUser = AuthUser(id = userId, email = email, isEmailConfirmed = true),
+                user = user,
+                isLoading = false
+            )
+
+            AuthResult.Success(user)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to create user profile with trial: ${e.message}", "SupabaseAuth", e)
+            AuthResult.Error(e.message ?: "Failed to create user profile", e)
+        }
+    }
+
     override suspend fun getUserProfile(userId: String): AuthResult<User> {
         return try {
             val authId = auth.currentUserOrNull()?.id ?: return AuthResult.Error("User not authenticated")
@@ -692,49 +772,43 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val resolvedId = id ?: auth_id
         MotiumApplication.logger.d("🔍 toDomainUser: UserProfile.id=$id, auth_id=$auth_id, resolvedId=$resolvedId", "SupabaseAuth")
         return User(
-        id = resolvedId,
-        name = name, email = email, role = UserRole.valueOf(role),
-        subscription = Subscription(
-            type = SubscriptionType.valueOf(subscription_type),
-            expiresAt = subscription_expires_at?.let { Instant.parse(it) },
-            stripeCustomerId = stripe_customer_id,
-            stripeSubscriptionId = stripe_subscription_id
-        ),
-        monthlyTripCount = monthly_trip_count,
-        // Pro link fields
-        linkedProAccountId = linked_pro_account_id,
-        linkStatus = link_status?.let { LinkStatus.valueOf(it.uppercase()) },
-        invitationToken = invitation_token,
-        invitedAt = invited_at?.let { Instant.parse(it) },
-        linkActivatedAt = link_activated_at?.let { Instant.parse(it) },
-        // Sharing preferences
-        shareProfessionalTrips = share_professional_trips,
-        sharePersonalTrips = share_personal_trips,
-        shareVehicleInfo = share_vehicle_info,
-        shareExpenses = share_expenses,
-        createdAt = Instant.parse(created_at), updatedAt = Instant.parse(updated_at)
-    )
+            id = resolvedId,
+            name = name,
+            email = email,
+            role = UserRole.valueOf(role),
+            subscription = Subscription(
+                type = SubscriptionType.fromString(subscription_type),
+                expiresAt = subscription_expires_at?.let { Instant.parse(it) },
+                trialStartedAt = trial_started_at?.let { Instant.parse(it) },
+                trialEndsAt = trial_ends_at?.let { Instant.parse(it) },
+                stripeCustomerId = stripe_customer_id,
+                stripeSubscriptionId = stripe_subscription_id
+            ),
+            phoneVerified = phone_verified,
+            verifiedPhone = verified_phone,
+            deviceFingerprintId = device_fingerprint_id,
+            createdAt = Instant.parse(created_at),
+            updatedAt = Instant.parse(updated_at)
+        )
     }
 
     private fun User.toUserProfile(): UserProfile = UserProfile(
-        id = id, auth_id = id, name = name, email = email, role = role.name,
+        id = id,
+        auth_id = id,
+        name = name,
+        email = email,
+        role = role.name,
         subscription_type = subscription.type.name,
         subscription_expires_at = subscription.expiresAt?.toString(),
+        trial_started_at = subscription.trialStartedAt?.toString(),
+        trial_ends_at = subscription.trialEndsAt?.toString(),
         stripe_customer_id = subscription.stripeCustomerId,
         stripe_subscription_id = subscription.stripeSubscriptionId,
-        monthly_trip_count = monthlyTripCount,
-        // Pro link fields
-        linked_pro_account_id = linkedProAccountId,
-        link_status = linkStatus?.name?.lowercase(),
-        invitation_token = invitationToken,
-        invited_at = invitedAt?.toString(),
-        link_activated_at = linkActivatedAt?.toString(),
-        // Sharing preferences
-        share_professional_trips = shareProfessionalTrips,
-        share_personal_trips = sharePersonalTrips,
-        share_vehicle_info = shareVehicleInfo,
-        share_expenses = shareExpenses,
-        created_at = createdAt.toString(), updated_at = updatedAt.toString()
+        phone_verified = phoneVerified,
+        verified_phone = verifiedPhone,
+        device_fingerprint_id = deviceFingerprintId,
+        created_at = createdAt.toString(),
+        updated_at = updatedAt.toString()
     )
 
     /**
@@ -742,16 +816,15 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
      * Returns null if the user is not a Pro user or not authenticated.
      */
     suspend fun getCurrentProAccountId(): String? {
+        val currentUser = _authState.value.user ?: return null
+
+        // Check if user is Enterprise/Pro role
+        if (currentUser.role != UserRole.ENTERPRISE) {
+            MotiumApplication.logger.d("User is not a Pro user", "SupabaseAuth")
+            return null
+        }
+
         return try {
-            val currentUser = _authState.value.user ?: return null
-
-            // Check if user is Enterprise/Pro role
-            if (currentUser.role != UserRole.ENTERPRISE) {
-                MotiumApplication.logger.d("User is not a Pro user", "SupabaseAuth")
-                return null
-            }
-
-            // Debug: Log the user ID being used
             MotiumApplication.logger.d("🔍 Looking for pro_account with user_id: ${currentUser.id}", "SupabaseAuth")
 
             // Query pro_accounts table for this user
@@ -764,13 +837,35 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 .decodeList<ProAccountDto>()
 
             MotiumApplication.logger.d("🔍 Found ${proAccounts.size} pro_accounts", "SupabaseAuth")
-            proAccounts.forEach {
-                MotiumApplication.logger.d("🔍 pro_account: id=${it.id}, user_id=${it.userId}", "SupabaseAuth")
-            }
 
             val proAccountId = proAccounts.firstOrNull()?.id
             MotiumApplication.logger.d("Pro account ID: $proAccountId", "SupabaseAuth")
             proAccountId
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired for getCurrentProAccountId, refreshing token...", "SupabaseAuth")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return try {
+                        val proAccounts = postgres.from("pro_accounts")
+                            .select {
+                                filter {
+                                    eq("user_id", currentUser.id)
+                                }
+                            }
+                            .decodeList<ProAccountDto>()
+                        val proAccountId = proAccounts.firstOrNull()?.id
+                        MotiumApplication.logger.i("✅ Got Pro account ID after token refresh: $proAccountId", "SupabaseAuth")
+                        proAccountId
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "SupabaseAuth", retryError)
+                        null
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error getting Pro account ID: ${e.message}", "SupabaseAuth", e)
+            null
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting Pro account ID: ${e.message}", "SupabaseAuth", e)
             null

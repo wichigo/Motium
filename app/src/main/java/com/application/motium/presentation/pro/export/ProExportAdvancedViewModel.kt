@@ -37,6 +37,8 @@ data class ProExportAdvancedUiState(
     val isLoading: Boolean = true,
     val linkedUsers: List<LinkedUserDto> = emptyList(),
     val selectedUserIds: Set<String> = emptySet(),
+    val availableDepartments: List<String> = emptyList(),
+    val selectedDepartments: Set<String> = emptySet(),
     val startDate: Instant = Instant.fromEpochMilliseconds(System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000),
     val endDate: Instant = Instant.fromEpochMilliseconds(System.currentTimeMillis()),
     val exportFormat: ExportFormatOption = ExportFormatOption.CSV,
@@ -47,8 +49,22 @@ data class ProExportAdvancedUiState(
     val error: String? = null,
     val successMessage: String? = null
 ) {
+    // Filtered users based on selected departments
+    val filteredUsers: List<LinkedUserDto>
+        get() = if (selectedDepartments.isEmpty()) {
+            linkedUsers
+        } else {
+            linkedUsers.filter { user ->
+                val userDept = user.department ?: "Sans département"
+                selectedDepartments.contains(userDept)
+            }
+        }
+
     val allSelected: Boolean
-        get() = linkedUsers.isNotEmpty() && selectedUserIds.size == linkedUsers.size
+        get() = filteredUsers.isNotEmpty() && selectedUserIds.containsAll(filteredUsers.map { it.userId })
+
+    val allDepartmentsSelected: Boolean
+        get() = availableDepartments.isNotEmpty() && selectedDepartments.size == availableDepartments.size
 }
 
 /**
@@ -98,11 +114,18 @@ class ProExportAdvancedViewModel(
                 result.fold(
                     onSuccess = { users ->
                         val activeUsers = users.filter { it.status == LinkStatus.ACTIVE }
-                        MotiumApplication.logger.i("📋 Loaded ${activeUsers.size} active linked users (${users.size} total)", "ProExportVM")
+                        // Extract unique departments
+                        val departments = activeUsers
+                            .map { it.department ?: "Sans département" }
+                            .distinct()
+                            .sorted()
+                        MotiumApplication.logger.i("📋 Loaded ${activeUsers.size} active linked users (${users.size} total), ${departments.size} departments", "ProExportVM")
                         _uiState.update { it.copy(
                             isLoading = false,
                             linkedUsers = activeUsers,
-                            selectedUserIds = activeUsers.map { u -> u.userId }.toSet()
+                            selectedUserIds = activeUsers.map { u -> u.userId }.toSet(),
+                            availableDepartments = departments,
+                            selectedDepartments = departments.toSet() // Select all by default
                         )}
                     },
                     onFailure = { e ->
@@ -138,14 +161,43 @@ class ProExportAdvancedViewModel(
     }
 
     /**
-     * Toggle select all users
+     * Toggle select all users (only from filtered users)
      */
     fun toggleSelectAll() {
         _uiState.update { state ->
             if (state.allSelected) {
-                state.copy(selectedUserIds = emptySet())
+                // Deselect only filtered users
+                state.copy(selectedUserIds = state.selectedUserIds - state.filteredUsers.map { it.userId }.toSet())
             } else {
-                state.copy(selectedUserIds = state.linkedUsers.map { it.userId }.toSet())
+                // Select all filtered users
+                state.copy(selectedUserIds = state.selectedUserIds + state.filteredUsers.map { it.userId }.toSet())
+            }
+        }
+    }
+
+    /**
+     * Toggle selection for a department
+     */
+    fun toggleDepartmentSelection(department: String) {
+        _uiState.update { state ->
+            val newSelection = if (state.selectedDepartments.contains(department)) {
+                state.selectedDepartments - department
+            } else {
+                state.selectedDepartments + department
+            }
+            state.copy(selectedDepartments = newSelection)
+        }
+    }
+
+    /**
+     * Toggle select all departments
+     */
+    fun toggleSelectAllDepartments() {
+        _uiState.update { state ->
+            if (state.allDepartmentsSelected) {
+                state.copy(selectedDepartments = emptySet())
+            } else {
+                state.copy(selectedDepartments = state.availableDepartments.toSet())
             }
         }
     }

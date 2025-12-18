@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -47,8 +48,6 @@ import com.application.motium.presentation.theme.PendingOrange
 import com.application.motium.MotiumApplication
 import com.application.motium.utils.CalendarUtils
 import com.application.motium.utils.ThemeManager
-import com.application.motium.data.geocoding.NominatimService
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -63,7 +62,7 @@ fun CalendarScreen(
     onNavigateToSettings: () -> Unit = {},
     onNavigateToTripDetails: (String) -> Unit = {},
     onNavigateToAddExpense: (String) -> Unit = {},
-    onNavigateToExpenseDetails: (String, List<String>) -> Unit = { _, _ -> },
+    onNavigateToExpenseDetails: (String) -> Unit = {},
     authViewModel: AuthViewModel = viewModel(),
     initialTab: Int = 0,  // 0 = Calendar, 1 = Planning
     // Pro-specific parameters
@@ -83,8 +82,18 @@ fun CalendarScreen(
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
-    var currentCalendar by remember { mutableStateOf(Calendar.getInstance()) }
-    var selectedDay by remember { mutableStateOf<Calendar?>(null) }
+
+    // Use rememberSaveable to preserve calendar month and selected day across navigation
+    var currentMonthTimestamp by rememberSaveable { mutableStateOf(Calendar.getInstance().timeInMillis) }
+    val currentCalendar = remember(currentMonthTimestamp) {
+        Calendar.getInstance().apply { timeInMillis = currentMonthTimestamp }
+    }
+
+    var selectedDayTimestamp by rememberSaveable { mutableStateOf<Long?>(null) }
+    val selectedDay = selectedDayTimestamp?.let { ts ->
+        Calendar.getInstance().apply { timeInMillis = ts }
+    }
+
     var selectedTab by remember { mutableStateOf(initialTab) } // 0 = Calendar, 1 = Planning
 
     // User and premium state
@@ -101,68 +110,6 @@ fun CalendarScreen(
     // Load trips
     LaunchedEffect(Unit) {
         trips = tripRepository.getAllTrips()
-    }
-
-    // Background map-matching: Calculate and cache route coordinates for trips without cache
-    // This reuses cache from Home screen if already calculated
-    val nominatimService = remember { NominatimService.getInstance() }
-    var processedTripIds by remember { mutableStateOf(setOf<String>()) }
-
-    LaunchedEffect(trips.map { it.id }.toSet()) {
-        if (trips.isEmpty()) return@LaunchedEffect
-
-        // Find trips that need map-matching (no cached coordinates, have GPS points, not already processed)
-        val tripsNeedingMapMatch = trips.filter { trip ->
-            trip.matchedRouteCoordinates.isNullOrBlank() &&
-            trip.locations.size >= 2 &&
-            trip.id !in processedTripIds
-        }
-
-        if (tripsNeedingMapMatch.isNotEmpty()) {
-            // Mark these trips as being processed to avoid re-triggering
-            processedTripIds = processedTripIds + tripsNeedingMapMatch.map { it.id }.toSet()
-
-            MotiumApplication.logger.d(
-                "🗺️ Calendar background map-matching: ${tripsNeedingMapMatch.size} trips need processing",
-                "CalendarScreen"
-            )
-
-            // Process trips in background, one at a time to avoid overloading OSRM
-            coroutineScope.launch(Dispatchers.IO) {
-                for (trip in tripsNeedingMapMatch) {
-                    try {
-                        val gpsPoints = trip.locations.map { loc ->
-                            Pair(loc.latitude, loc.longitude)
-                        }
-                        val matched = nominatimService.matchRoute(gpsPoints)
-
-                        if (matched != null && matched.isNotEmpty()) {
-                            // Serialize to JSON
-                            val jsonCoords = matched.joinToString(",", "[", "]") { coord ->
-                                "[${coord[0]},${coord[1]}]"
-                            }
-
-                            // Save to database
-                            val updatedTrip = trip.copy(matchedRouteCoordinates = jsonCoords)
-                            tripRepository.saveTrip(updatedTrip)
-
-                            // Update local state to trigger recomposition
-                            trips = trips.map { t ->
-                                if (t.id == trip.id) updatedTrip else t
-                            }
-                        }
-
-                        // Small delay between requests to be nice to OSRM servers
-                        kotlinx.coroutines.delay(500)
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.w(
-                            "Failed background map-match for trip ${trip.id}: ${e.message}",
-                            "CalendarScreen"
-                        )
-                    }
-                }
-            }
-        }
     }
 
     // Calculate calendar days with trips
@@ -223,7 +170,7 @@ fun CalendarScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
             // Tab navigation (Calendar / Planning)
@@ -250,9 +197,9 @@ fun CalendarScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        currentCalendar = (currentCalendar.clone() as Calendar).apply {
+                        currentMonthTimestamp = (currentCalendar.clone() as Calendar).apply {
                             add(Calendar.MONTH, -1)
-                        }
+                        }.timeInMillis
                     }) {
                         Icon(
                             Icons.Default.KeyboardArrowLeft,
@@ -267,9 +214,9 @@ fun CalendarScreen(
                         )
                     )
                     IconButton(onClick = {
-                        currentCalendar = (currentCalendar.clone() as Calendar).apply {
+                        currentMonthTimestamp = (currentCalendar.clone() as Calendar).apply {
                             add(Calendar.MONTH, 1)
-                        }
+                        }.timeInMillis
                     }) {
                         Icon(
                             Icons.Default.KeyboardArrowRight,
@@ -324,9 +271,9 @@ fun CalendarScreen(
                             isSelected = isSelectedCheck,
                             onDayClick = {
                                 if (day.number != 0) {
-                                    selectedDay = Calendar.getInstance().apply {
+                                    selectedDayTimestamp = Calendar.getInstance().apply {
                                         set(day.year, day.month, day.number)
-                                    }
+                                    }.timeInMillis
                                 }
                             }
                         )
@@ -336,10 +283,6 @@ fun CalendarScreen(
 
             // Selected day summary and trips
             selectedDay?.let { day ->
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
                 // Daily summary header with expense buttons
                 item {
                     val dateForExpenses = remember(day) {
@@ -363,10 +306,7 @@ fun CalendarScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             // View expenses button
                             IconButton(
-                                onClick = {
-                                    val dateLabel = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).format(day.time)
-                                    onNavigateToExpenseDetails(dateLabel, listOf(dateForExpenses))
-                                },
+                                onClick = { onNavigateToExpenseDetails(dateForExpenses) },
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(

@@ -2,7 +2,11 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -12,9 +16,10 @@ import kotlinx.serialization.json.Json
  * Data is stored in the pro_accounts table.
  */
 class ProSettingsRepository private constructor(
-    @Suppress("UNUSED_PARAMETER") context: Context
+    private val context: Context
 ) {
     private val supabaseClient = SupabaseClient.client
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
     private val json = Json { ignoreUnknownKeys = true }
 
     companion object {
@@ -31,8 +36,8 @@ class ProSettingsRepository private constructor(
     /**
      * Get departments for a pro account
      */
-    suspend fun getDepartments(proAccountId: String): List<String> {
-        return try {
+    suspend fun getDepartments(proAccountId: String): List<String> = withContext(Dispatchers.IO) {
+        try {
             val result = supabaseClient.from("pro_accounts")
                 .select {
                     filter { eq("id", proAccountId) }
@@ -40,6 +45,28 @@ class ProSettingsRepository private constructor(
                 .decodeSingleOrNull<ProAccountDepartmentsDto>()
 
             result?.getDepartmentsList() ?: emptyList()
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "ProSettingsRepo")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return@withContext try {
+                        val result = supabaseClient.from("pro_accounts")
+                            .select {
+                                filter { eq("id", proAccountId) }
+                            }
+                            .decodeSingleOrNull<ProAccountDepartmentsDto>()
+                        MotiumApplication.logger.i("Departments loaded after token refresh", "ProSettingsRepo")
+                        result?.getDepartmentsList() ?: emptyList()
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "ProSettingsRepo", retryError)
+                        emptyList()
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error getting departments: ${e.message}", "ProSettingsRepo", e)
+            emptyList()
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting departments: ${e.message}", "ProSettingsRepo", e)
             emptyList()

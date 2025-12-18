@@ -274,16 +274,27 @@ fun MotiumApp() {
                         onNavigate = { route ->
                             // Navigate only if different from current
                             if (route != navHighlightRoute) {
-                                navController.navigate(route) {
-                                    // Pop up to the start destination of the graph to
-                                    // avoid building up a large stack of destinations
-                                    popUpTo("enterprise_home") {
-                                        saveState = true
+                                if (route == "enterprise_home") {
+                                    // When navigating to Home, clear all back stack
+                                    // Don't restore state to avoid returning to detail screens
+                                    navController.navigate(route) {
+                                        popUpTo("enterprise_home") {
+                                            inclusive = true
+                                        }
+                                        launchSingleTop = true
                                     }
-                                    // Avoid multiple copies of the same destination
-                                    launchSingleTop = true
-                                    // Restore state when reselecting a previously selected item
-                                    restoreState = true
+                                } else {
+                                    navController.navigate(route) {
+                                        // Pop up to the start destination of the graph to
+                                        // avoid building up a large stack of destinations
+                                        popUpTo("enterprise_home") {
+                                            saveState = true
+                                        }
+                                        // Avoid multiple copies of the same destination
+                                        launchSingleTop = true
+                                        // Restore state when reselecting a previously selected item
+                                        restoreState = true
+                                    }
                                 }
                             }
                         },
@@ -295,13 +306,24 @@ fun MotiumApp() {
                         onNavigate = { route ->
                             // Navigate only if different from current
                             if (route != navHighlightRoute) {
-                                navController.navigate(route) {
-                                    // Pop up to home to avoid building up a large stack
-                                    popUpTo("home") {
-                                        saveState = true
+                                if (route == "home") {
+                                    // When navigating to Home, clear all back stack above home
+                                    // Don't restore state to avoid returning to Trip Details
+                                    navController.navigate(route) {
+                                        popUpTo("home") {
+                                            inclusive = true
+                                        }
+                                        launchSingleTop = true
                                     }
-                                    launchSingleTop = true
-                                    restoreState = true
+                                } else {
+                                    navController.navigate(route) {
+                                        // Pop up to home to avoid building up a large stack
+                                        popUpTo("home") {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
                                 }
                             }
                         },

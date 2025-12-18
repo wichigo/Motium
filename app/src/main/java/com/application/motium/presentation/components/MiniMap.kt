@@ -1,7 +1,13 @@
 package com.application.motium.presentation.components
 
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Color as AndroidColor
+import android.graphics.Paint
+import android.util.LruCache
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
@@ -14,8 +20,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -33,7 +42,14 @@ import org.maplibre.android.plugins.annotation.CircleManager
 import org.maplibre.android.plugins.annotation.CircleOptions
 import org.maplibre.android.plugins.annotation.LineManager
 import org.maplibre.android.plugins.annotation.LineOptions
+import org.maplibre.android.snapshotter.MapSnapshot
+import org.maplibre.android.snapshotter.MapSnapshotter
 import org.maplibre.android.utils.ColorUtils
+
+// LRU cache for map snapshot bitmaps (max 5MB)
+private val mapSnapshotCache: LruCache<String, Bitmap> = object : LruCache<String, Bitmap>(5 * 1024 * 1024) {
+    override fun sizeOf(key: String, bitmap: Bitmap): Int = bitmap.byteCount
+}
 
 @Composable
 fun MiniMap(
@@ -90,6 +106,8 @@ fun MiniMap(
                                 map.uiSettings.isScrollGesturesEnabled = isInteractive
                                 map.uiSettings.isRotateGesturesEnabled = false
                                 map.uiSettings.isTiltGesturesEnabled = false
+                                map.uiSettings.isLogoEnabled = false
+                                map.uiSettings.isAttributionEnabled = false
 
                                 // Add route polyline if available
                                 if (!routeCoordinates.isNullOrEmpty()) {
@@ -123,7 +141,12 @@ fun MiniMap(
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose {
                     lifecycleOwner.lifecycle.removeObserver(observer)
+                    // Properly stop GL rendering before destroying
+                    // Must follow lifecycle order: pause -> stop -> destroy
+                    mapView?.onPause()
+                    mapView?.onStop()
                     mapView?.onDestroy()
+                    mapView = null
                 }
             }
         } else {
@@ -176,8 +199,7 @@ private fun addRoutePolyline(
             )
         }
     } catch (e: Exception) {
-        // Fallback: add as GeoJSON source
-        android.util.Log.w("MiniMap", "LineManager not available, route not displayed: ${e.message}")
+        // Fallback: LineManager not available, route not displayed
     }
 }
 
@@ -215,7 +237,7 @@ private fun addMarkers(
             )
         }
     } catch (e: Exception) {
-        android.util.Log.w("MiniMap", "CircleManager not available: ${e.message}")
+        // CircleManager not available
     }
 }
 
@@ -259,7 +281,8 @@ private fun zoomToFitRoute(
 }
 
 /**
- * Lightweight Canvas-based route preview for compact maps in scrolling lists.
+ * Compact map snapshot for scrolling lists using MapSnapshotter.
+ * Generates a static image with map tiles and route overlay.
  */
 @Composable
 private fun CompactRoutePreview(
@@ -270,95 +293,217 @@ private fun CompactRoutePreview(
     endLon: Double?,
     modifier: Modifier = Modifier
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val startColor = Color(0xFF4CAF50)
-    val endColor = Color(0xFFF44336)
+    val context = LocalContext.current
+    val density = LocalDensity.current
 
+    // Calculate bounds for the snapshot
     val allPoints = remember(routeCoordinates, startLat, startLon, endLat, endLon) {
         val points = mutableListOf<Pair<Double, Double>>()
         routeCoordinates?.forEach { coord ->
             if (coord.size >= 2) {
-                points.add(Pair(coord[0], coord[1]))
+                points.add(Pair(coord[1], coord[0])) // lat, lon
             }
         }
         if (points.isEmpty()) {
-            points.add(Pair(startLon, startLat))
+            points.add(Pair(startLat, startLon))
             if (endLat != null && endLon != null) {
-                points.add(Pair(endLon, endLat))
+                points.add(Pair(endLat, endLon))
             }
         }
         points
     }
 
-    if (allPoints.size < 2) {
-        Box(
-            modifier = modifier,
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.LocationOn,
-                contentDescription = null,
-                tint = primaryColor,
-                modifier = Modifier.size(24.dp)
-            )
+    // Generate cache key based on route points
+    val cacheKey = remember(allPoints) {
+        if (allPoints.isEmpty()) "" else {
+            val first = allPoints.first()
+            val last = allPoints.last()
+            "${first.first.hashCode()}_${first.second.hashCode()}_${last.first.hashCode()}_${last.second.hashCode()}_${allPoints.size}"
         }
-    } else {
-        Canvas(modifier = modifier.padding(6.dp)) {
-            val minLon = allPoints.minOf { it.first }
-            val maxLon = allPoints.maxOf { it.first }
-            val minLat = allPoints.minOf { it.second }
-            val maxLat = allPoints.maxOf { it.second }
+    }
 
-            val lonRange = maxLon - minLon
-            val latRange = maxLat - minLat
+    // Check cache first - always try to get from cache on each recomposition
+    val cachedBitmap = remember(cacheKey) {
+        if (cacheKey.isNotEmpty()) mapSnapshotCache.get(cacheKey) else null
+    }
+    var generatedBitmap by remember(cacheKey) { mutableStateOf<Bitmap?>(null) }
+    val bitmap = cachedBitmap ?: generatedBitmap
+    var isLoading by remember(cacheKey) { mutableStateOf(bitmap == null) }
 
-            val paddingFactor = 0.15
-            val adjustedMinLon = minLon - lonRange * paddingFactor
-            val adjustedMaxLon = maxLon + lonRange * paddingFactor
-            val adjustedMinLat = minLat - latRange * paddingFactor
-            val adjustedMaxLat = maxLat + latRange * paddingFactor
-            val adjustedLonRange = adjustedMaxLon - adjustedMinLon
-            val adjustedLatRange = adjustedMaxLat - adjustedMinLat
+    // Track snapshotter for cleanup - use key to reset on route change
+    var snapshotterRef by remember(cacheKey) { mutableStateOf<MapSnapshotter?>(null) }
 
-            fun geoToCanvas(lon: Double, lat: Double): Offset {
-                val x = if (adjustedLonRange > 0) {
-                    ((lon - adjustedMinLon) / adjustedLonRange * size.width).toFloat()
-                } else {
-                    size.width / 2
-                }
-                val y = if (adjustedLatRange > 0) {
-                    ((adjustedMaxLat - lat) / adjustedLatRange * size.height).toFloat()
-                } else {
-                    size.height / 2
-                }
-                return Offset(x, y)
+    // Cleanup snapshotter on dispose to prevent OpenGL errors
+    DisposableEffect(cacheKey) {
+        onDispose {
+            snapshotterRef?.cancel()
+            snapshotterRef = null
+        }
+    }
+
+    // Generate snapshot only if not in cache
+    LaunchedEffect(cacheKey) {
+        if (allPoints.isEmpty() || cachedBitmap != null) return@LaunchedEffect
+
+        try {
+            val sizePx = with(density) { 166.dp.toPx().toInt() } // 2x for retina
+
+            // Calculate bounds
+            val boundsBuilder = LatLngBounds.Builder()
+            allPoints.forEach { (lat, lon) ->
+                boundsBuilder.include(LatLng(lat, lon))
+            }
+            val bounds = boundsBuilder.build()
+
+            // Calculate center and zoom
+            val center = bounds.center
+            val latSpan = bounds.latitudeSpan
+            val lonSpan = bounds.longitudeSpan
+            val maxSpan = maxOf(latSpan, lonSpan)
+            val zoom = when {
+                maxSpan > 0.5 -> 8.0
+                maxSpan > 0.1 -> 10.0
+                maxSpan > 0.05 -> 12.0
+                maxSpan > 0.01 -> 14.0
+                else -> 15.0
             }
 
-            val path = Path()
-            allPoints.forEachIndexed { index, point ->
-                val canvasPoint = geoToCanvas(point.first, point.second)
-                if (index == 0) {
-                    path.moveTo(canvasPoint.x, canvasPoint.y)
-                } else {
-                    path.lineTo(canvasPoint.x, canvasPoint.y)
-                }
+            val styleUrl = if (Constants.PrivateServer.USE_PRIVATE_TILES) {
+                Constants.PrivateServer.MAPLIBRE_STYLE_PRIVATE
+            } else {
+                Constants.PrivateServer.MAPLIBRE_STYLE_FALLBACK
             }
 
-            drawPath(
-                path = path,
-                color = primaryColor,
-                style = Stroke(
-                    width = 3.dp.toPx(),
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round
+            val options = MapSnapshotter.Options(sizePx, sizePx)
+                .withStyle(styleUrl)
+                .withCameraPosition(
+                    CameraPosition.Builder()
+                        .target(center)
+                        .zoom(zoom - 0.5) // Slightly zoom out for padding
+                        .build()
                 )
-            )
 
-            val startPoint = geoToCanvas(allPoints.first().first, allPoints.first().second)
-            drawCircle(color = startColor, radius = 4.dp.toPx(), center = startPoint)
+            val newSnapshotter = MapSnapshotter(context, options)
+            snapshotterRef = newSnapshotter
+            newSnapshotter.start(object : MapSnapshotter.SnapshotReadyCallback {
+                override fun onSnapshotReady(snapshot: MapSnapshot) {
+                    // Draw route overlay on the snapshot bitmap
+                    val baseBitmap = snapshot.bitmap
+                    val resultBitmap = baseBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                    val canvas = AndroidCanvas(resultBitmap)
 
-            val endPoint = geoToCanvas(allPoints.last().first, allPoints.last().second)
-            drawCircle(color = endColor, radius = 4.dp.toPx(), center = endPoint)
+                    if (allPoints.size >= 2) {
+                        // Draw route line
+                        val linePaint = Paint().apply {
+                            color = AndroidColor.parseColor("#2196F3") // Blue route
+                            strokeWidth = 6f
+                            style = Paint.Style.STROKE
+                            isAntiAlias = true
+                            strokeCap = Paint.Cap.ROUND
+                            strokeJoin = Paint.Join.ROUND
+                        }
+
+                        // Calculate pixel positions manually based on bounds and image size
+                        val imgWidth = resultBitmap.width.toFloat()
+                        val imgHeight = resultBitmap.height.toFloat()
+
+                        fun latLngToPixel(lat: Double, lon: Double): android.graphics.PointF {
+                            val minLat = allPoints.minOf { it.first }
+                            val maxLat = allPoints.maxOf { it.first }
+                            val minLon = allPoints.minOf { it.second }
+                            val maxLon = allPoints.maxOf { it.second }
+
+                            val latRange = maxLat - minLat
+                            val lonRange = maxLon - minLon
+                            val padding = 0.2f // 20% padding
+
+                            val x = if (lonRange > 0) {
+                                ((lon - minLon) / lonRange * (1 - 2 * padding) + padding) * imgWidth
+                            } else imgWidth / 2
+                            val y = if (latRange > 0) {
+                                ((maxLat - lat) / latRange * (1 - 2 * padding) + padding) * imgHeight
+                            } else imgHeight / 2
+
+                            return android.graphics.PointF(x.toFloat(), y.toFloat())
+                        }
+
+                        val path = android.graphics.Path()
+                        allPoints.forEachIndexed { index, (lat, lon) ->
+                            val point = latLngToPixel(lat, lon)
+                            if (index == 0) {
+                                path.moveTo(point.x, point.y)
+                            } else {
+                                path.lineTo(point.x, point.y)
+                            }
+                        }
+                        canvas.drawPath(path, linePaint)
+
+                        // Draw start marker (green)
+                        val startPoint = latLngToPixel(allPoints.first().first, allPoints.first().second)
+                        val startPaint = Paint().apply {
+                            color = AndroidColor.parseColor("#4CAF50")
+                            isAntiAlias = true
+                        }
+                        val startStroke = Paint().apply {
+                            color = AndroidColor.WHITE
+                            style = Paint.Style.STROKE
+                            strokeWidth = 4f
+                            isAntiAlias = true
+                        }
+                        canvas.drawCircle(startPoint.x, startPoint.y, 12f, startPaint)
+                        canvas.drawCircle(startPoint.x, startPoint.y, 12f, startStroke)
+
+                        // Draw end marker (red)
+                        val endPoint = latLngToPixel(allPoints.last().first, allPoints.last().second)
+                        val endPaint = Paint().apply {
+                            color = AndroidColor.parseColor("#F44336")
+                            isAntiAlias = true
+                        }
+                        canvas.drawCircle(endPoint.x, endPoint.y, 12f, endPaint)
+                        canvas.drawCircle(endPoint.x, endPoint.y, 12f, startStroke)
+                    }
+
+                    // Store in cache for future reuse
+                    if (cacheKey.isNotEmpty()) {
+                        mapSnapshotCache.put(cacheKey, resultBitmap)
+                    }
+
+                    generatedBitmap = resultBitmap
+                    isLoading = false
+                }
+            }, null)
+        } catch (e: Exception) {
+            isLoading = false
+        }
+    }
+
+    Box(
+        modifier = modifier.background(Color(0xFFF5F5F5)),
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            bitmap != null -> {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = "Carte du trajet",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            isLoading -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            }
+            else -> {
+                Icon(
+                    imageVector = Icons.Default.LocationOn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
         }
     }
 }

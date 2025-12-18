@@ -104,6 +104,10 @@ dependencies {
     // Google Sign-In
     implementation(libs.play.services.auth)
 
+    // Credential Manager for password autofill/save
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+
     // ML Kit Text Recognition (on-device, free)
     implementation("com.google.mlkit:text-recognition:16.0.1")
 

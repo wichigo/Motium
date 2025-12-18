@@ -31,7 +31,10 @@ import com.application.motium.MotiumApplication
  */
 object DozeModeFix {
 
-    private const val ALARM_INTERVAL = 60L * 60 * 1000 // 1 heure (optimisé pour batterie)
+    // RELIABILITY FIX: Reduced from 1 hour to 30 minutes
+    // Samsung One UI can kill BroadcastReceivers even with battery optimization disabled
+    // 30 minutes ensures we catch return trips after shopping (~30-45 min typical)
+    private const val ALARM_INTERVAL = 30L * 60 * 1000 // 30 minutes
 
     /**
      * Vérifie si l'app est exemptée de l'optimisation de batterie
@@ -165,7 +168,9 @@ object DozeModeFix {
 }
 
 /**
- * Receiver déclenché toutes les 15 minutes pour maintenir l'Activity Recognition actif
+ * Receiver déclenché toutes les 30 minutes pour maintenir l'Activity Recognition actif
+ * RELIABILITY FIX: Samsung One UI can kill BroadcastReceiver callbacks even with
+ * battery optimization disabled. This keep-alive forces re-registration.
  */
 class ActivityRecognitionKeepAliveReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -174,15 +179,23 @@ class ActivityRecognitionKeepAliveReceiver : BroadcastReceiver() {
             "KeepAliveReceiver"
         )
 
-        // Relancer l'alarme pour la prochaine fois (toutes les 15 minutes)
+        // Relancer l'alarme pour la prochaine fois
         DozeModeFix.scheduleActivityRecognitionKeepAlive(context)
 
-        // Vérifier si l'Activity Recognition Service est toujours en cours
-        // Si oui, re-demander les updates pour s'assurer que l'API est toujours active
+        // RELIABILITY FIX: Force re-registration of ActivityRecognition transitions
+        // Samsung One UI may have killed the BroadcastReceiver callbacks
         try {
+            // First, re-register the ActivityRecognition to ensure callbacks are fresh
+            ActivityRecognitionService.reregisterActivityRecognition(context)
+            MotiumApplication.logger.i(
+                "✅ Activity Recognition re-registered from keep-alive",
+                "KeepAliveReceiver"
+            )
+
+            // Then ensure the service is running
             ActivityRecognitionService.startService(context)
             MotiumApplication.logger.i(
-                "✅ Activity Recognition Service restarted from keep-alive",
+                "✅ Activity Recognition Service verified running",
                 "KeepAliveReceiver"
             )
         } catch (e: Exception) {

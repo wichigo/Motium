@@ -253,6 +253,10 @@ class SupabaseVehicleRepository(private val context: Context) : VehicleRepositor
             }
 
             response.map { it.toDomainVehicle() }
+        } catch (e: java.util.concurrent.CancellationException) {
+            // Normal cancellation (e.g., user navigated away) - don't log as error
+            MotiumApplication.logger.d("Vehicle fetch cancelled (user navigated away)", "SupabaseVehicleRepository")
+            throw e // Rethrow to properly propagate cancellation
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting vehicles for user: ${e.message}", "SupabaseVehicleRepository", e)
             emptyList()

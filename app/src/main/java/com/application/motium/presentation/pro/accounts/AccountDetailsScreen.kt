@@ -463,7 +463,7 @@ private fun ProfileSection(
         val (statusColor, statusText, statusIcon) = when (user.status) {
             LinkStatus.ACTIVE -> Triple(ValidatedGreen, "Actif", Icons.Default.CheckCircle)
             LinkStatus.PENDING -> Triple(PendingOrange, "En attente", Icons.Default.HourglassEmpty)
-            LinkStatus.UNLINKED -> Triple(TextSecondaryDark, "Délié", Icons.Default.LinkOff)
+            LinkStatus.INACTIVE -> Triple(TextSecondaryDark, "Inactif", Icons.Default.LinkOff)
             LinkStatus.REVOKED -> Triple(ErrorRed, "Révoqué", Icons.Default.Cancel)
         }
 

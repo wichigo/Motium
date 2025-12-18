@@ -43,14 +43,17 @@ class CompanyLinkRepository private constructor(private val context: Context) {
     data class CompanyLinkDto(
         val id: String? = null,
         val user_id: String,
-        val company_id: String,
+        val linked_pro_account_id: String,
         val company_name: String,
+        val department: String? = null,
         val status: String = "PENDING",
         val share_professional_trips: Boolean = true,
         val share_personal_trips: Boolean = false,
         val share_personal_info: Boolean = true,
+        val share_expenses: Boolean = false,
         val invitation_token: String? = null,
         val linked_at: String? = null,
+        val linked_activated_at: String? = null,
         val unlinked_at: String? = null,
         val created_at: String? = null,
         val updated_at: String? = null
@@ -66,7 +69,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
     data class ActivateLinkResponse(
         val success: Boolean,
         val link_id: String? = null,
-        val company_id: String? = null,
+        val linked_pro_account_id: String? = null,
         val company_name: String? = null,
         val error: String? = null
     )
@@ -76,7 +79,8 @@ class CompanyLinkRepository private constructor(private val context: Context) {
         val p_link_id: String,
         val p_share_professional_trips: Boolean,
         val p_share_personal_trips: Boolean,
-        val p_share_personal_info: Boolean
+        val p_share_personal_info: Boolean,
+        val p_share_expenses: Boolean = false
     )
 
     @Serializable
@@ -189,7 +193,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             }
 
             val linkId = response.link_id ?: return@withContext Result.failure(Exception("No link ID returned"))
-            val companyId = response.company_id ?: return@withContext Result.failure(Exception("No company ID returned"))
+            val linkedProAccountId = response.linked_pro_account_id ?: return@withContext Result.failure(Exception("No pro account ID returned"))
             val companyName = response.company_name ?: "Unknown Company"
 
             // Create domain model
@@ -197,13 +201,16 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             val companyLink = CompanyLink(
                 id = linkId,
                 userId = userId,
-                companyId = companyId,
+                linkedProAccountId = linkedProAccountId,
                 companyName = companyName,
+                department = null,
                 status = LinkStatus.ACTIVE,
                 shareProfessionalTrips = true,
                 sharePersonalTrips = false,
                 sharePersonalInfo = true,
+                shareExpenses = false,
                 linkedAt = now,
+                linkedActivatedAt = now,
                 unlinkedAt = null,
                 createdAt = now,
                 updatedAt = now
@@ -238,6 +245,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                 sharePro = preferences.shareProfessionalTrips,
                 sharePerso = preferences.sharePersonalTrips,
                 shareInfo = preferences.sharePersonalInfo,
+                shareExpenses = preferences.shareExpenses,
                 updatedAt = now
             )
 
@@ -249,7 +257,8 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                         p_link_id = linkId,
                         p_share_professional_trips = preferences.shareProfessionalTrips,
                         p_share_personal_trips = preferences.sharePersonalTrips,
-                        p_share_personal_info = preferences.sharePersonalInfo
+                        p_share_personal_info = preferences.sharePersonalInfo,
+                        p_share_expenses = preferences.shareExpenses
                     )
                 )
                 // Mark as synced
@@ -268,7 +277,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
 
     /**
      * Request to unlink from a company.
-     * Sets status to UNLINKED and records unlink timestamp.
+     * Sets status to INACTIVE and records unlink timestamp.
      */
     suspend fun requestUnlink(linkId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
@@ -277,7 +286,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             // Update locally first
             companyLinkDao.updateStatus(
                 linkId = linkId,
-                status = LinkStatus.UNLINKED.name,
+                status = LinkStatus.INACTIVE.name,
                 unlinkedAt = now.toString(),
                 updatedAt = now.toString()
             )
@@ -385,13 +394,16 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                     val dto = CompanyLinkDto(
                         id = entity.id,
                         user_id = entity.userId,
-                        company_id = entity.companyId,
+                        linked_pro_account_id = entity.linkedProAccountId,
                         company_name = entity.companyName,
+                        department = entity.department,
                         status = entity.status,
                         share_professional_trips = entity.shareProfessionalTrips,
                         share_personal_trips = entity.sharePersonalTrips,
                         share_personal_info = entity.sharePersonalInfo,
+                        share_expenses = entity.shareExpenses,
                         linked_at = entity.linkedAt,
+                        linked_activated_at = entity.linkedActivatedAt,
                         unlinked_at = entity.unlinkedAt,
                         updated_at = entity.updatedAt
                     )
@@ -418,13 +430,16 @@ class CompanyLinkRepository private constructor(private val context: Context) {
         return CompanyLink(
             id = id ?: UUID.randomUUID().toString(),
             userId = user_id,
-            companyId = company_id,
+            linkedProAccountId = linked_pro_account_id,
             companyName = company_name,
+            department = department,
             status = try { LinkStatus.valueOf(status) } catch (e: Exception) { LinkStatus.PENDING },
             shareProfessionalTrips = share_professional_trips,
             sharePersonalTrips = share_personal_trips,
             sharePersonalInfo = share_personal_info,
+            shareExpenses = share_expenses,
             linkedAt = linked_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
+            linkedActivatedAt = linked_activated_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
             unlinkedAt = unlinked_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
             createdAt = created_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { now } } ?: now,
             updatedAt = updated_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { now } } ?: now

@@ -14,24 +14,25 @@ fun User.isPremium(): Boolean {
 
 /**
  * Vérifie si l'utilisateur peut enregistrer un nouveau trajet
- * Les comptes free sont limités à 10 trajets par mois
+ * Require either active trial or active subscription
  */
 fun User.canSaveTrip(): Boolean {
-    if (isPremium()) return true
-
-    val limit = subscription.type.tripLimit ?: return true
-    return monthlyTripCount < limit
+    return subscription.hasValidAccess()
 }
 
 /**
- * Retourne le nombre de trajets restants pour le mois
- * Retourne null si illimité (premium/lifetime)
+ * Vérifie si l'utilisateur est en période d'essai
  */
-fun User.getRemainingTrips(): Int? {
-    if (isPremium()) return null
+fun User.isInTrial(): Boolean {
+    return subscription.isInTrial()
+}
 
-    val limit = subscription.type.tripLimit ?: return null
-    return maxOf(0, limit - monthlyTripCount)
+/**
+ * Retourne le nombre de jours restants dans l'essai
+ * Retourne null si pas en essai ou si abonné
+ */
+fun User.getTrialDaysRemaining(): Int? {
+    return subscription.daysLeftInTrial()
 }
 
 /**
@@ -39,10 +40,15 @@ fun User.getRemainingTrips(): Int? {
  */
 fun User.getSubscriptionStatusMessage(): String {
     return when (subscription.type) {
-        SubscriptionType.FREE -> {
-            val remaining = getRemainingTrips() ?: 0
-            "Gratuit - $remaining/${ subscription.type.tripLimit} trajets restants ce mois"
+        SubscriptionType.TRIAL -> {
+            val remaining = subscription.daysLeftInTrial() ?: 0
+            if (remaining > 0) {
+                "Essai gratuit - $remaining jour(s) restant(s)"
+            } else {
+                "Essai expiré"
+            }
         }
+        SubscriptionType.EXPIRED -> "Essai terminé - Abonnez-vous pour continuer"
         SubscriptionType.PREMIUM -> "Premium - Trajets illimités"
         SubscriptionType.LIFETIME -> "À vie - Trajets illimités"
     }

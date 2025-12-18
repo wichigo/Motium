@@ -9,13 +9,16 @@ import kotlinx.datetime.Instant
 data class CompanyLink(
     val id: String,
     val userId: String,
-    val companyId: String,
+    val linkedProAccountId: String,
     val companyName: String,
+    val department: String? = null,
     val status: LinkStatus,
     val shareProfessionalTrips: Boolean = true,
     val sharePersonalTrips: Boolean = false,
     val sharePersonalInfo: Boolean = true,
+    val shareExpenses: Boolean = false,
     val linkedAt: Instant?,
+    val linkedActivatedAt: Instant? = null,
     val unlinkedAt: Instant?,
     val createdAt: Instant,
     val updatedAt: Instant
@@ -30,5 +33,6 @@ data class CompanyLink(
 data class CompanyLinkPreferences(
     val shareProfessionalTrips: Boolean,
     val sharePersonalTrips: Boolean,
-    val sharePersonalInfo: Boolean
+    val sharePersonalInfo: Boolean,
+    val shareExpenses: Boolean = false
 )

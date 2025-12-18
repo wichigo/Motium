@@ -6,11 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.LinkedAccountRepository
 import com.application.motium.data.supabase.LinkedUserDto
+import com.application.motium.data.supabase.ProAccountRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.LinkStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -20,11 +22,27 @@ import kotlinx.coroutines.launch
 data class LinkedAccountsUiState(
     val isLoading: Boolean = true,
     val linkedUsers: List<LinkedUserDto> = emptyList(),
+    val availableDepartments: List<String> = emptyList(),
+    val selectedDepartments: Set<String> = emptySet(),
     val error: String? = null,
     val successMessage: String? = null,
     val showInviteDialog: Boolean = false,
     val isInviting: Boolean = false
-)
+) {
+    // Filtered users based on selected departments
+    val filteredUsers: List<LinkedUserDto>
+        get() = if (selectedDepartments.isEmpty()) {
+            linkedUsers
+        } else {
+            linkedUsers.filter { user ->
+                val userDept = user.department ?: "Sans département"
+                selectedDepartments.contains(userDept)
+            }
+        }
+
+    val allDepartmentsSelected: Boolean
+        get() = availableDepartments.isNotEmpty() && selectedDepartments.size == availableDepartments.size
+}
 
 /**
  * ViewModel for managing linked accounts (Pro feature)
@@ -32,7 +50,8 @@ data class LinkedAccountsUiState(
 class LinkedAccountsViewModel(
     private val context: Context,
     private val linkedAccountRepository: LinkedAccountRepository = LinkedAccountRepository.getInstance(context),
-    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context)
+    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context),
+    private val proAccountRepository: ProAccountRepository = ProAccountRepository.getInstance(context)
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LinkedAccountsUiState())
@@ -62,9 +81,16 @@ class LinkedAccountsViewModel(
                 val result = linkedAccountRepository.getLinkedUsers(proAccountId)
                 result.fold(
                     onSuccess = { users ->
+                        // Extract unique departments
+                        val departments = users
+                            .map { it.department ?: "Sans département" }
+                            .distinct()
+                            .sorted()
                         _uiState.update { it.copy(
                             isLoading = false,
-                            linkedUsers = users
+                            linkedUsers = users,
+                            availableDepartments = departments,
+                            selectedDepartments = departments.toSet() // Select all by default
                         )}
                     },
                     onFailure = { e ->
@@ -116,7 +142,27 @@ class LinkedAccountsViewModel(
                     return@launch
                 }
 
-                val result = linkedAccountRepository.inviteUser(proAccountId, email)
+                // Get company name from pro account
+                val authState = authRepository.authState.first()
+                val currentUser = authState.user
+                if (currentUser == null) {
+                    _uiState.update { it.copy(
+                        isInviting = false,
+                        error = "Utilisateur non connecté"
+                    )}
+                    return@launch
+                }
+                val proAccountResult = proAccountRepository.getProAccount(currentUser.id)
+                val companyName = proAccountResult.getOrNull()?.companyName
+                if (companyName == null) {
+                    _uiState.update { it.copy(
+                        isInviting = false,
+                        error = "Nom de l'entreprise non trouvé"
+                    )}
+                    return@launch
+                }
+
+                val result = linkedAccountRepository.inviteUser(proAccountId, companyName, email)
                 result.fold(
                     onSuccess = { userId ->
                         val message = if (userId != null) {
@@ -189,8 +235,35 @@ class LinkedAccountsViewModel(
     }
 
     /**
-     * Get count of users by status
+     * Toggle selection for a department
      */
-    fun getActiveCount(): Int = _uiState.value.linkedUsers.count { it.status == LinkStatus.ACTIVE }
-    fun getPendingCount(): Int = _uiState.value.linkedUsers.count { it.status == LinkStatus.PENDING }
+    fun toggleDepartmentSelection(department: String) {
+        _uiState.update { state ->
+            val newSelection = if (state.selectedDepartments.contains(department)) {
+                state.selectedDepartments - department
+            } else {
+                state.selectedDepartments + department
+            }
+            state.copy(selectedDepartments = newSelection)
+        }
+    }
+
+    /**
+     * Toggle select all departments
+     */
+    fun toggleSelectAllDepartments() {
+        _uiState.update { state ->
+            if (state.allDepartmentsSelected) {
+                state.copy(selectedDepartments = emptySet())
+            } else {
+                state.copy(selectedDepartments = state.availableDepartments.toSet())
+            }
+        }
+    }
+
+    /**
+     * Get count of users by status (from filtered users)
+     */
+    fun getActiveCount(): Int = _uiState.value.filteredUsers.count { it.status == LinkStatus.ACTIVE }
+    fun getPendingCount(): Int = _uiState.value.filteredUsers.count { it.status == LinkStatus.PENDING }
 }

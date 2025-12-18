@@ -2,9 +2,11 @@ package com.application.motium.data.supabase
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicenseStatus
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
@@ -16,9 +18,10 @@ import java.util.UUID
  * Repository for managing licenses in Supabase
  */
 class LicenseRepository private constructor(
-    @Suppress("UNUSED_PARAMETER") context: Context
+    private val context: Context
 ) {
     private val supabaseClient = SupabaseClient.client
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     companion object {
         @Volatile
@@ -45,6 +48,29 @@ class LicenseRepository private constructor(
                 .map { it.toDomain() }
 
             Result.success(licenses)
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "LicenseRepo")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return@withContext try {
+                        val response = supabaseClient.from("licenses")
+                            .select()
+                            .decodeList<LicenseDto>()
+                        val licenses = response
+                            .filter { it.proAccountId == proAccountId }
+                            .map { it.toDomain() }
+                        MotiumApplication.logger.i("Licenses loaded after token refresh", "LicenseRepo")
+                        Result.success(licenses)
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "LicenseRepo", retryError)
+                        Result.failure(retryError)
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error getting licenses: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting licenses: ${e.message}", "LicenseRepo", e)
             Result.failure(e)
@@ -438,6 +464,80 @@ class LicenseRepository private constructor(
             Result.success(licenses.size)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting available licenses count: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Assign a license from the pool to the Pro account owner themselves.
+     * This allows Pro owners to use one of their own licenses for their personal subscription.
+     *
+     * @param proAccountId The Pro account ID
+     * @param ownerUserId The user ID of the Pro account owner
+     * @return Result with the assigned license
+     */
+    suspend fun assignLicenseToOwner(
+        proAccountId: String,
+        ownerUserId: String
+    ): Result<License> = withContext(Dispatchers.IO) {
+        try {
+            // Check if owner already has a license assigned
+            val existingLicense = getLicenseForAccount(proAccountId, ownerUserId).getOrNull()
+            if (existingLicense != null) {
+                return@withContext Result.failure(Exception("Vous avez déjà une licence assignée"))
+            }
+
+            // Get available licenses
+            val availableLicenses = getAvailableLicenses(proAccountId).getOrThrow()
+            if (availableLicenses.isEmpty()) {
+                return@withContext Result.failure(Exception("Aucune licence disponible dans votre pool"))
+            }
+
+            // Pick the first available license
+            val licenseToAssign = availableLicenses.first()
+            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+
+            supabaseClient.from("licenses")
+                .update({
+                    set("linked_account_id", ownerUserId)
+                    set("linked_at", now.toString())
+                    set("updated_at", now.toString())
+                }) {
+                    filter {
+                        eq("id", licenseToAssign.id)
+                        eq("pro_account_id", proAccountId)
+                    }
+                }
+
+            MotiumApplication.logger.i(
+                "License ${licenseToAssign.id} assigned to owner $ownerUserId",
+                "LicenseRepo"
+            )
+
+            // Return the updated license
+            val updatedLicense = licenseToAssign.copy(
+                linkedAccountId = ownerUserId,
+                linkedAt = now
+            )
+            Result.success(updatedLicense)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error assigning license to owner: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Check if the Pro account owner has a license assigned to themselves
+     */
+    suspend fun isOwnerLicensed(
+        proAccountId: String,
+        ownerUserId: String
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val license = getLicenseForAccount(proAccountId, ownerUserId).getOrNull()
+            Result.success(license != null && license.status == LicenseStatus.ACTIVE)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error checking owner license: ${e.message}", "LicenseRepo", e)
             Result.failure(e)
         }
     }

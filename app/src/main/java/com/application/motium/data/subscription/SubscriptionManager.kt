@@ -21,7 +21,8 @@ import kotlinx.serialization.Serializable
  * SubscriptionManager handles all Stripe payment and subscription logic.
  *
  * Subscription Plans:
- * - FREE: 20 trips/month, no export
+ * - TRIAL: 7-day free trial with full access
+ * - EXPIRED: Trial ended, no access until subscription
  * - PREMIUM: Unlimited trips, all features, monthly subscription
  * - LIFETIME: Unlimited trips, all features, one-time purchase
  */
@@ -116,9 +117,19 @@ class SubscriptionManager private constructor(private val context: Context) {
             val type: SubscriptionType,
             val expiresAt: Instant?,
             val canExport: Boolean,
-            val tripLimit: Int?
+            val hasAccess: Boolean
         ) : SubscriptionState()
         data class Error(val message: String) : SubscriptionState()
+    }
+
+    /**
+     * Sealed class representing trial status
+     */
+    sealed class TrialStatus {
+        data class Active(val daysRemaining: Int) : TrialStatus()
+        data object Expired : TrialStatus()
+        data class Subscribed(val type: SubscriptionType) : TrialStatus()
+        data object NotAuthenticated : TrialStatus()
     }
 
     /**
@@ -138,9 +149,9 @@ class SubscriptionManager private constructor(private val context: Context) {
             val subscription = user.subscription
             val state = SubscriptionState.Active(
                 type = subscription.type,
-                expiresAt = subscription.expiresAt,
+                expiresAt = subscription.expiresAt ?: subscription.trialEndsAt,
                 canExport = subscription.canExport(),
-                tripLimit = subscription.getTripLimit()
+                hasAccess = subscription.hasValidAccess()
             )
             _subscriptionState.value = state
             state
@@ -152,40 +163,75 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
-     * Check if user can create more trips this month
+     * Check trial status for the current user
      */
-    suspend fun canCreateTrip(): TripLimitResult = withContext(Dispatchers.IO) {
+    suspend fun checkTrialStatus(): TrialStatus = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser()
-                ?: return@withContext TripLimitResult.Error("Utilisateur non connecté")
+                ?: return@withContext TrialStatus.NotAuthenticated
 
             val subscription = user.subscription
-            val tripLimit = subscription.getTripLimit()
 
-            if (tripLimit == null) {
-                // Unlimited trips
-                return@withContext TripLimitResult.Allowed(
-                    remaining = null,
-                    isUnlimited = true
-                )
+            when (subscription.type) {
+                SubscriptionType.TRIAL -> {
+                    val daysLeft = subscription.daysLeftInTrial()
+                    if (daysLeft != null && daysLeft > 0) {
+                        TrialStatus.Active(daysLeft)
+                    } else {
+                        TrialStatus.Expired
+                    }
+                }
+                SubscriptionType.EXPIRED -> TrialStatus.Expired
+                SubscriptionType.PREMIUM, SubscriptionType.LIFETIME -> {
+                    TrialStatus.Subscribed(subscription.type)
+                }
             }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error checking trial status: ${e.message}", TAG, e)
+            TrialStatus.NotAuthenticated
+        }
+    }
 
-            val currentCount = user.monthlyTripCount
-            val remaining = tripLimit - currentCount
+    /**
+     * Check if user has valid access (trial active or subscribed)
+     */
+    suspend fun hasValidAccess(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val user = localUserRepository.getLoggedInUser() ?: return@withContext false
+            user.subscription.hasValidAccess()
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error checking valid access: ${e.message}", TAG, e)
+            false
+        }
+    }
 
-            if (remaining > 0) {
-                TripLimitResult.Allowed(
-                    remaining = remaining,
-                    isUnlimited = false
+    /**
+     * Check if user can create trips (has valid access)
+     */
+    suspend fun canCreateTrip(): TripAccessResult = withContext(Dispatchers.IO) {
+        try {
+            val user = localUserRepository.getLoggedInUser()
+                ?: return@withContext TripAccessResult.Error("Utilisateur non connecté")
+
+            val subscription = user.subscription
+
+            if (subscription.hasValidAccess()) {
+                val daysLeft = subscription.daysLeftInTrial()
+                TripAccessResult.Allowed(
+                    isInTrial = subscription.isInTrial(),
+                    trialDaysRemaining = daysLeft
                 )
             } else {
-                TripLimitResult.LimitReached(
-                    limit = tripLimit,
-                    subscriptionType = subscription.type
+                TripAccessResult.AccessDenied(
+                    reason = if (subscription.type == SubscriptionType.EXPIRED) {
+                        "Votre essai gratuit est terminé"
+                    } else {
+                        "Abonnement requis"
+                    }
                 )
             }
         } catch (e: Exception) {
-            TripLimitResult.Error("Erreur: ${e.message}")
+            TripAccessResult.Error("Erreur: ${e.message}")
         }
     }
 
@@ -370,12 +416,14 @@ class SubscriptionManager private constructor(private val context: Context) {
                     System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000
                 )
                 SubscriptionType.LIFETIME -> null // Never expires
-                SubscriptionType.FREE -> null
+                SubscriptionType.TRIAL, SubscriptionType.EXPIRED -> null // Handled by trialEndsAt
             }
 
             val updatedSubscription = Subscription(
                 type = type,
                 expiresAt = expiresAt,
+                trialStartedAt = user.subscription.trialStartedAt,
+                trialEndsAt = user.subscription.trialEndsAt,
                 stripeCustomerId = stripeCustomerId,
                 stripeSubscriptionId = stripeSubscriptionId
             )
@@ -401,71 +449,57 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
-     * Reset to free plan (for testing or cancellation)
+     * Mark trial as expired (when trial period ends)
      */
-    suspend fun resetToFreePlan(userId: String): Result<User> = withContext(Dispatchers.IO) {
+    suspend fun markTrialExpired(userId: String): Result<User> = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser()
                 ?: return@withContext Result.failure(Exception("Utilisateur non trouvé"))
 
             val updatedSubscription = Subscription(
-                type = SubscriptionType.FREE,
+                type = SubscriptionType.EXPIRED,
                 expiresAt = null,
+                trialStartedAt = user.subscription.trialStartedAt,
+                trialEndsAt = user.subscription.trialEndsAt,
                 stripeCustomerId = user.subscription.stripeCustomerId,
                 stripeSubscriptionId = null
             )
 
             val updatedUser = user.copy(
-                subscription = updatedSubscription,
-                monthlyTripCount = 0 // Reset trip count
+                subscription = updatedSubscription
             )
 
             localUserRepository.updateUser(updatedUser)
             checkSubscriptionStatus()
 
+            MotiumApplication.logger.i("Trial marked as expired for user $userId", TAG)
             Result.success(updatedUser)
         } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to mark trial as expired: ${e.message}", TAG, e)
             Result.failure(e)
         }
     }
 
     /**
-     * Increment monthly trip count
+     * Check and update subscription status if trial has expired
+     * Call this on app start and periodically
      */
-    suspend fun incrementTripCount(): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun checkAndUpdateTrialExpiration(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val user = localUserRepository.getLoggedInUser()
-                ?: return@withContext Result.failure(Exception("Utilisateur non trouvé"))
+            val user = localUserRepository.getLoggedInUser() ?: return@withContext false
 
-            val newCount = user.monthlyTripCount + 1
-            val updatedUser = user.copy(monthlyTripCount = newCount)
-
-            localUserRepository.updateUser(updatedUser)
-
-            // Note: Supabase sync will happen via normal user profile sync mechanisms
-
-            Result.success(newCount)
+            if (user.subscription.type == SubscriptionType.TRIAL) {
+                val daysLeft = user.subscription.daysLeftInTrial()
+                if (daysLeft == null || daysLeft <= 0) {
+                    // Trial has expired
+                    markTrialExpired(user.id)
+                    return@withContext true
+                }
+            }
+            false
         } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Reset monthly trip count (called at beginning of each month)
-     */
-    suspend fun resetMonthlyTripCount(userId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val user = localUserRepository.getLoggedInUser()
-                ?: return@withContext Result.failure(Exception("Utilisateur non trouvé"))
-
-            val updatedUser = user.copy(monthlyTripCount = 0)
-            localUserRepository.updateUser(updatedUser)
-
-            // Note: Supabase sync will happen via normal user profile sync mechanisms
-
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+            MotiumApplication.logger.e("Error checking trial expiration: ${e.message}", TAG, e)
+            false
         }
     }
 
@@ -478,10 +512,10 @@ class SubscriptionManager private constructor(private val context: Context) {
 }
 
 /**
- * Result of checking trip limit
+ * Result of checking trip access
  */
-sealed class TripLimitResult {
-    data class Allowed(val remaining: Int?, val isUnlimited: Boolean) : TripLimitResult()
-    data class LimitReached(val limit: Int, val subscriptionType: SubscriptionType) : TripLimitResult()
-    data class Error(val message: String) : TripLimitResult()
+sealed class TripAccessResult {
+    data class Allowed(val isInTrial: Boolean, val trialDaysRemaining: Int?) : TripAccessResult()
+    data class AccessDenied(val reason: String) : TripAccessResult()
+    data class Error(val message: String) : TripAccessResult()
 }

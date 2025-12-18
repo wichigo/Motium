@@ -15,20 +15,23 @@ import kotlinx.datetime.Instant
     tableName = "company_links",
     indices = [
         Index(value = ["userId"]),
-        Index(value = ["companyId"])
+        Index(value = ["linkedProAccountId"])
     ]
 )
 data class CompanyLinkEntity(
     @PrimaryKey
     val id: String,
     val userId: String,
-    val companyId: String,
+    val linkedProAccountId: String,
     val companyName: String,
+    val department: String?,               // Département/service dans l'entreprise
     val status: String,                    // LinkStatus enum stored as String
     val shareProfessionalTrips: Boolean,
     val sharePersonalTrips: Boolean,
     val sharePersonalInfo: Boolean,
+    val shareExpenses: Boolean,            // Partage des dépenses
     val linkedAt: String?,                 // Instant stored as ISO-8601 string, nullable
+    val linkedActivatedAt: String?,        // Quand l'utilisateur a accepté l'invitation
     val unlinkedAt: String?,               // Instant stored as ISO-8601 string, nullable
     val createdAt: String,                 // Instant stored as ISO-8601 string
     val updatedAt: String,                 // Instant stored as ISO-8601 string
@@ -43,13 +46,16 @@ fun CompanyLinkEntity.toDomainModel(): CompanyLink {
     return CompanyLink(
         id = id,
         userId = userId,
-        companyId = companyId,
+        linkedProAccountId = linkedProAccountId,
         companyName = companyName,
+        department = department,
         status = LinkStatus.valueOf(status),
         shareProfessionalTrips = shareProfessionalTrips,
         sharePersonalTrips = sharePersonalTrips,
         sharePersonalInfo = sharePersonalInfo,
+        shareExpenses = shareExpenses,
         linkedAt = linkedAt?.let { Instant.parse(it) },
+        linkedActivatedAt = linkedActivatedAt?.let { Instant.parse(it) },
         unlinkedAt = unlinkedAt?.let { Instant.parse(it) },
         createdAt = Instant.parse(createdAt),
         updatedAt = Instant.parse(updatedAt)
@@ -63,13 +69,16 @@ fun CompanyLink.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean = false)
     return CompanyLinkEntity(
         id = id,
         userId = userId,
-        companyId = companyId,
+        linkedProAccountId = linkedProAccountId,
         companyName = companyName,
+        department = department,
         status = status.name,
         shareProfessionalTrips = shareProfessionalTrips,
         sharePersonalTrips = sharePersonalTrips,
         sharePersonalInfo = sharePersonalInfo,
+        shareExpenses = shareExpenses,
         linkedAt = linkedAt?.toString(),
+        linkedActivatedAt = linkedActivatedAt?.toString(),
         unlinkedAt = unlinkedAt?.toString(),
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),

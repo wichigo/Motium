@@ -118,6 +118,16 @@ class SupabaseSyncManager private constructor(private val context: Context) {
             return false
         }
 
+        // BATTERY OPTIMIZATION: Prevent rapid consecutive syncs (minimum 30s between syncs)
+        val timeSinceLastSync = System.currentTimeMillis() - lastSuccessfulSync
+        if (timeSinceLastSync < 30_000 && pendingQueue.getPendingCount() == 0) {
+            MotiumApplication.logger.d(
+                "⚡ Skipping sync - last sync was ${timeSinceLastSync / 1000}s ago (min 30s)",
+                "SyncManager"
+            )
+            return true // Return true since we're not actually failing, just optimizing
+        }
+
         isSyncing = true
         var success = false
 
@@ -166,6 +176,10 @@ class SupabaseSyncManager private constructor(private val context: Context) {
                 vehicleRepository.syncVehiclesFromSupabase()
 
                 MotiumApplication.logger.i("✅ Vehicle sync completed", "SyncManager")
+            } catch (e: java.util.concurrent.CancellationException) {
+                // Normal cancellation (e.g., user navigated away) - don't log as error
+                MotiumApplication.logger.d("Vehicle sync cancelled (user navigated away)", "SyncManager")
+                throw e // Rethrow to properly propagate cancellation
             } catch (e: Exception) {
                 MotiumApplication.logger.e(
                     "Failed to sync vehicles: ${e.message}",

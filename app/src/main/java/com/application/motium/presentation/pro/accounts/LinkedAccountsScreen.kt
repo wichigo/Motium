@@ -1,12 +1,20 @@
 package com.application.motium.presentation.pro.accounts
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -175,6 +183,10 @@ fun LinkedAccountsScreen(
                 }
             }
         } else {
+            // State for department dropdown
+            var departmentsDropdownExpanded by remember { mutableStateOf(false) }
+            var departmentSearchQuery by remember { mutableStateOf("") }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -182,6 +194,236 @@ fun LinkedAccountsScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
+                // Departments filter dropdown
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "Filtrer par département",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = textColor
+                        )
+
+                        // Dropdown field
+                        val selectedDeptCount = uiState.selectedDepartments.size
+                        val totalDeptCount = uiState.availableDepartments.size
+                        val deptDisplayText = when {
+                            uiState.availableDepartments.isEmpty() -> "Aucun département"
+                            selectedDeptCount == 0 -> "Sélectionner des départements"
+                            selectedDeptCount == totalDeptCount -> "Tous les départements ($totalDeptCount)"
+                            selectedDeptCount == 1 -> uiState.selectedDepartments.first()
+                            else -> "$selectedDeptCount départements sélectionnés"
+                        }
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = deptDisplayText,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Départements") },
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = {
+                                    Icon(
+                                        if (departmentsDropdownExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Business, contentDescription = null, tint = MotiumPrimary)
+                                },
+                                enabled = false,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    disabledTextColor = textColor,
+                                    disabledBorderColor = if (departmentsDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    disabledLabelColor = if (departmentsDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledContainerColor = Color.Transparent
+                                ),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable {
+                                        if (uiState.availableDepartments.isNotEmpty()) {
+                                            departmentsDropdownExpanded = !departmentsDropdownExpanded
+                                        }
+                                    }
+                            )
+                        }
+
+                        // Expandable departments list
+                        AnimatedVisibility(
+                            visible = departmentsDropdownExpanded,
+                            enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
+                            exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
+                        ) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isDarkMode) Color(0xFF1F2937) else Color.White
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.background(if (isDarkMode) Color(0xFF1F2937) else Color.White)
+                                ) {
+                                    // Search field
+                                    OutlinedTextField(
+                                        value = departmentSearchQuery,
+                                        onValueChange = { departmentSearchQuery = it },
+                                        placeholder = { Text("Rechercher...") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Search,
+                                                contentDescription = null,
+                                                tint = textSecondaryColor
+                                            )
+                                        },
+                                        trailingIcon = {
+                                            if (departmentSearchQuery.isNotEmpty()) {
+                                                IconButton(onClick = { departmentSearchQuery = "" }) {
+                                                    Icon(
+                                                        Icons.Default.Clear,
+                                                        contentDescription = "Effacer",
+                                                        tint = textSecondaryColor
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = MotiumPrimary,
+                                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            cursorColor = MotiumPrimary
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        singleLine = true
+                                    )
+
+                                    // Select all / Deselect all
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { viewModel.toggleSelectAllDepartments() }
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = uiState.allDepartmentsSelected,
+                                            onCheckedChange = { viewModel.toggleSelectAllDepartments() },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = MotiumPrimary,
+                                                checkmarkColor = Color.White,
+                                                uncheckedColor = Color.Gray
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            if (uiState.allDepartmentsSelected) "Désélectionner tout" else "Sélectionner tout",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MotiumPrimary
+                                        )
+                                    }
+
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                    )
+
+                                    // Filtered departments list
+                                    val filteredDepartments = uiState.availableDepartments.filter { dept ->
+                                        departmentSearchQuery.isEmpty() ||
+                                        dept.contains(departmentSearchQuery, ignoreCase = true)
+                                    }
+
+                                    if (filteredDepartments.isEmpty()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(24.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                "Aucun résultat",
+                                                color = textSecondaryColor
+                                            )
+                                        }
+                                    } else {
+                                        Column(
+                                            modifier = Modifier
+                                                .heightIn(max = 200.dp)
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            filteredDepartments.forEachIndexed { index, dept ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable { viewModel.toggleDepartmentSelection(dept) }
+                                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Checkbox(
+                                                        checked = uiState.selectedDepartments.contains(dept),
+                                                        onCheckedChange = { viewModel.toggleDepartmentSelection(dept) },
+                                                        colors = CheckboxDefaults.colors(
+                                                            checkedColor = MotiumPrimary,
+                                                            checkmarkColor = Color.White,
+                                                            uncheckedColor = Color.Gray
+                                                        )
+                                                    )
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Icon(
+                                                        Icons.Default.Business,
+                                                        contentDescription = null,
+                                                        tint = MotiumPrimary.copy(alpha = 0.7f),
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        dept,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = textColor
+                                                    )
+                                                }
+                                                if (index < filteredDepartments.size - 1) {
+                                                    HorizontalDivider(
+                                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Done button
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { departmentsDropdownExpanded = false },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Terminé", fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Summary section
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -194,7 +436,7 @@ fun LinkedAccountsScreen(
                         )
 
                         SummaryCard(
-                            totalAccounts = uiState.linkedUsers.size,
+                            totalAccounts = uiState.filteredUsers.size,
                             activeAccounts = viewModel.getActiveCount(),
                             pendingAccounts = viewModel.getPendingCount(),
                             surfaceColor = surfaceColor,
@@ -222,7 +464,7 @@ fun LinkedAccountsScreen(
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                     ) {
                         Column {
-                            uiState.linkedUsers.forEachIndexed { index, user ->
+                            uiState.filteredUsers.forEachIndexed { index, user ->
                                 LinkedUserRow(
                                     user = user,
                                     onClick = { onNavigateToAccountDetails(user.userId) },
@@ -230,7 +472,7 @@ fun LinkedAccountsScreen(
                                     textColor = textColor,
                                     textSecondaryColor = textSecondaryColor
                                 )
-                                if (index < uiState.linkedUsers.size - 1) {
+                                if (index < uiState.filteredUsers.size - 1) {
                                     HorizontalDivider(
                                         modifier = Modifier.padding(horizontal = 16.dp),
                                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
@@ -437,10 +679,10 @@ private fun StatusBadge(status: LinkStatus) {
             PendingOrange,
             "En attente"
         )
-        LinkStatus.UNLINKED -> Triple(
+        LinkStatus.INACTIVE -> Triple(
             TextSecondaryDark.copy(alpha = 0.15f),
             TextSecondaryDark,
-            "Délié"
+            "Inactif"
         )
         LinkStatus.REVOKED -> Triple(
             ErrorRed.copy(alpha = 0.15f),

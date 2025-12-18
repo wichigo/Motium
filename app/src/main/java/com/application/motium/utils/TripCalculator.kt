@@ -170,13 +170,11 @@ object TripCalculator {
     }
 
     /**
-     * Check if user has reached their monthly trip limit
+     * Check if user has valid access (trial active or subscribed)
+     * Returns true if user CANNOT create trips (no valid access)
      */
-    fun hasReachedTripLimit(user: User, monthlyTripCount: Int): Boolean {
-        return when (user.subscription.type) {
-            SubscriptionType.FREE -> monthlyTripCount >= Constants.FREE_PLAN_TRIP_LIMIT
-            SubscriptionType.PREMIUM, SubscriptionType.LIFETIME -> false
-        }
+    fun hasNoValidAccess(user: User): Boolean {
+        return !user.subscription.hasValidAccess()
     }
 
     /**

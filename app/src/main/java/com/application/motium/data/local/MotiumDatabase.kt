@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.application.motium.data.local.dao.CompanyLinkDao
 import com.application.motium.data.local.dao.ExpenseDao
 import com.application.motium.data.local.dao.TripDao
@@ -40,7 +42,7 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         AutoTrackingSettingsEntity::class,
         CompanyLinkEntity::class
     ],
-    version = 9,  // v9: Added matchedRouteCoordinates to TripEntity for map-matching cache
+    version = 12,  // v12: Trial system - added trialStartedAt, trialEndsAt, phoneVerified, verifiedPhone, deviceFingerprintId; removed monthlyTripCount
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)
@@ -58,6 +60,24 @@ abstract class MotiumDatabase : RoomDatabase() {
 
         @Volatile
         private var INSTANCE: MotiumDatabase? = null
+
+        /**
+         * Migration from v11 to v12: Trial system
+         * - Add trial fields: trialStartedAt, trialEndsAt
+         * - Add verification fields: phoneVerified, verifiedPhone, deviceFingerprintId
+         * - Note: monthlyTripCount is kept for compatibility but no longer used
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add trial fields
+                db.execSQL("ALTER TABLE users ADD COLUMN trialStartedAt TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE users ADD COLUMN trialEndsAt TEXT DEFAULT NULL")
+                // Add verification fields
+                db.execSQL("ALTER TABLE users ADD COLUMN phoneVerified INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE users ADD COLUMN verifiedPhone TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE users ADD COLUMN deviceFingerprintId TEXT DEFAULT NULL")
+            }
+        }
 
         /**
          * Get singleton instance of the database.

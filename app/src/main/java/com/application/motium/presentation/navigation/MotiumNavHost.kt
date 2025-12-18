@@ -1,5 +1,7 @@
 package com.application.motium.presentation.navigation
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -12,8 +14,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.application.motium.presentation.auth.AuthViewModel
+import com.application.motium.presentation.auth.ForgotPasswordScreen
 import com.application.motium.presentation.auth.LoginScreen
+import com.application.motium.presentation.auth.PhoneVerificationScreen
 import com.application.motium.presentation.auth.RegisterScreen
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import com.application.motium.presentation.individual.home.NewHomeScreen
 import com.application.motium.presentation.individual.calendar.CalendarScreen
 import com.application.motium.presentation.individual.vehicles.VehiclesScreen
@@ -26,9 +33,12 @@ import com.application.motium.presentation.individual.expense.AddExpenseScreen
 import com.application.motium.presentation.individual.expense.ExpenseDetailsScreen
 import com.application.motium.presentation.debug.LogViewerScreen
 import com.application.motium.presentation.splash.SplashScreen
+import com.application.motium.presentation.subscription.TrialExpiredScreen
 import androidx.compose.ui.platform.LocalContext
 import com.application.motium.data.TripRepository
 import com.application.motium.data.ExpenseRepository
+import com.application.motium.data.subscription.SubscriptionManager
+import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.MotiumApplication
 import com.application.motium.utils.DeepLinkHandler
 import kotlinx.coroutines.CoroutineScope
@@ -45,16 +55,34 @@ fun MotiumNavHost(
     val authState by authViewModel.authState.collectAsState()
 
     // Navigation automatique basée sur l'état d'authentification
-    LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role) {
+    LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role, authState.user?.subscription?.type) {
         MotiumApplication.logger.d("🧭 Navigation LaunchedEffect triggered", "Navigation")
         MotiumApplication.logger.d("   - isLoading: ${authState.isLoading}", "Navigation")
         MotiumApplication.logger.d("   - isAuthenticated: ${authState.isAuthenticated}", "Navigation")
         MotiumApplication.logger.d("   - user: ${authState.user?.email}", "Navigation")
         MotiumApplication.logger.d("   - role: ${authState.user?.role}", "Navigation")
+        MotiumApplication.logger.d("   - subscription: ${authState.user?.subscription?.type}", "Navigation")
 
         if (!authState.isLoading) {
             // Chargement terminé, naviguer vers la destination appropriée
             if (authState.isAuthenticated) {
+                // Check if trial has expired - block access
+                val subscriptionType = authState.user?.subscription?.type
+                val hasValidAccess = authState.user?.subscription?.hasValidAccess() == true
+
+                if (subscriptionType == SubscriptionType.EXPIRED || !hasValidAccess) {
+                    MotiumApplication.logger.i("🚫 Trial expired - navigating to trial_expired", "Navigation")
+                    navController.navigate("trial_expired") {
+                        popUpTo("splash") { inclusive = true }
+                        popUpTo("login") { inclusive = true }
+                        popUpTo("register") { inclusive = true }
+                        popUpTo("home") { inclusive = true }
+                        popUpTo("enterprise_home") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                    return@LaunchedEffect
+                }
+
                 // Check if there's a pending deep link to handle (company link invitation)
                 if (DeepLinkHandler.hasPendingLink()) {
                     val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
@@ -97,7 +125,12 @@ fun MotiumNavHost(
     NavHost(
         navController = navController,
         startDestination = "splash",
-        modifier = modifier
+        modifier = modifier,
+        // Disable crossfade animations to prevent OpenGL context conflicts with maps
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None }
     ) {
         // Splash/Loading screen
         composable("splash") {
@@ -111,19 +144,97 @@ fun MotiumNavHost(
                     // Ne pas naviguer manuellement, laisser le LaunchedEffect gérer la redirection
                     // selon le rôle de l'utilisateur (INDIVIDUAL -> home, ENTERPRISE -> enterprise_home)
                 },
-                onForgotPassword = { /* TODO: Implement forgot password */ },
+                onForgotPassword = { navController.navigate("forgot_password") },
                 viewModel = authViewModel
+            )
+        }
+
+        composable("forgot_password") {
+            ForgotPasswordScreen(
+                onNavigateBack = { navController.popBackStack() },
+                viewModel = authViewModel
+            )
+        }
+
+        // Trial expired screen - blocks access until subscription
+        composable("trial_expired") {
+            val context = LocalContext.current
+            val subscriptionManager = SubscriptionManager.getInstance(context)
+
+            TrialExpiredScreen(
+                subscriptionManager = subscriptionManager,
+                onSubscribe = { subscriptionType ->
+                    // Handle subscription flow
+                    // TODO: Implement actual payment flow
+                    MotiumApplication.logger.i("Subscription requested: $subscriptionType", "Navigation")
+                },
+                onLogout = {
+                    authViewModel.signOut()
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
             )
         }
 
         composable("register") {
             RegisterScreen(
                 onNavigateToLogin = { navController.navigate("login") },
-                onNavigateToHome = {
-                    // Ne pas naviguer manuellement, laisser le LaunchedEffect gérer la redirection
-                    // selon le rôle de l'utilisateur (INDIVIDUAL -> home, ENTERPRISE -> enterprise_home)
+                onNavigateToPhoneVerification = { email, password, name, isProfessional, organizationName ->
+                    // Encode parameters for safe navigation
+                    val encodedEmail = URLEncoder.encode(email, StandardCharsets.UTF_8.toString())
+                    val encodedPassword = URLEncoder.encode(password, StandardCharsets.UTF_8.toString())
+                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
+                    val encodedOrg = URLEncoder.encode(organizationName, StandardCharsets.UTF_8.toString())
+                    navController.navigate("phone_verification/$encodedEmail/$encodedPassword/$encodedName/$isProfessional/$encodedOrg")
                 },
                 viewModel = authViewModel
+            )
+        }
+
+        // Phone verification during registration
+        composable(
+            route = "phone_verification/{email}/{password}/{name}/{isProfessional}/{organizationName}",
+            arguments = listOf(
+                navArgument("email") { type = NavType.StringType },
+                navArgument("password") { type = NavType.StringType },
+                navArgument("name") { type = NavType.StringType },
+                navArgument("isProfessional") { type = NavType.BoolType },
+                navArgument("organizationName") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val email = URLDecoder.decode(
+                backStackEntry.arguments?.getString("email") ?: "",
+                StandardCharsets.UTF_8.toString()
+            )
+            val password = URLDecoder.decode(
+                backStackEntry.arguments?.getString("password") ?: "",
+                StandardCharsets.UTF_8.toString()
+            )
+            val name = URLDecoder.decode(
+                backStackEntry.arguments?.getString("name") ?: "",
+                StandardCharsets.UTF_8.toString()
+            )
+            val isProfessional = backStackEntry.arguments?.getBoolean("isProfessional") ?: false
+            val organizationName = URLDecoder.decode(
+                backStackEntry.arguments?.getString("organizationName") ?: "",
+                StandardCharsets.UTF_8.toString()
+            )
+
+            PhoneVerificationScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onVerificationComplete = { verifiedPhone ->
+                    // Complete registration with verified phone
+                    authViewModel.signUpWithVerification(
+                        email = email,
+                        password = password,
+                        name = name,
+                        isProfessional = isProfessional,
+                        organizationName = organizationName,
+                        verifiedPhone = verifiedPhone
+                    )
+                    // Navigation will be handled by authState LaunchedEffect
+                }
             )
         }
         composable("home") {
@@ -264,6 +375,12 @@ fun MotiumNavHost(
                 onNavigateToTripDetails = { tripId ->
                     navController.navigate("trip_details/$tripId")
                 },
+                onNavigateToAddExpense = { date ->
+                    navController.navigate("add_expense/$date")
+                },
+                onNavigateToExpenseDetails = { date ->
+                    navController.navigate("expense_details/$date")
+                },
                 authViewModel = authViewModel
             )
         }
@@ -279,6 +396,12 @@ fun MotiumNavHost(
                 onNavigateToSettings = { navController.navigate("settings") },
                 onNavigateToTripDetails = { tripId ->
                     navController.navigate("trip_details/$tripId")
+                },
+                onNavigateToAddExpense = { date ->
+                    navController.navigate("add_expense/$date")
+                },
+                onNavigateToExpenseDetails = { date ->
+                    navController.navigate("expense_details/$date")
                 },
                 authViewModel = authViewModel
             )
@@ -371,6 +494,12 @@ fun MotiumNavHost(
                 onNavigateToSettings = { navController.navigate("pro_settings") },
                 onNavigateToTripDetails = { tripId ->
                     navController.navigate("pro_trip_details/$tripId")
+                },
+                onNavigateToAddExpense = { date ->
+                    navController.navigate("pro_add_expense/$date")
+                },
+                onNavigateToExpenseDetails = { date ->
+                    navController.navigate("pro_expense_details/$date")
                 },
                 authViewModel = authViewModel,
                 // Pro-specific parameters
@@ -470,6 +599,28 @@ fun MotiumNavHost(
             )
         }
 
+        // Pro trip details with optional linkedUserId for viewing linked users' trips
+        composable(
+            route = "pro_trip_details/{tripId}/{linkedUserId}",
+            arguments = listOf(
+                navArgument("tripId") { type = NavType.StringType },
+                navArgument("linkedUserId") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            val linkedUserId = backStackEntry.arguments?.getString("linkedUserId")
+            TripDetailsScreen(
+                tripId = tripId,
+                linkedUserId = linkedUserId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToEdit = { tripId ->
+                    navController.navigate("pro_edit_trip/$tripId")
+                },
+                authViewModel = authViewModel
+            )
+        }
+
+        // Pro trip details without linkedUserId (for owner's own trips)
         composable(
             route = "pro_trip_details/{tripId}",
             arguments = listOf(navArgument("tripId") { type = NavType.StringType })
@@ -578,12 +729,13 @@ fun MotiumNavHost(
             route = "pro_user_trips/{userId}",
             arguments = listOf(navArgument("userId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+            val linkedUserId = backStackEntry.arguments?.getString("userId") ?: ""
             com.application.motium.presentation.pro.accounts.LinkedUserTripsScreen(
-                userId = userId,
+                userId = linkedUserId,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToTripDetails = { tripId ->
-                    navController.navigate("pro_trip_details/$tripId")
+                    // Pass the linked user's ID to allow viewing their trips
+                    navController.navigate("pro_trip_details/$tripId/$linkedUserId")
                 }
             )
         }

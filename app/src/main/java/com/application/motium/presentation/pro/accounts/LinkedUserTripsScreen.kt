@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -11,6 +12,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -91,13 +93,59 @@ fun LinkedUserTripsScreen(
     val textColor = if (isDarkMode) TextDark else TextLight
     val textSecondaryColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
 
+    // Pagination constants
+    val pageSize = 15
+
     // State - use data.Trip for compatibility with NewHomeTripCard
     var user by remember { mutableStateOf<LinkedUserDto?>(null) }
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isLoadingMore by remember { mutableStateOf(false) }
+    var hasMoreTrips by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // Load user and trips
+    // Lazy list state for infinite scroll detection
+    val listState = rememberLazyListState()
+
+    // Function to load more trips
+    suspend fun loadMoreTrips() {
+        if (isLoadingMore || !hasMoreTrips) return
+        isLoadingMore = true
+
+        try {
+            val result = tripRepository.getTripsWithPagination(
+                userId = userId,
+                limit = pageSize,
+                offset = trips.size,
+                validatedOnly = true
+            )
+            result.fold(
+                onSuccess = { paginatedResult ->
+                    trips = trips + paginatedResult.trips.map { it.toDataTrip() }
+                    hasMoreTrips = paginatedResult.hasMore
+                },
+                onFailure = { /* Silently fail for pagination */ }
+            )
+        } finally {
+            isLoadingMore = false
+        }
+    }
+
+    // Detect when user scrolls near the end
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisibleItem >= totalItems - 5 // Load more when 5 items from the end
+        }.collect { shouldLoadMore ->
+            if (shouldLoadMore && !isLoading && !isLoadingMore && hasMoreTrips) {
+                loadMoreTrips()
+            }
+        }
+    }
+
+    // Load user and initial trips
     LaunchedEffect(userId) {
         isLoading = true
         try {
@@ -110,15 +158,17 @@ fun LinkedUserTripsScreen(
                 onFailure = { /* Continue without user name */ }
             )
 
-            // Load validated trips and convert to data.Trip
-            val tripsResult = tripRepository.getAllTrips(userId)
+            // Load first page of validated trips
+            val tripsResult = tripRepository.getTripsWithPagination(
+                userId = userId,
+                limit = pageSize,
+                offset = 0,
+                validatedOnly = true
+            )
             tripsResult.fold(
-                onSuccess = { allTrips ->
-                    // Filter only validated trips, convert to data.Trip, sorted by date descending
-                    trips = allTrips
-                        .filter { it.isValidated }
-                        .sortedByDescending { it.startTime }
-                        .map { it.toDataTrip() }
+                onSuccess = { paginatedResult ->
+                    trips = paginatedResult.trips.map { it.toDataTrip() }
+                    hasMoreTrips = paginatedResult.hasMore
                 },
                 onFailure = { e ->
                     error = e.message
@@ -241,10 +291,11 @@ fun LinkedUserTripsScreen(
             }
             else -> {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(paddingValues),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Summary stats
@@ -281,6 +332,24 @@ fun LinkedUserTripsScreen(
                                 textColor = textColor,
                                 subTextColor = textSecondaryColor
                             )
+                        }
+                    }
+
+                    // Loading indicator when loading more trips
+                    if (isLoadingMore) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    color = MotiumPrimary,
+                                    strokeWidth = 2.dp
+                                )
+                            }
                         }
                     }
 

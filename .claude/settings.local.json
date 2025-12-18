@@ -24,7 +24,9 @@
       "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" log --oneline -5)",
       "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" add app/src/main/java/com/application/motium/data/geocoding/NominatimService.kt)",
       "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" commit -m \"$(cat <<''EOF''\nfix(map): Add failure cache to prevent OSRM retry loop\n\n- Add failedMapMatchKeys cache with 30-minute TTL to track failed requests\n- Reduce map-matching retries from 3 to 1 for unreliable public OSRM server\n- Skip previously failed routes to avoid spamming timeout errors\n- Add LRU cache for successful map-match results (max 50 entries)\n- Configure OkHttpClient timeouts (connect: 10s, read: 15s, write: 10s)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" log --oneline -3)"
+      "Bash(git -C \"C:\\Users\\Wylde_2y5smzd\\AndroidStudioProjects\\Motium\" log --oneline -3)",
+      "Bash(timeout 1800 adb logcat:*)",
+      "Bash(timeout 120 adb logcat:*)"
     ],
     "deny": [],
     "ask": []

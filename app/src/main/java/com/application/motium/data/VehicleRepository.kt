@@ -437,6 +437,10 @@ class VehicleRepository private constructor(context: Context) {
             } else {
                 MotiumApplication.logger.i("No vehicles found on Supabase for user ${localUser.id}", "VehicleRepository")
             }
+        } catch (e: java.util.concurrent.CancellationException) {
+            // Normal cancellation (e.g., user navigated away) - don't log as error
+            MotiumApplication.logger.d("Vehicle sync cancelled (user navigated away)", "VehicleRepository")
+            throw e // Rethrow to properly propagate cancellation
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error syncing vehicles from Supabase: ${e.message}", "VehicleRepository", e)
         }

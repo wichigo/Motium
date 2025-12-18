@@ -2,12 +2,13 @@ package com.application.motium.presentation.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,16 +16,24 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.AutofillType
 import androidx.compose.ui.autofill.AutofillNode
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import android.app.Activity
 import androidx.compose.ui.platform.LocalAutofill
-import androidx.compose.ui.platform.LocalAutofillTree
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import com.application.motium.utils.CredentialManagerHelper
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -34,7 +43,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.presentation.theme.*
+import com.application.motium.utils.ThemeManager
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -44,20 +54,28 @@ fun LoginScreen(
     onForgotPassword: () -> Unit = {},
     viewModel: AuthViewModel = viewModel()
 ) {
+    val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
+
+    val backgroundColor = if (isDarkMode) BackgroundDark else BackgroundLight
+    val surfaceColor = if (isDarkMode) SurfaceDark else Color.White
+    val textColor = if (isDarkMode) TextDark else TextLight
+    val textSecondaryColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
+    val borderColor = if (isDarkMode) Color(0xFF374151) else Color(0xFFE5E5E7)
+
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var isEmailValid by remember { mutableStateOf(true) }
-    var selectedField by remember { mutableStateOf<String?>(null) }
 
     val loginState by viewModel.loginState.collectAsState()
     val authState by viewModel.authState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
     val passwordFocusRequester = remember { FocusRequester() }
 
-    // Autofill setup pour le gestionnaire de mots de passe Google
+    // Autofill setup
     val autofill = LocalAutofill.current
-
     val emailAutofillNode = remember {
         AutofillNode(
             autofillTypes = listOf(AutofillType.EmailAddress),
@@ -69,6 +87,44 @@ fun LoginScreen(
             autofillTypes = listOf(AutofillType.Password),
             onFill = { password = it }
         )
+    }
+
+    // Get activity for Credential Manager
+    val activity = context as? Activity
+    val credentialManager = remember { CredentialManagerHelper.getInstance(context) }
+
+    // Try to get saved credentials on first load
+    LaunchedEffect(Unit) {
+        activity?.let { act ->
+            when (val result = credentialManager.getCredentials(act)) {
+                is CredentialManagerHelper.CredentialResult.Success -> {
+                    // Auto-fill with saved credentials
+                    email = result.email
+                    password = result.password
+                }
+                is CredentialManagerHelper.CredentialResult.Cancelled,
+                is CredentialManagerHelper.CredentialResult.NoCredentials,
+                is CredentialManagerHelper.CredentialResult.Error -> {
+                    // User cancelled or no saved credentials - continue normally
+                }
+            }
+        }
+    }
+
+    // Save credentials after successful login
+    LaunchedEffect(loginState.credentialsToSave) {
+        loginState.credentialsToSave?.let { credentials ->
+            activity?.let { act ->
+                // Save credentials to password manager (Samsung Pass, Google, etc.)
+                credentialManager.saveCredentials(
+                    activity = act,
+                    email = credentials.email,
+                    password = credentials.password
+                )
+            }
+            // Clear credentials after save attempt
+            viewModel.clearCredentialsToSave()
+        }
     }
 
     // Navigate to home if authenticated
@@ -86,12 +142,12 @@ fun LoginScreen(
         }
     }
 
-    // Afficher un écran de chargement transparent pendant la restauration/validation de session
+    // Loading state during session restoration
     if (authState.isLoading && !loginState.isLoading) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background),
+                .background(backgroundColor),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -100,197 +156,323 @@ fun LoginScreen(
             ) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(48.dp),
-                    color = MotiumGreen,
+                    color = MotiumPrimary,
                     strokeWidth = 4.dp
                 )
                 Text(
                     text = "Connexion en cours...",
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    color = textSecondaryColor
                 )
             }
         }
         return
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Spacer(modifier = Modifier.height(80.dp))
-
-        // Logo/Title section
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(bottom = 48.dp)
+    WithCustomColor {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(backgroundColor)
         ) {
-            Text(
-                text = "Motium",
-                style = MaterialTheme.typography.displayMedium,
-                fontWeight = FontWeight.Bold,
-                color = MotiumGreen
-            )
-            Text(
-                text = "Connectez-vous à votre compte",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-        }
-
-        // Login Form
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Email field
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = {
-                        email = it
-                        isEmailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(it).matches()
-                        selectedField = "email"
-                    },
-                    label = { Text("Adresse email") },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.Email,
-                            contentDescription = null,
-                            tint = if (selectedField == "email") MotiumGreen else LocalContentColor.current
+            // Gradient background at top
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.4f)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                MotiumPrimary.copy(alpha = 0.15f),
+                                Color.Transparent
+                            )
                         )
-                    },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Email,
-                        imeAction = ImeAction.Next,
-                        autoCorrect = false
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onNext = {
-                            selectedField = null
-                            passwordFocusRequester.requestFocus()
-                        }
-                    ),
-                    isError = !isEmailValid && email.isNotEmpty(),
-                    supportingText = if (!isEmailValid && email.isNotEmpty()) {
-                        { Text("Veuillez entrer une adresse email valide") }
-                    } else null,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = if (selectedField == "email") MotiumGreen else MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = if (selectedField == "email") MotiumGreen else MaterialTheme.colorScheme.outline
-                    ),
+                    )
+            )
+
+            // Content
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Spacer(modifier = Modifier.height(60.dp))
+
+                // Logo - Stylized "M" as a route path
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { coordinates ->
-                            emailAutofillNode.boundingBox = coordinates.boundsInWindow()
+                        .size(80.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MotiumPrimary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.foundation.Canvas(
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        val width = size.width
+                        val height = size.height
+                        val strokeWidth = width * 0.12f
+
+                        // Draw "M" as a continuous route/path
+                        val path = Path().apply {
+                            // Start at bottom left
+                            moveTo(width * 0.15f, height * 0.85f)
+                            // Go up to top left
+                            lineTo(width * 0.15f, height * 0.2f)
+                            // Diagonal down to center
+                            lineTo(width * 0.5f, height * 0.6f)
+                            // Diagonal up to top right
+                            lineTo(width * 0.85f, height * 0.2f)
+                            // Go down to bottom right
+                            lineTo(width * 0.85f, height * 0.85f)
                         }
-                        .onFocusChanged { focusState ->
-                            autofill?.run {
-                                if (focusState.isFocused) {
-                                    requestAutofillForNode(emailAutofillNode)
-                                } else {
-                                    cancelAutofillForNode(emailAutofillNode)
-                                }
-                            }
-                        }
+
+                        drawPath(
+                            path = path,
+                            color = Color.White,
+                            style = Stroke(
+                                width = strokeWidth,
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                        )
+
+                        // Add small circles at start and end points (like map markers)
+                        val dotRadius = strokeWidth * 0.6f
+                        drawCircle(
+                            color = Color.White,
+                            radius = dotRadius,
+                            center = Offset(width * 0.15f, height * 0.85f)
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = dotRadius,
+                            center = Offset(width * 0.85f, height * 0.85f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Title
+                Text(
+                    text = "Bon retour !",
+                    style = MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 32.sp
+                    ),
+                    color = textColor,
+                    textAlign = TextAlign.Center
                 )
 
-                // Password field
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = {
-                        password = it
-                        selectedField = "password"
-                    },
-                    label = { Text("Mot de passe") },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = if (selectedField == "password") MotiumGreen else LocalContentColor.current
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Connectez-vous pour continuer",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = textSecondaryColor,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(40.dp))
+
+                // Login Form
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    // Email field
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Adresse email",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = textColor
                         )
-                    },
-                    trailingIcon = {
-                        TextButton(
-                            onClick = { passwordVisible = !passwordVisible }
-                        ) {
+                        OutlinedTextField(
+                            value = email,
+                            onValueChange = {
+                                email = it
+                                isEmailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(it).matches()
+                            },
+                            placeholder = {
+                                Text(
+                                    "Entrez votre email",
+                                    color = textSecondaryColor
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Email,
+                                    contentDescription = null,
+                                    tint = textSecondaryColor
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onGloballyPositioned { coordinates ->
+                                    emailAutofillNode.boundingBox = coordinates.boundsInWindow()
+                                }
+                                .onFocusChanged { focusState ->
+                                    autofill?.run {
+                                        if (focusState.isFocused) {
+                                            requestAutofillForNode(emailAutofillNode)
+                                        } else {
+                                            cancelAutofillForNode(emailAutofillNode)
+                                        }
+                                    }
+                                },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = borderColor,
+                                focusedBorderColor = MotiumPrimary,
+                                unfocusedContainerColor = surfaceColor.copy(alpha = 0.5f),
+                                focusedContainerColor = surfaceColor.copy(alpha = 0.5f),
+                                cursorColor = MotiumPrimary
+                            ),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Email,
+                                imeAction = ImeAction.Next,
+                                autoCorrect = false
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onNext = { passwordFocusRequester.requestFocus() }
+                            ),
+                            isError = !isEmailValid && email.isNotEmpty(),
+                            singleLine = true
+                        )
+                        if (!isEmailValid && email.isNotEmpty()) {
                             Text(
-                                text = if (passwordVisible) "👁" else "👁‍🗨",
-                                fontSize = 16.sp
+                                text = "Veuillez entrer une adresse email valide",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ErrorRed
                             )
                         }
-                    },
-                    visualTransformation = if (passwordVisible) VisualTransformation.None
-                    else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done,
-                        autoCorrect = false
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onDone = {
-                            selectedField = null
-                            keyboardController?.hide()
-                            if (email.isNotEmpty() && password.isNotEmpty() && isEmailValid) {
-                                viewModel.signIn(email, password)
-                            }
-                        }
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = if (selectedField == "password") MotiumGreen else MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = if (selectedField == "password") MotiumGreen else MaterialTheme.colorScheme.outline
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(passwordFocusRequester)
-                        .onGloballyPositioned { coordinates ->
-                            passwordAutofillNode.boundingBox = coordinates.boundsInWindow()
-                        }
-                        .onFocusChanged { focusState ->
-                            autofill?.run {
-                                if (focusState.isFocused) {
-                                    requestAutofillForNode(passwordAutofillNode)
-                                } else {
-                                    cancelAutofillForNode(passwordAutofillNode)
-                                }
-                            }
-                        }
-                )
+                    }
 
-                // Forgot password
-                TextButton(
-                    onClick = onForgotPassword,
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text(
-                        text = "Mot de passe oublié ?",
-                        color = MotiumGreen
-                    )
+                    // Password field
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Mot de passe",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = textColor
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            placeholder = {
+                                Text(
+                                    "Entrez votre mot de passe",
+                                    color = textSecondaryColor
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = textSecondaryColor
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                    Icon(
+                                        imageVector = if (passwordVisible) Icons.Default.Visibility
+                                        else Icons.Default.VisibilityOff,
+                                        contentDescription = if (passwordVisible) "Masquer" else "Afficher",
+                                        tint = textSecondaryColor
+                                    )
+                                }
+                            },
+                            visualTransformation = if (passwordVisible) VisualTransformation.None
+                            else PasswordVisualTransformation(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(passwordFocusRequester)
+                                .onGloballyPositioned { coordinates ->
+                                    passwordAutofillNode.boundingBox = coordinates.boundsInWindow()
+                                }
+                                .onFocusChanged { focusState ->
+                                    autofill?.run {
+                                        if (focusState.isFocused) {
+                                            requestAutofillForNode(passwordAutofillNode)
+                                        } else {
+                                            cancelAutofillForNode(passwordAutofillNode)
+                                        }
+                                    }
+                                },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = borderColor,
+                                focusedBorderColor = MotiumPrimary,
+                                unfocusedContainerColor = surfaceColor.copy(alpha = 0.5f),
+                                focusedContainerColor = surfaceColor.copy(alpha = 0.5f),
+                                cursorColor = MotiumPrimary
+                            ),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                imeAction = ImeAction.Done,
+                                autoCorrect = false
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    keyboardController?.hide()
+                                    if (email.isNotEmpty() && password.isNotEmpty() && isEmailValid) {
+                                        viewModel.signIn(email, password)
+                                    }
+                                }
+                            ),
+                            singleLine = true
+                        )
+                    }
+
+                    // Forgot password
+                    TextButton(
+                        onClick = onForgotPassword,
+                        modifier = Modifier.align(Alignment.End),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(
+                            text = "Mot de passe oublié ?",
+                            color = MotiumPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Error message
                 if (loginState.error != null) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
+                            containerColor = ErrorRed.copy(alpha = 0.1f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            text = loginState.error ?: "",
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(12.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Error,
+                                contentDescription = null,
+                                tint = ErrorRed
+                            )
+                            Text(
+                                text = loginState.error ?: "",
+                                color = ErrorRed,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
                 // Login button
@@ -302,92 +484,124 @@ fun LoginScreen(
                     enabled = email.isNotEmpty() && password.isNotEmpty() && isEmailValid && !loginState.isLoading,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp),
+                        .height(56.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MotiumGreen
+                        containerColor = MotiumPrimary,
+                        contentColor = Color.White,
+                        disabledContainerColor = MotiumPrimary.copy(alpha = 0.5f)
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     if (loginState.isLoading) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = Color.White
+                            modifier = Modifier.size(24.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
                         )
                     } else {
                         Text(
                             text = "Se connecter",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Medium
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            )
                         )
                     }
                 }
 
-                // Register link - Directly under login button
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Divider
                 Row(
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = borderColor
+                    )
+                    Text(
+                        text = "ou",
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = textSecondaryColor,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = borderColor
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Google Sign-In button
+                OutlinedButton(
+                    onClick = { viewModel.initiateGoogleSignIn() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp)
-                        .wrapContentWidth(Alignment.CenterHorizontally)
+                        .height(56.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = surfaceColor.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Google "G" icon representation
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.White),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "G",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = Color(0xFF4285F4)
+                            )
+                        }
+                        Text(
+                            text = "Continuer avec Google",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = textColor
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                // Register link
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Vous n'avez pas de compte ?",
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodySmall
+                        text = "Pas encore de compte ? ",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = textSecondaryColor
                     )
                     TextButton(
                         onClick = onNavigateToRegister,
-                        modifier = Modifier.padding(start = 0.dp, top = 0.dp, end = 0.dp, bottom = 0.dp)
+                        contentPadding = PaddingValues(0.dp)
                     ) {
                         Text(
                             text = "S'inscrire",
-                            color = MotiumGreen,
-                            fontWeight = FontWeight.Medium,
-                            style = MaterialTheme.typography.bodySmall
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MotiumPrimary
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(32.dp))
             }
         }
-
-        // Divider
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Divider(modifier = Modifier.weight(1f))
-            Text(
-                text = "ou",
-                modifier = Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-            Divider(modifier = Modifier.weight(1f))
-        }
-
-        // Google Sign-In button
-        OutlinedButton(
-            onClick = { viewModel.initiateGoogleSignIn() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text("🔍") // Google icon placeholder
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Continuer avec Google",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
     }
 }

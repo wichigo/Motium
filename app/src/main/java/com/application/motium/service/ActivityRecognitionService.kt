@@ -198,6 +198,9 @@ class ActivityRecognitionService : Service() {
 
     private lateinit var activityRecognitionClient: ActivityRecognitionClient
 
+    // Guard against redundant initialization (battery optimization)
+    private var isActivityRecognitionActive = false
+
     // CRASH FIX: Add exception handler to catch all uncaught exceptions in coroutines
     private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
         MotiumApplication.logger.e(
@@ -238,12 +241,25 @@ class ActivityRecognitionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // BATTERY OPTIMIZATION: Skip re-initialization if already running
+        if (isActivityRecognitionActive) {
+            MotiumApplication.logger.d(
+                "⚡ ActivityRecognitionService already active, skipping initialization",
+                "ActivityRecognition"
+            )
+            return START_STICKY
+        }
+
         MotiumApplication.logger.i("🚀 ActivityRecognitionService onStartCommand - action: ${intent?.action}", "ActivityRecognition")
 
         // Démarrage du service - startForeground DOIT être appelé en premier
         MotiumApplication.logger.i("🔧 Starting foreground service and activity recognition", "ActivityRecognition")
         startForegroundService()
         startActivityRecognition()
+
+        // Mark as active after successful initialization
+        isActivityRecognitionActive = true
+
         try {
             MotiumApplication.logger.i("🔧 Starting LocationTrackingService in foreground mode", "ActivityRecognition")
             LocationTrackingService.startService(this)
@@ -264,6 +280,9 @@ class ActivityRecognitionService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         MotiumApplication.logger.i("🛑 ActivityRecognitionService destroyed", "ActivityRecognition")
+
+        // Reset the active flag so service can be restarted properly
+        isActivityRecognitionActive = false
 
         // Nettoyer l'instance
         instance = null

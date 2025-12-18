@@ -3,11 +3,18 @@ package com.application.motium.presentation.individual.addtrip
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import android.widget.Toast
@@ -17,11 +24,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.application.motium.MotiumApplication
 import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
@@ -83,6 +93,11 @@ fun AddTripScreen(
     var isCalculatingRoute by remember { mutableStateOf(false) }
     var routeCalculationFailed by remember { mutableStateOf(false) }
 
+    // Date/Time picker states
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
+    var currentMonth by remember { mutableStateOf(Calendar.getInstance()) }
+
     // Vehicle fields
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var selectedVehicleId by remember { mutableStateOf<String?>(null) }
@@ -113,10 +128,10 @@ fun AddTripScreen(
                 MotiumApplication.logger.i("🚗 Loading vehicles for user: ${currentUser.email}", "AddTripScreen")
                 val vehicles = vehicleRepository.getAllVehiclesForUser(userId)
                 availableVehicles = vehicles
-                // Select first vehicle by default
+                // Select default vehicle, or first vehicle if none is default
                 if (vehicles.isNotEmpty()) {
-                    selectedVehicleId = vehicles.first().id
-                    MotiumApplication.logger.i("✅ Loaded ${vehicles.size} vehicles, selected: ${vehicles.first().name}", "AddTripScreen")
+                    val defaultVehicle = vehicles.find { it.isDefault } ?: vehicles.first()
+                    selectedVehicleId = defaultVehicle.id
                 } else {
                     MotiumApplication.logger.w("⚠️ No vehicles found for user", "AddTripScreen")
                 }
@@ -343,26 +358,193 @@ fun AddTripScreen(
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
+            contentPadding = PaddingValues(top = 16.dp, bottom = 100.dp)
         ) {
             // Date fields
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    DateTimeField(
-                        label = "Departure Date",
-                        value = "${dateFormat.format(selectedDate)} ${selectedTime}",
-                        icon = Icons.Default.CalendarToday,
-                        modifier = Modifier.weight(1f)
-                    )
-                    DateTimeField(
-                        label = "End Date",
-                        value = "${dateFormat.format(selectedDate)} ${endTime}",
-                        icon = Icons.Default.CalendarToday,
-                        modifier = Modifier.weight(1f)
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        DateTimeField(
+                            label = "Date de départ",
+                            value = "${dateFormat.format(selectedDate)} ${selectedTime}",
+                            icon = Icons.Default.CalendarToday,
+                            modifier = Modifier.weight(1f),
+                            onClick = { showDatePicker = !showDatePicker },
+                            isSelected = showDatePicker
+                        )
+                        DateTimeField(
+                            label = "Heure de fin",
+                            value = "${dateFormat.format(selectedDate)} ${endTime}",
+                            icon = Icons.Default.Schedule,
+                            modifier = Modifier.weight(1f),
+                            onClick = { showTimePicker = !showTimePicker },
+                            isSelected = showTimePicker
+                        )
+                    }
+
+                    // Inline Calendar
+                    AnimatedVisibility(
+                        visible = showDatePicker,
+                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
+                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
+                    ) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.White
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                // Calendar header
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(onClick = {
+                                        val newMonth = currentMonth.clone() as Calendar
+                                        newMonth.add(Calendar.MONTH, -1)
+                                        currentMonth = newMonth
+                                    }) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowLeft,
+                                            contentDescription = "Mois précédent",
+                                            tint = Color(0xFF6B7280)
+                                        )
+                                    }
+
+                                    Text(
+                                        SimpleDateFormat("MMMM yyyy", Locale.FRENCH).format(currentMonth.time),
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = Color(0xFF1F2937)
+                                    )
+
+                                    IconButton(onClick = {
+                                        val newMonth = currentMonth.clone() as Calendar
+                                        newMonth.add(Calendar.MONTH, 1)
+                                        currentMonth = newMonth
+                                    }) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowRight,
+                                            contentDescription = "Mois suivant",
+                                            tint = Color(0xFF6B7280)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Days of week
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    listOf("L", "M", "M", "J", "V", "S", "D").forEach { day ->
+                                        Text(
+                                            day,
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontWeight = FontWeight.Medium
+                                            ),
+                                            color = Color(0xFF6B7280),
+                                            fontSize = 12.sp,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Calendar grid
+                                SingleDateCalendarGrid(
+                                    currentMonth = currentMonth,
+                                    selectedDate = selectedDate,
+                                    onDateSelected = { day ->
+                                        val calendar = currentMonth.clone() as Calendar
+                                        calendar.set(Calendar.DAY_OF_MONTH, day)
+                                        selectedDate = calendar.time
+                                        showDatePicker = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Inline Time Picker
+                    AnimatedVisibility(
+                        visible = showTimePicker,
+                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
+                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
+                    ) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.White
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    "Heure de départ",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = Color(0xFF1F2937)
+                                )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                val currentHour = selectedTime.split(":").getOrNull(0)?.toIntOrNull() ?: 12
+                                val currentMinute = selectedTime.split(":").getOrNull(1)?.toIntOrNull() ?: 0
+                                val timePickerState = rememberTimePickerState(
+                                    initialHour = currentHour,
+                                    initialMinute = currentMinute,
+                                    is24Hour = true
+                                )
+
+                                TimePicker(
+                                    state = timePickerState,
+                                    colors = TimePickerDefaults.colors(
+                                        clockDialColor = MotiumPrimary.copy(alpha = 0.1f),
+                                        selectorColor = MotiumPrimary,
+                                        timeSelectorSelectedContainerColor = MotiumPrimary,
+                                        timeSelectorSelectedContentColor = Color.White
+                                    )
+                                )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                Button(
+                                    onClick = {
+                                        selectedTime = String.format("%02d:%02d", timePickerState.hour, timePickerState.minute)
+                                        // Recalculate end time based on duration
+                                        val durationMin = duration.toIntOrNull() ?: 15
+                                        val startTimeDate = timeFormat.parse(selectedTime) ?: Date()
+                                        val endTimeDate = Date(startTimeDate.time + (durationMin * 60 * 1000))
+                                        endTime = timeFormat.format(endTimeDate)
+                                        showTimePicker = false
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MotiumPrimary
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Confirmer")
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -541,30 +723,40 @@ fun DateTimeField(
     label: String,
     value: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {},
+    isSelected: Boolean = false
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = {},
-        readOnly = true,
-        label = { Text(label) },
-        leadingIcon = {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MotiumPrimary
+    Box(modifier = modifier) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            enabled = false,
+            label = { Text(label) },
+            leadingIcon = {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MotiumPrimary
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyMedium,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                disabledLabelColor = if (isSelected) MotiumPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledBorderColor = if (isSelected) MotiumPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                disabledLeadingIconColor = MotiumPrimary
             )
-        },
-        modifier = modifier.fillMaxWidth(),
-        textStyle = MaterialTheme.typography.bodyMedium,
-        shape = RoundedCornerShape(12.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            focusedLabelColor = MotiumPrimary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-            focusedBorderColor = MotiumPrimary
         )
-    )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clickable { onClick() }
+        )
+    }
 }
 
 @Composable
@@ -1000,6 +1192,105 @@ fun ExpenseItemRow(
                     )
                 ) {
                     Text("Remove", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Calendar grid for single date selection
+ */
+@Composable
+private fun SingleDateCalendarGrid(
+    currentMonth: Calendar,
+    selectedDate: Date,
+    onDateSelected: (Int) -> Unit
+) {
+    val daysInMonth = currentMonth.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val firstDayOfMonth = Calendar.getInstance().apply {
+        time = currentMonth.time
+        set(Calendar.DAY_OF_MONTH, 1)
+    }
+    // Adjust for Monday start (Calendar.MONDAY = 2, so we shift by 1)
+    val startDayOfWeek = (firstDayOfMonth.get(Calendar.DAY_OF_WEEK) + 5) % 7
+
+    // Get selected day if in current month
+    val selectedCal = Calendar.getInstance().apply { time = selectedDate }
+    val selectedDay = if (selectedCal.get(Calendar.MONTH) == currentMonth.get(Calendar.MONTH) &&
+        selectedCal.get(Calendar.YEAR) == currentMonth.get(Calendar.YEAR)) {
+        selectedCal.get(Calendar.DAY_OF_MONTH)
+    } else -1
+
+    // Today
+    val today = Calendar.getInstance()
+    val todayDay = if (today.get(Calendar.MONTH) == currentMonth.get(Calendar.MONTH) &&
+        today.get(Calendar.YEAR) == currentMonth.get(Calendar.YEAR)) {
+        today.get(Calendar.DAY_OF_MONTH)
+    } else -1
+
+    Column {
+        var dayCounter = 1
+        for (week in 0..5) {
+            if (dayCounter > daysInMonth) break
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                for (dayOfWeek in 0..6) {
+                    val dayNumber = if (week == 0 && dayOfWeek < startDayOfWeek) {
+                        0
+                    } else if (dayCounter <= daysInMonth) {
+                        dayCounter++
+                    } else {
+                        0
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (dayNumber > 0) {
+                            val isSelected = dayNumber == selectedDay
+                            val isToday = dayNumber == todayDay
+
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isSelected -> MotiumPrimary
+                                            else -> Color.Transparent
+                                        }
+                                    )
+                                    .then(
+                                        if (isToday && !isSelected) {
+                                            Modifier
+                                                .clip(CircleShape)
+                                                .background(MotiumPrimary.copy(alpha = 0.1f))
+                                        } else Modifier
+                                    )
+                                    .clickable { onDateSelected(dayNumber) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = dayNumber.toString(),
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal
+                                    ),
+                                    color = when {
+                                        isSelected -> Color.White
+                                        isToday -> MotiumPrimary
+                                        else -> Color(0xFF1F2937)
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -23,6 +23,7 @@ import com.application.motium.data.supabase.ProSettingsRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -118,9 +119,27 @@ fun InvitePersonScreen(
                     return@launch
                 }
 
+                // Get company name from pro account
+                val proAccountRepository = com.application.motium.data.supabase.ProAccountRepository.getInstance(context)
+                val authState = authRepository.authState.first()
+                val currentUser = authState.user
+                if (currentUser == null) {
+                    snackbarHostState.showSnackbar("Utilisateur non connecté")
+                    isLoading = false
+                    return@launch
+                }
+                val proAccountResult = proAccountRepository.getProAccount(currentUser.id)
+                val companyName = proAccountResult.getOrNull()?.companyName
+                if (companyName == null) {
+                    snackbarHostState.showSnackbar("Nom de l'entreprise non trouvé")
+                    isLoading = false
+                    return@launch
+                }
+
                 val linkedAccountRepository = com.application.motium.data.supabase.LinkedAccountRepository.getInstance(context)
                 val result = linkedAccountRepository.inviteUserWithDetails(
                     proAccountId = proAccountId,
+                    companyName = companyName,
                     email = email,
                     fullName = fullName,
                     phone = phone.takeIf { it.isNotBlank() },

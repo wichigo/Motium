@@ -85,48 +85,27 @@ fun SubscriptionScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // Current plan indicator
-            if (currentSubscription != SubscriptionType.FREE) {
-                CurrentPlanBadge(subscriptionType = currentSubscription)
-                Spacer(modifier = Modifier.height(24.dp))
-            }
+            CurrentPlanBadge(subscriptionType = currentSubscription)
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Plan cards
-            // FREE Plan
+            // PREMIUM Plan (Monthly)
             PlanCard(
-                title = "Gratuit",
-                price = "0€",
-                period = "pour toujours",
-                features = listOf(
-                    PlanFeature("20 trajets / mois", true),
-                    PlanFeature("Suivi GPS", true),
-                    PlanFeature("Historique des trajets", true),
-                    PlanFeature("Export des données", false),
-                    PlanFeature("Trajets illimités", false)
-                ),
-                isCurrentPlan = currentSubscription == SubscriptionType.FREE,
-                isPopular = false,
-                onClick = { /* Free plan, no action */ }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // PREMIUM Plan
-            PlanCard(
-                title = "Premium",
+                title = "Mensuel",
                 price = "${SubscriptionManager.PREMIUM_MONTHLY_PRICE}€",
                 period = "/ mois",
-                originalPrice = "9,99€",
                 features = listOf(
                     PlanFeature("Trajets illimités", true),
                     PlanFeature("Suivi GPS", true),
                     PlanFeature("Historique complet", true),
                     PlanFeature("Export PDF & CSV", true),
-                    PlanFeature("Support prioritaire", true)
+                    PlanFeature("Support prioritaire", true),
+                    PlanFeature("Sans engagement", true)
                 ),
                 isCurrentPlan = currentSubscription == SubscriptionType.PREMIUM,
                 isPopular = true,
                 onClick = {
-                    if (currentSubscription == SubscriptionType.FREE) {
+                    if (currentSubscription == SubscriptionType.TRIAL || currentSubscription == SubscriptionType.EXPIRED) {
                         selectedPlan = SubscriptionType.PREMIUM
                         onSubscribe(SubscriptionType.PREMIUM)
                     }
@@ -140,13 +119,13 @@ fun SubscriptionScreen(
                 title = "À vie",
                 price = "${SubscriptionManager.LIFETIME_PRICE}€",
                 period = "paiement unique",
-                originalPrice = "99,99€",
                 features = listOf(
                     PlanFeature("Trajets illimités", true),
                     PlanFeature("Toutes les fonctionnalités Premium", true),
                     PlanFeature("Mises à jour à vie", true),
                     PlanFeature("Aucun abonnement", true),
-                    PlanFeature("Support VIP", true)
+                    PlanFeature("Support VIP", true),
+                    PlanFeature("Économisez après 20 mois", true)
                 ),
                 isCurrentPlan = currentSubscription == SubscriptionType.LIFETIME,
                 isPopular = false,
@@ -199,8 +178,35 @@ fun SubscriptionScreen(
 
 @Composable
 private fun CurrentPlanBadge(subscriptionType: SubscriptionType) {
+    val badgeInfo = when (subscriptionType) {
+        SubscriptionType.TRIAL -> BadgeInfo(
+            backgroundColor = MotiumGreen.copy(alpha = 0.1f),
+            contentColor = MotiumGreen,
+            icon = Icons.Default.Timer,
+            text = "Essai gratuit en cours"
+        )
+        SubscriptionType.EXPIRED -> BadgeInfo(
+            backgroundColor = Color(0xFFFF5252).copy(alpha = 0.1f),
+            contentColor = Color(0xFFFF5252),
+            icon = Icons.Default.Warning,
+            text = "Essai terminé"
+        )
+        SubscriptionType.PREMIUM -> BadgeInfo(
+            backgroundColor = MotiumGreen.copy(alpha = 0.1f),
+            contentColor = MotiumGreen,
+            icon = Icons.Default.CheckCircle,
+            text = "Abonnement Premium actif"
+        )
+        SubscriptionType.LIFETIME -> BadgeInfo(
+            backgroundColor = Color(0xFFFF9500).copy(alpha = 0.1f),
+            contentColor = Color(0xFFFF9500),
+            icon = Icons.Default.Star,
+            text = "Accès à vie"
+        )
+    }
+
     Surface(
-        color = MotiumGreen.copy(alpha = 0.1f),
+        color = badgeInfo.backgroundColor,
         shape = RoundedCornerShape(20.dp)
     ) {
         Row(
@@ -209,20 +215,27 @@ private fun CurrentPlanBadge(subscriptionType: SubscriptionType) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.CheckCircle,
+                imageVector = badgeInfo.icon,
                 contentDescription = null,
-                tint = MotiumGreen,
+                tint = badgeInfo.contentColor,
                 modifier = Modifier.size(20.dp)
             )
             Text(
-                text = "Votre forfait actuel: ${subscriptionType.displayName}",
+                text = badgeInfo.text,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MotiumGreen,
+                color = badgeInfo.contentColor,
                 fontWeight = FontWeight.SemiBold
             )
         }
     }
 }
+
+private data class BadgeInfo(
+    val backgroundColor: Color,
+    val contentColor: Color,
+    val icon: ImageVector,
+    val text: String
+)
 
 data class PlanFeature(val text: String, val included: Boolean)
 
@@ -359,11 +372,7 @@ private fun PlanCard(
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    text = when {
-                        isCurrentPlan -> "Forfait actuel"
-                        title == "Gratuit" -> "Forfait actuel"
-                        else -> "Choisir ce forfait"
-                    },
+                    text = if (isCurrentPlan) "Forfait actuel" else "Choisir ce forfait",
                     modifier = Modifier.padding(vertical = 4.dp),
                     fontWeight = FontWeight.SemiBold
                 )

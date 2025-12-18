@@ -4,9 +4,11 @@ import android.content.Context
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.preferences.SecureSessionStorage
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +23,7 @@ class SupabaseExpenseRepository private constructor(private val context: Context
 
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
     private val json = Json { ignoreUnknownKeys = true }
     private val localUserRepository = LocalUserRepository.getInstance(context)
     private val secureSessionStorage = SecureSessionStorage(context)
@@ -167,6 +170,32 @@ class SupabaseExpenseRepository private constructor(private val context: Context
 
             MotiumApplication.logger.i("Fetched ${expenses.size} expenses from Supabase", "SupabaseExpenseRepository")
             Result.success(expenses)
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "SupabaseExpenseRepository")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return@withContext try {
+                        val supabaseExpenses = postgres
+                            .from("expenses_trips")
+                            .select {
+                                filter {
+                                    eq("user_id", userId)
+                                }
+                            }
+                            .decodeList<SupabaseExpense>()
+                        val expenses = supabaseExpenses.map { it.toExpense() }
+                        MotiumApplication.logger.i("Expenses loaded after token refresh", "SupabaseExpenseRepository")
+                        Result.success(expenses)
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "SupabaseExpenseRepository", retryError)
+                        Result.failure(retryError)
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error fetching all expenses: ${e.message}", "SupabaseExpenseRepository", e)
+            Result.failure(e)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error fetching all expenses: ${e.message}", "SupabaseExpenseRepository", e)
             Result.failure(e)

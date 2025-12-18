@@ -8,10 +8,12 @@ import com.application.motium.data.local.entities.AutoTrackingSettingsEntity
 import com.application.motium.data.local.entities.WorkScheduleEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.WorkSchedule
 import com.application.motium.domain.model.AutoTrackingSettings
 import com.application.motium.domain.model.TrackingMode
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +30,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
 
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
+    private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
     // Room database for offline-first caching
     private val database = MotiumDatabase.getInstance(context)
@@ -123,6 +126,29 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                     }
                 }.decodeList<WorkScheduleDto>()
             response.map { it.toWorkSchedule() }
+        } catch (e: PostgrestRestException) {
+            // JWT expired - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true) {
+                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "WorkScheduleRepository")
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    return try {
+                        val response = postgres.from("work_schedules")
+                            .select {
+                                filter {
+                                    eq("user_id", userId)
+                                }
+                            }.decodeList<WorkScheduleDto>()
+                        MotiumApplication.logger.i("Work schedules loaded after token refresh", "WorkScheduleRepository")
+                        response.map { it.toWorkSchedule() }
+                    } catch (retryError: Exception) {
+                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "WorkScheduleRepository", retryError)
+                        emptyList()
+                    }
+                }
+            }
+            MotiumApplication.logger.e("Error fetching from Supabase: ${e.message}", "WorkScheduleRepository", e)
+            emptyList()
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error fetching from Supabase: ${e.message}", "WorkScheduleRepository", e)
             emptyList()
