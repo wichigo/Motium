@@ -184,7 +184,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // Routes that should NOT show bottom navigation
-private val noNavigationRoutes = setOf("splash", "login", "register", "log_viewer")
+private val noNavigationRoutes = setOf("splash", "login", "register", "log_viewer", "trial_expired", "upgrade")
 
 // Routes that use Pro navigation (enterprise users)
 private val proRoutes = setOf(
@@ -288,12 +288,13 @@ fun MotiumApp() {
                                         // Pop up to the start destination of the graph to
                                         // avoid building up a large stack of destinations
                                         popUpTo("enterprise_home") {
-                                            saveState = true
+                                            // Don't save state to avoid navigation corruption loops
+                                            saveState = false
                                         }
                                         // Avoid multiple copies of the same destination
                                         launchSingleTop = true
-                                        // Restore state when reselecting a previously selected item
-                                        restoreState = true
+                                        // Removed restoreState to avoid navigation loops when
+                                        // previously saved state includes nested navigation
                                     }
                                 }
                             }
@@ -319,10 +320,11 @@ fun MotiumApp() {
                                     navController.navigate(route) {
                                         // Pop up to home to avoid building up a large stack
                                         popUpTo("home") {
-                                            saveState = true
+                                            // Don't save state to avoid navigation corruption loops
+                                            saveState = false
                                         }
                                         launchSingleTop = true
-                                        restoreState = true
+                                        // Removed restoreState to avoid navigation loops
                                     }
                                 }
                             }
