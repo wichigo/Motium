@@ -69,7 +69,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="motium.app"
+                    android:host="motium.org"
                     android:pathPrefix="/link" />
             </intent-filter>
 
@@ -81,6 +81,69 @@
                 <data
                     android:scheme="motium"
                     android:host="link" />
+            </intent-filter>
+
+            <!-- Deep Links for Password Reset (HTTPS) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="motium.org"
+                    android:pathPrefix="/reset" />
+            </intent-filter>
+
+            <!-- Custom Scheme for Password Reset (fallback) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="motium"
+                    android:host="reset" />
+            </intent-filter>
+
+            <!-- Deep Links for Email Verification (HTTPS) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="motium.org"
+                    android:pathPrefix="/verify" />
+            </intent-filter>
+
+            <!-- Custom Scheme for Email Verification (fallback) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="motium"
+                    android:host="verify" />
+            </intent-filter>
+
+            <!-- Deep Links for Unlink Confirmation (HTTPS) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="motium.org"
+                    android:pathPrefix="/unlink" />
+            </intent-filter>
+
+            <!-- Custom Scheme for Unlink Confirmation (fallback) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="motium"
+                    android:host="unlink" />
             </intent-filter>
         </activity>
 
@@ -126,16 +189,20 @@
             </intent-filter>
         </receiver>
 
-        <!-- Auto start receiver -->
+        <!-- Auto start receiver - BOOT_COMPLETED needs separate intent-filter -->
         <receiver
             android:name=".service.AutoStartReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
+            <!-- Boot completed - NO data scheme (critical!) -->
             <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+            <!-- App update - needs package scheme -->
+            <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.PACKAGE_REPLACED" />
-                <data android:scheme="package" />
             </intent-filter>
         </receiver>
 
