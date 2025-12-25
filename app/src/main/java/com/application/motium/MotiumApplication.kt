@@ -46,19 +46,25 @@ class MotiumApplication : Application() {
                 val request = chain.request()
                 val url = request.url.toString()
 
-                // Identify cacheable static assets
+                // Identify cacheable assets (including style.json)
                 val isStaticAsset = url.contains("/fonts/") ||
                         url.contains("/sprites/") ||
                         url.endsWith(".pbf") ||
                         url.endsWith(".mvt") ||
                         (url.endsWith(".png") && url.contains("sprite"))
 
-                if (isStaticAsset) {
+                // style.json changes rarely - cache for 5 minutes to avoid repeated requests
+                val isStyleJson = url.endsWith("style.json")
+
+                if (isStaticAsset || isStyleJson) {
                     // Try cache-only first (no network validation)
+                    val maxStale = if (isStyleJson) 5 else 365 // 5 min for style, 1 year for static
+                    val staleUnit = if (isStyleJson) TimeUnit.MINUTES else TimeUnit.DAYS
+
                     val cacheOnlyRequest = request.newBuilder()
                         .cacheControl(CacheControl.Builder()
                             .onlyIfCached()
-                            .maxStale(365, TimeUnit.DAYS)
+                            .maxStale(maxStale, staleUnit)
                             .build())
                         .build()
 
@@ -73,7 +79,7 @@ class MotiumApplication : Application() {
                     cacheResponse.close()
                     chain.proceed(request)
                 } else {
-                    // For non-static assets (style.json), use network with cache fallback
+                    // For other assets, use network with cache fallback
                     chain.proceed(request)
                 }
             }
@@ -89,13 +95,28 @@ class MotiumApplication : Application() {
                         url.endsWith(".mvt") ||
                         (url.endsWith(".png") && url.contains("sprite"))
 
-                if (isStaticAsset && response.isSuccessful) {
-                    // Override cache headers to cache for 1 year
-                    response.newBuilder()
-                        .removeHeader("Pragma")
-                        .removeHeader("Cache-Control")
-                        .header("Cache-Control", "public, max-age=31536000")
-                        .build()
+                val isStyleJson = url.endsWith("style.json")
+
+                if (response.isSuccessful) {
+                    when {
+                        isStaticAsset -> {
+                            // Override cache headers to cache for 1 year
+                            response.newBuilder()
+                                .removeHeader("Pragma")
+                                .removeHeader("Cache-Control")
+                                .header("Cache-Control", "public, max-age=31536000")
+                                .build()
+                        }
+                        isStyleJson -> {
+                            // Cache style.json for 5 minutes (300 seconds)
+                            response.newBuilder()
+                                .removeHeader("Pragma")
+                                .removeHeader("Cache-Control")
+                                .header("Cache-Control", "public, max-age=300")
+                                .build()
+                        }
+                        else -> response
+                    }
                 } else {
                     response
                 }
