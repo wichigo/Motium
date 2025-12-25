@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -32,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.ProAccountDto
-import com.application.motium.data.supabase.ProAccountRepository
+import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.ProSettingsRepository
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
@@ -44,7 +45,7 @@ import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.UserRole
 import com.application.motium.domain.model.isPremium
-import com.application.motium.data.supabase.LicenseRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.CompanyLinkCard
@@ -56,6 +57,12 @@ import com.application.motium.presentation.components.UnlinkConfirmationDialog
 import com.application.motium.presentation.components.UpgradeDialog
 import com.application.motium.presentation.settings.CompanyLinkViewModel
 import com.application.motium.presentation.settings.LinkActivationResult
+// GDPR imports
+import com.application.motium.presentation.settings.GdprViewModel
+import com.application.motium.presentation.components.gdpr.DataExportDialog
+import com.application.motium.presentation.components.gdpr.DeleteAccountDialog
+import com.application.motium.presentation.components.gdpr.ExportDialogState
+import com.application.motium.presentation.components.gdpr.DeletionDialogState
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.DeepLinkHandler
 import com.application.motium.utils.ThemeManager
@@ -80,13 +87,16 @@ fun SettingsScreen(
     onNavigateToExport: () -> Unit = {},
     onNavigateToLogViewer: () -> Unit = {},
     onNavigateToLogin: () -> Unit = {},
+    onNavigateToUpgrade: () -> Unit = {},
     pendingLinkToken: String? = null,
     authViewModel: AuthViewModel = viewModel(),
     // Pro-specific parameters
     isPro: Boolean = false,
     onNavigateToLinkedAccounts: () -> Unit = {},
     onNavigateToLicenses: () -> Unit = {},
-    onNavigateToExportAdvanced: () -> Unit = {}
+    onNavigateToExportAdvanced: () -> Unit = {},
+    // GDPR parameters
+    onNavigateToConsents: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -102,10 +112,22 @@ fun SettingsScreen(
     val showActivationDialog by companyLinkViewModel.showActivationDialog.collectAsState()
     val activationResult by companyLinkViewModel.activationResult.collectAsState()
 
+    // GDPR ViewModel
+    val gdprViewModel: GdprViewModel = viewModel {
+        GdprViewModel(context.applicationContext as android.app.Application)
+    }
+    val gdprUiState by gdprViewModel.uiState.collectAsState()
+    val exportDialogState by gdprViewModel.exportDialogState.collectAsState()
+    val deletionDialogState by gdprViewModel.deletionDialogState.collectAsState()
+
     // User and premium state from AuthViewModel
     val authState by authViewModel.authState.collectAsState()
     val currentUser = authState.user
     val isPremium = currentUser?.isPremium() ?: false
+
+    // Trial days calculation for header
+    val trialDaysRemaining = currentUser?.subscription?.daysLeftInTrial()
+    val isInTrial = currentUser?.subscription?.type == SubscriptionType.TRIAL && (trialDaysRemaining ?: 0) > 0
 
     // Handle pending deep link token
     LaunchedEffect(pendingLinkToken) {
@@ -128,6 +150,9 @@ fun SettingsScreen(
     // Upgrade dialog state (for Stripe subscription)
     var showUpgradeDialog by remember { mutableStateOf(false) }
     var isPaymentLoading by remember { mutableStateOf(false) }
+
+    // Subscription management dialog state (for premium users)
+    var showSubscriptionManagementDialog by remember { mutableStateOf(false) }
 
     // Edit Profile dialog state
     var showEditProfileDialog by remember { mutableStateOf(false) }
@@ -178,7 +203,7 @@ fun SettingsScreen(
     }
 
     // Pro Company Info state (for ENTERPRISE users)
-    val proAccountRepository = remember { ProAccountRepository.getInstance(context) }
+    val proAccountRemoteDataSource = remember { ProAccountRemoteDataSource.getInstance(context) }
     var proAccount by remember { mutableStateOf<ProAccountDto?>(null) }
     var isLoadingProAccount by remember { mutableStateOf(false) }
     var proCompanyName by remember { mutableStateOf("") }
@@ -196,7 +221,8 @@ fun SettingsScreen(
     var isLoadingDepartments by remember { mutableStateOf(false) }
 
     // Pro License state (for ENTERPRISE users)
-    val licenseRepository = remember { LicenseRepository.getInstance(context) }
+    val licenseRemoteDataSource = remember { LicenseRemoteDataSource.getInstance(context) }
+    val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
     val supabaseAuthRepository = remember { SupabaseAuthRepository.getInstance(context) }
     var ownerLicense by remember { mutableStateOf<License?>(null) }
     var availableLicenses by remember { mutableStateOf<List<License>>(emptyList()) }
@@ -210,7 +236,7 @@ fun SettingsScreen(
         if (currentUser?.role == UserRole.ENTERPRISE && currentUser.id.isNotEmpty()) {
             isLoadingProAccount = true
             isLoadingDepartments = true
-            val result = proAccountRepository.getProAccount(currentUser.id)
+            val result = proAccountRemoteDataSource.getProAccount(currentUser.id)
             result.onSuccess { account ->
                 proAccount = account
                 account?.let {
@@ -225,16 +251,29 @@ fun SettingsScreen(
                     // Load departments
                     departments = proSettingsRepository.getDepartments(it.id)
 
-                    // Load owner's license
+                    // Load owner's license - cache-first pattern
                     cachedProAccountId = it.id
                     isLoadingLicense = true
                     try {
-                        val ownerLicenseResult = licenseRepository.getLicenseForAccount(it.id, currentUser.id)
-                        ownerLicense = ownerLicenseResult.getOrNull()
+                        // Try local cache first (instant response)
+                        ownerLicense = licenseCacheManager.getLicenseForAccount(it.id, currentUser.id).first()
+                        availableLicenses = licenseCacheManager.getAvailableLicensesOnce(it.id)
 
-                        // Load available licenses for assignment
-                        val availableResult = licenseRepository.getAvailableLicenses(it.id)
-                        availableLicenses = availableResult.getOrElse { emptyList() }
+                        // If cache empty or stale, try remote (with graceful fallback)
+                        if (ownerLicense == null || availableLicenses.isEmpty()) {
+                            try {
+                                val ownerLicenseResult = licenseRemoteDataSource.getLicenseForAccount(it.id, currentUser.id)
+                                ownerLicense = ownerLicenseResult.getOrNull()
+
+                                val availableResult = licenseRemoteDataSource.getAvailableLicenses(it.id)
+                                availableLicenses = availableResult.getOrElse { emptyList() }
+                            } catch (networkError: Exception) {
+                                MotiumApplication.logger.w("Network error, using cached data: ${networkError.message}", "SettingsScreen")
+                                // Keep cached values - graceful degradation
+                            }
+                        } else {
+                            MotiumApplication.logger.d("Using cached license data", "SettingsScreen")
+                        }
                     } catch (e: Exception) {
                         MotiumApplication.logger.e("Error loading license: ${e.message}", "SettingsScreen", e)
                     }
@@ -256,14 +295,33 @@ fun SettingsScreen(
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        fontSize = 18.sp,
-                        color = textColor
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Settings",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            fontSize = 18.sp,
+                            color = textColor
+                        )
+                        // Trial days counter
+                        if (isInTrial && trialDaysRemaining != null && trialDaysRemaining > 0) {
+                            val counterColor = when {
+                                trialDaysRemaining <= 1 -> Color(0xFFFF5252)
+                                trialDaysRemaining <= 3 -> Color(0xFFFF9800)
+                                else -> MotiumPrimary
+                            }
+                            Text(
+                                text = "⏳ Essai: ${if (trialDaysRemaining == 1) "1 jour" else "$trialDaysRemaining jours"} restants",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 11.sp,
+                                color = counterColor,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = backgroundColor
@@ -448,9 +506,22 @@ fun SettingsScreen(
                         surfaceColor = surfaceColor,
                         textColor = textColor,
                         textSecondaryColor = textSecondaryColor,
-                        onUpgradeClick = { showUpgradeDialog = true }
+                        onUpgradeClick = onNavigateToUpgrade, // Go directly to UpgradeScreen (no dialog)
+                        onManageClick = { showSubscriptionManagementDialog = true }
                     )
                 }
+            }
+
+            // GDPR Section - Privacy & Data
+            item {
+                GdprSection(
+                    surfaceColor = surfaceColor,
+                    textColor = textColor,
+                    textSecondaryColor = textSecondaryColor,
+                    onManageConsents = onNavigateToConsents,
+                    onExportData = { gdprViewModel.showExportDialog() },
+                    onDeleteAccount = { gdprViewModel.showDeleteDialog() }
+                )
             }
 
             // Logout Section
@@ -485,18 +556,26 @@ fun SettingsScreen(
         UpgradeDialog(
             onDismiss = { showUpgradeDialog = false },
             onSelectPlan = { isLifetime ->
-                isPaymentLoading = true
-                // TODO: Trigger payment flow via SubscriptionManager
-                // For now, just show a message that backend is not configured
-                android.widget.Toast.makeText(
-                    context,
-                    "Backend de paiement non configure. Integration Stripe a venir.",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
-                isPaymentLoading = false
+                // Navigate to upgrade screen with Stripe PaymentSheet
                 showUpgradeDialog = false
+                onNavigateToUpgrade()
             },
             isLoading = isPaymentLoading
+        )
+    }
+
+    // Subscription management dialog (for premium users)
+    if (showSubscriptionManagementDialog) {
+        SubscriptionManagementDialog(
+            currentUser = currentUser,
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor,
+            onDismiss = { showSubscriptionManagementDialog = false },
+            onUpgradeToLifetime = {
+                showSubscriptionManagementDialog = false
+                onNavigateToUpgrade()
+            }
         )
     }
 
@@ -513,7 +592,7 @@ fun SettingsScreen(
                     try {
                         cachedProAccountId?.let { proAccountId ->
                             currentUser?.id?.let { userId ->
-                                val result = licenseRepository.assignLicenseToOwner(proAccountId, userId)
+                                val result = licenseRemoteDataSource.assignLicenseToOwner(proAccountId, userId)
                                 result.fold(
                                     onSuccess = { assignedLicense ->
                                         ownerLicense = assignedLicense
@@ -730,6 +809,8 @@ fun SettingsScreen(
         is LinkActivationResult.Error -> {
             AlertDialog(
                 onDismissRequest = { companyLinkViewModel.clearActivationResult() },
+                containerColor = Color.White,
+                tonalElevation = 0.dp,
                 title = { Text("Erreur d'activation") },
                 text = { Text(result.message) },
                 confirmButton = {
@@ -761,7 +842,7 @@ fun SettingsScreen(
             onSave = {
                 isSavingProAccount = true
                 kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
-                    val result = proAccountRepository.saveProAccount(
+                    val result = proAccountRemoteDataSource.saveProAccount(
                         userId = currentUser.id,
                         companyName = proCompanyName,
                         siret = proSiret.ifEmpty { null },
@@ -786,6 +867,28 @@ fun SettingsScreen(
             textSecondaryColor = textSecondaryColor
         )
     }
+
+    // GDPR Data Export Dialog
+    DataExportDialog(
+        state = exportDialogState,
+        onExport = { gdprViewModel.requestDataExport() },
+        onDownload = { url -> gdprViewModel.downloadExport(url) },
+        onDismiss = { gdprViewModel.hideExportDialog() }
+    )
+
+    // GDPR Delete Account Dialog
+    DeleteAccountDialog(
+        state = deletionDialogState,
+        onProceedToConfirm = { gdprViewModel.proceedToDeleteConfirmation(null) },
+        onConfirmDelete = { confirmation, reason ->
+            gdprViewModel.requestAccountDeletion(confirmation, reason)
+        },
+        onNavigateToLogin = {
+            gdprViewModel.hideDeleteDialog()
+            onNavigateToLogin()
+        },
+        onDismiss = { gdprViewModel.hideDeleteDialog() }
+    )
     }
 }
 
@@ -2066,17 +2169,20 @@ fun SubscriptionSection(
     surfaceColor: Color,
     textColor: Color,
     textSecondaryColor: Color,
-    onUpgradeClick: () -> Unit = {}
+    onUpgradeClick: () -> Unit = {},
+    onManageClick: () -> Unit = {}
 ) {
     val subscriptionType = currentUser?.subscription?.type
     val trialDaysRemaining = currentUser?.subscription?.daysLeftInTrial()
     val isInTrial = subscriptionType == SubscriptionType.TRIAL && (trialDaysRemaining ?: 0) > 0
     val isExpired = subscriptionType == SubscriptionType.EXPIRED ||
                     (subscriptionType == SubscriptionType.TRIAL && (trialDaysRemaining ?: 0) <= 0)
+    val isLifetime = subscriptionType == SubscriptionType.LIFETIME
+    val isMonthlyPremium = subscriptionType == SubscriptionType.PREMIUM
 
     val planText = when {
-        subscriptionType == SubscriptionType.LIFETIME -> "Premium à vie"
-        subscriptionType == SubscriptionType.PREMIUM -> "Premium"
+        isLifetime -> "Premium à vie"
+        isMonthlyPremium -> "Premium"
         isInTrial -> "Essai gratuit"
         isExpired -> "Essai expiré"
         else -> "Aucun abonnement"
@@ -2107,7 +2213,15 @@ fun SubscriptionSection(
         )
 
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (isPremium) {
+                        Modifier.clickable(onClick = onManageClick)
+                    } else {
+                        Modifier
+                    }
+                ),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
                 containerColor = surfaceColor
@@ -2161,7 +2275,14 @@ fun SubscriptionSection(
                         }
                     }
 
-                    if (!isPremium) {
+                    if (isPremium) {
+                        // Show chevron for premium users to indicate it's clickable
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Gérer l'abonnement",
+                            tint = textSecondaryColor
+                        )
+                    } else {
                         Button(
                             onClick = onUpgradeClick,
                             colors = ButtonDefaults.buttonColors(
@@ -2519,6 +2640,8 @@ fun LicenseSelectionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         title = {
             Text(
                 "Choisir une licence",
@@ -2603,6 +2726,273 @@ fun LicenseSelectionDialog(
                 Text("Annuler")
             }
         }
+    )
+}
+
+/**
+ * Dialog for managing individual subscription (for premium users)
+ */
+@Composable
+fun SubscriptionManagementDialog(
+    currentUser: User?,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onDismiss: () -> Unit,
+    onUpgradeToLifetime: () -> Unit
+) {
+    val subscriptionType = currentUser?.subscription?.type
+    val isLifetime = subscriptionType == SubscriptionType.LIFETIME
+    val isMonthlyPremium = subscriptionType == SubscriptionType.PREMIUM
+    val expiresAt = currentUser?.subscription?.expiresAt
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFFFD700).copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "👑",
+                        fontSize = 20.sp
+                    )
+                }
+                Text(
+                    text = "Votre abonnement",
+                    fontWeight = FontWeight.Bold,
+                    color = textColor
+                )
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Subscription type card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isLifetime)
+                            Color(0xFFFFD700).copy(alpha = 0.1f)
+                        else
+                            MotiumPrimary.copy(alpha = 0.1f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Forfait",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = textSecondaryColor
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = if (isLifetime) "Premium à vie" else "Premium mensuel",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isLifetime) Color(0xFFFFD700) else MotiumPrimary
+                                )
+                                if (isLifetime) {
+                                    Surface(
+                                        color = Color(0xFFFFD700),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            "À VIE",
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.Black
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (isMonthlyPremium && expiresAt != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.2f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Prochain renouvellement",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = textSecondaryColor
+                                )
+                                Text(
+                                    text = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
+                                        .format(java.util.Date(expiresAt.toEpochMilliseconds())),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                    color = textColor
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Montant",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = textSecondaryColor
+                                )
+                                Text(
+                                    text = "4,99 €/mois",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                    color = textColor
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Lifetime benefits for monthly users
+                if (isMonthlyPremium) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFD700).copy(alpha = 0.05f)
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFFFFD700).copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFD700),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "Passez à vie",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFFFD700)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Paiement unique de 120€ pour un accès permanent. Plus de renouvellements à gérer !",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = textSecondaryColor
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = onUpgradeToLifetime,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFFFD700),
+                                    contentColor = Color.Black
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = "Passer à l'offre à vie",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Lifetime confirmation message
+                if (isLifetime) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF4CAF50).copy(alpha = 0.1f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF4CAF50),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Accès permanent activé",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF4CAF50)
+                                )
+                                Text(
+                                    text = "Profitez de toutes les fonctionnalités Motium sans limite de durée.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = textSecondaryColor
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Cancel/manage info
+                if (isMonthlyPremium) {
+                    Text(
+                        text = "Pour annuler votre abonnement, contactez-nous à support@motium.org",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    "Fermer",
+                    color = MotiumPrimary
+                )
+            }
+        },
+        dismissButton = {}
     )
 }
 
@@ -2896,6 +3286,196 @@ fun DeveloperOptionsSection(
             }
         }
     }
+}
+
+// GDPR Section
+@Composable
+fun GdprSection(
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onManageConsents: () -> Unit,
+    onExportData: () -> Unit,
+    onDeleteAccount: () -> Unit
+) {
+    val context = LocalContext.current
+    val privacyPolicyUrl = "https://motium.org/privacy" // TODO: Update with actual URL
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = surfaceColor),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Section header
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 12.dp)
+            ) {
+                Icon(
+                    Icons.Default.Security,
+                    contentDescription = null,
+                    tint = textColor,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Confidentialite & Donnees",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = textColor
+                )
+            }
+
+            HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.2f))
+
+            // Privacy Policy
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(privacyPolicyUrl))
+                        context.startActivity(intent)
+                    }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Policy,
+                    contentDescription = null,
+                    tint = textSecondaryColor,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Politique de confidentialite",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = textColor
+                    )
+                }
+                Icon(
+                    Icons.Default.OpenInNew,
+                    contentDescription = null,
+                    tint = textSecondaryColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+            // Manage Consents
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onManageConsents() }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.ToggleOn,
+                    contentDescription = null,
+                    tint = textSecondaryColor,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Gerer mes consentements",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = textColor
+                    )
+                    Text(
+                        text = "Controler l'utilisation de vos donnees",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = textSecondaryColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+            // Export Data
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onExportData() }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = null,
+                    tint = textSecondaryColor,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Exporter mes donnees",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = textColor
+                    )
+                    Text(
+                        text = "Telecharger toutes vos donnees (Article 15)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = textSecondaryColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+
+            // Delete Account
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onDeleteAccount() }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.DeleteForever,
+                    contentDescription = null,
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Supprimer mon compte",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color(0xFFEF4444)
+                    )
+                    Text(
+                        text = "Effacer definitivement toutes les donnees",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = Color(0xFFEF4444).copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(16.dp))
 }
 
 @Composable

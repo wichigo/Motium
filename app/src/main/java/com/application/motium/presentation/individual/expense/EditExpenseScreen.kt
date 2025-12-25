@@ -30,6 +30,8 @@ import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.application.motium.MotiumApplication
 import com.application.motium.data.ExpenseRepository
+import com.application.motium.data.local.MotiumDatabase
+import com.application.motium.data.local.entities.PendingFileUploadEntity
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.ExpenseType
 import com.application.motium.presentation.theme.MotiumPrimary
@@ -37,6 +39,7 @@ import com.application.motium.service.ReceiptAnalysisService
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -53,6 +56,8 @@ fun EditExpenseScreen(
     val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val receiptAnalysisService = remember { ReceiptAnalysisService.getInstance(context) }
     val storageService = remember { com.application.motium.service.SupabaseStorageService.getInstance(context) }
+    val database = remember { MotiumDatabase.getInstance(context) }
+    val pendingFileUploadDao = remember { database.pendingFileUploadDao() }
 
     // Loading state
     var isLoading by remember { mutableStateOf(true) }
@@ -123,12 +128,34 @@ fun EditExpenseScreen(
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
     }
 
-    // Shared function to analyze and upload photo
+    // Helper function to copy file to app's internal storage for persistence
+    suspend fun copyToInternalStorage(sourceUri: Uri): Uri? {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(sourceUri) ?: return null
+
+            // Create permanent file in app's files directory
+            val fileName = "receipt_${System.currentTimeMillis()}.jpg"
+            val destFile = File(context.filesDir, fileName)
+
+            FileOutputStream(destFile).use { outputStream ->
+                inputStream.copyTo(outputStream)
+            }
+            inputStream.close()
+
+            Uri.fromFile(destFile)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to copy file to internal storage: ${e.message}", "EditExpenseScreen", e)
+            null
+        }
+    }
+
+    // Shared function to analyze and upload photo (offline-first)
     fun analyzeAndUploadPhoto(uri: Uri) {
         localPreviewUri = uri
         isAnalyzingReceipt = true
 
         coroutineScope.launch {
+            // Step 1: Analyze receipt with OCR
             receiptAnalysisService.analyzeReceipt(uri).onSuccess { result ->
                 result.amountTTC?.let { ttc ->
                     amountTTC = String.format("%.2f", ttc)
@@ -150,11 +177,44 @@ fun EditExpenseScreen(
                 MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "EditExpenseScreen", error)
             }
 
-            storageService.uploadReceiptPhoto(uri).onSuccess { publicUrl ->
+            // Step 2: Copy file to internal storage for persistence
+            val persistentUri = copyToInternalStorage(uri)
+            if (persistentUri == null) {
+                MotiumApplication.logger.e("Failed to persist receipt photo locally", "EditExpenseScreen")
+                Toast.makeText(context, "Failed to save photo locally", Toast.LENGTH_SHORT).show()
+                isAnalyzingReceipt = false
+                return@launch
+            }
+
+            // Step 3: Set photoUri to local URI immediately (offline-first)
+            photoUri = persistentUri
+            MotiumApplication.logger.i("Receipt photo saved locally: ${persistentUri.path}", "EditExpenseScreen")
+
+            // Step 4: Create pending upload record (will be processed by DeltaSyncWorker)
+            val pendingUpload = PendingFileUploadEntity(
+                id = UUID.randomUUID().toString(),
+                expenseId = expenseId,
+                localUri = persistentUri.toString(),
+                status = PendingFileUploadEntity.STATUS_PENDING,
+                createdAt = System.currentTimeMillis()
+            )
+            pendingFileUploadDao.insert(pendingUpload)
+            MotiumApplication.logger.i("Queued receipt photo for upload: ${pendingUpload.id}", "EditExpenseScreen")
+
+            // Step 5: Try immediate upload in background (non-blocking)
+            // If this fails, DeltaSyncWorker will retry later
+            storageService.uploadReceiptPhoto(persistentUri).onSuccess { publicUrl ->
+                // Upload succeeded immediately - update pending record and photoUri
+                pendingFileUploadDao.markCompleted(pendingUpload.id, publicUrl)
                 photoUri = Uri.parse(publicUrl)
-                MotiumApplication.logger.i("Receipt photo uploaded: $publicUrl", "EditExpenseScreen")
+                MotiumApplication.logger.i("Receipt photo uploaded immediately: $publicUrl", "EditExpenseScreen")
             }.onFailure { error ->
-                MotiumApplication.logger.e("Failed to upload receipt photo: ${error.message}", "EditExpenseScreen", error)
+                // Upload failed - will be retried by DeltaSyncWorker
+                MotiumApplication.logger.w(
+                    "Immediate upload failed (will retry later): ${error.message}",
+                    "EditExpenseScreen"
+                )
+                // Keep local URI in photoUri - expense can still be saved offline
             }
 
             isAnalyzingReceipt = false
@@ -205,6 +265,8 @@ fun EditExpenseScreen(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
             title = { Text("Delete Expense") },
             text = { Text("Are you sure you want to delete this expense? This action cannot be undone.") },
             confirmButton = {

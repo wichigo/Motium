@@ -7,9 +7,17 @@ import com.application.motium.data.supabase.SupabaseClient
 import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class SupabaseStorageService(private val context: Context) {
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
 
     private val storage = SupabaseClient.client.storage
 
@@ -60,25 +68,72 @@ class SupabaseStorageService(private val context: Context) {
     }
 
     /**
+     * Upload a queued photo from local URI for background sync.
+     * Used by DeltaSyncWorker to process pending file uploads.
+     *
+     * @param localUri The file:// URI of the local image to upload
+     * @return Result with the public URL of the uploaded image
+     */
+    suspend fun uploadQueuedPhoto(localUri: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("📤 Uploading queued photo: $localUri", "SupabaseStorage")
+
+            val uri = Uri.parse(localUri)
+
+            // Read the image file as bytes
+            val imageBytes = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                inputStream.readBytes()
+            } ?: return@withContext Result.failure(Exception("Failed to read image file from $localUri"))
+
+            // Generate unique filename
+            val extension = getFileExtension(uri)
+            val fileName = "${UUID.randomUUID()}.$extension"
+            val filePath = "receipts/$fileName"
+
+            // Upload to Supabase Storage
+            storage.from(RECEIPTS_BUCKET).upload(filePath, imageBytes)
+
+            // Get public URL
+            val publicUrl = storage.from(RECEIPTS_BUCKET).publicUrl(filePath)
+
+            MotiumApplication.logger.i("✅ Queued photo uploaded successfully: $publicUrl", "SupabaseStorage")
+            Result.success(publicUrl)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to upload queued photo: ${e.message}", "SupabaseStorage", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Download a receipt photo from Supabase Storage
      * @param photoUrl The public URL of the photo to download
      * @return Result with the photo bytes
      */
     suspend fun downloadReceiptPhoto(photoUrl: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("📥 Downloading receipt photo from Supabase Storage", "SupabaseStorage")
+            MotiumApplication.logger.i("📥 Downloading receipt photo: $photoUrl", "SupabaseStorage")
 
-            // Extract file path from URL
-            val filePath = extractFilePathFromUrl(photoUrl) ?: return@withContext Result.failure(
-                Exception("Invalid photo URL")
-            )
+            // Download directly via public URL using OkHttp
+            val request = Request.Builder()
+                .url(photoUrl)
+                .build()
 
-            // Download from Supabase Storage
-            val photoBytes = storage.from(RECEIPTS_BUCKET).downloadAuthenticated(filePath)
+            val response = httpClient.newCall(request).execute()
 
-            MotiumApplication.logger.i("✅ Receipt photo downloaded successfully: $filePath", "SupabaseStorage")
-            Result.success(photoBytes)
-
+            if (response.isSuccessful) {
+                val bytes = response.body?.bytes()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    MotiumApplication.logger.i("✅ Receipt photo downloaded successfully (${bytes.size} bytes)", "SupabaseStorage")
+                    Result.success(bytes)
+                } else {
+                    MotiumApplication.logger.e("❌ Empty response body", "SupabaseStorage")
+                    Result.failure(Exception("Empty response body"))
+                }
+            } else {
+                MotiumApplication.logger.e("❌ HTTP error: ${response.code}", "SupabaseStorage")
+                Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+            }
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Failed to download receipt photo: ${e.message}", "SupabaseStorage", e)
             Result.failure(e)

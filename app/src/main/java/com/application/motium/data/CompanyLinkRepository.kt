@@ -4,6 +4,7 @@ import android.content.Context
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.local.dao.CompanyLinkDao
+import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
 import com.application.motium.data.supabase.SupabaseClient
@@ -21,6 +22,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.util.UUID
 
 /**
@@ -36,6 +39,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
     // Room database for offline-first caching
     private val database = MotiumDatabase.getInstance(context)
     private val companyLinkDao: CompanyLinkDao = database.companyLinkDao()
+    private val pendingOperationDao = database.pendingOperationDao()
 
     // ==================== DTOs for Supabase ====================
 
@@ -86,6 +90,12 @@ class CompanyLinkRepository private constructor(private val context: Context) {
     @Serializable
     data class UnlinkRequest(
         val p_link_id: String
+    )
+
+    @Serializable
+    data class ActivationPayload(
+        val token: String,
+        val userId: String
     )
 
     // ==================== Singleton ====================
@@ -227,6 +237,129 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             MotiumApplication.logger.e("Error activating company link: ${e.message}", "CompanyLinkRepository", e)
             Result.failure(e)
         }
+    }
+
+    /**
+     * Offline-first activation of company link.
+     * Saves pending state locally first, then attempts RPC.
+     * If RPC fails, queues activation for retry in background sync.
+     *
+     * @param token Invitation token
+     * @param userId User ID
+     * @return Result with CompanyLink (either active or pending_activation status)
+     */
+    suspend fun activateLinkOfflineFirst(token: String, userId: String): Result<CompanyLink> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("Offline-first activation for token: $token, user: $userId", "CompanyLinkRepository")
+
+            // 1. Create a pending operation for this activation
+            val operationId = UUID.randomUUID().toString()
+            val payload = Json.encodeToString(ActivationPayload(token, userId))
+
+            val pendingOp = PendingOperationEntity(
+                id = operationId,
+                entityType = PendingOperationEntity.TYPE_COMPANY_LINK,
+                entityId = token, // Use token as entity ID for activation operations
+                action = "ACTIVATE", // Custom action for company link activation
+                payload = payload,
+                createdAt = System.currentTimeMillis(),
+                priority = 1 // High priority for activation
+            )
+
+            // Save pending operation first
+            pendingOperationDao.insert(pendingOp)
+            MotiumApplication.logger.i("Created pending activation operation: $operationId", "CompanyLinkRepository")
+
+            // 2. Try RPC immediately
+            try {
+                val response = postgres.rpc(
+                    "activate_company_link",
+                    ActivateLinkRequest(p_token = token, p_user_id = userId)
+                ).decodeSingleOrNull<ActivateLinkResponse>()
+
+                if (response != null && response.success) {
+                    // RPC succeeded - create active link
+                    val linkId = response.link_id!!
+                    val linkedProAccountId = response.linked_pro_account_id!!
+                    val companyName = response.company_name ?: "Unknown Company"
+
+                    val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+                    val companyLink = CompanyLink(
+                        id = linkId,
+                        userId = userId,
+                        linkedProAccountId = linkedProAccountId,
+                        companyName = companyName,
+                        department = null,
+                        status = LinkStatus.ACTIVE,
+                        shareProfessionalTrips = true,
+                        sharePersonalTrips = false,
+                        sharePersonalInfo = true,
+                        shareExpenses = false,
+                        linkedAt = now,
+                        linkedActivatedAt = now,
+                        unlinkedAt = null,
+                        createdAt = now,
+                        updatedAt = now
+                    )
+
+                    // Save to local cache
+                    val entity = companyLink.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                    companyLinkDao.insertCompanyLink(entity)
+
+                    // Remove pending operation since activation succeeded
+                    pendingOperationDao.deleteById(operationId)
+
+                    MotiumApplication.logger.i("RPC activation succeeded for company: $companyName", "CompanyLinkRepository")
+                    return@withContext Result.success(companyLink)
+                } else {
+                    throw Exception(response?.error ?: "Activation RPC returned unsuccessful response")
+                }
+            } catch (e: Exception) {
+                // RPC failed - return pending activation state
+                MotiumApplication.logger.w(
+                    "RPC activation failed (${e.message}), returning PENDING_ACTIVATION state. Will retry in background.",
+                    "CompanyLinkRepository"
+                )
+
+                // Create a pending company link to show in UI
+                val pendingLink = createPendingCompanyLink(userId, token)
+
+                // Save pending link to cache
+                val entity = pendingLink.toEntity(lastSyncedAt = null, needsSync = true)
+                companyLinkDao.insertCompanyLink(entity)
+
+                return@withContext Result.success(pendingLink)
+            }
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error in offline-first activation: ${e.message}", "CompanyLinkRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Create a pending company link for offline-first activation.
+     */
+    private fun createPendingCompanyLink(userId: String, token: String): CompanyLink {
+        val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+        return CompanyLink(
+            id = "pending_$token", // Temporary ID
+            userId = userId,
+            linkedProAccountId = "", // Will be filled on successful activation
+            companyName = "Activation en cours...", // Placeholder
+            department = null,
+            status = LinkStatus.PENDING_ACTIVATION,
+            shareProfessionalTrips = true,
+            sharePersonalTrips = false,
+            sharePersonalInfo = true,
+            shareExpenses = false,
+            invitationToken = token,
+            linkedAt = null,
+            linkedActivatedAt = null,
+            unlinkedAt = null,
+            createdAt = now,
+            updatedAt = now
+        )
     }
 
     /**

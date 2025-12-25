@@ -437,8 +437,8 @@ fun LinkedAccountsScreen(
 
                         SummaryCard(
                             totalAccounts = uiState.filteredUsers.size,
-                            activeAccounts = viewModel.getActiveCount(),
-                            pendingAccounts = viewModel.getPendingCount(),
+                            licensedAccounts = viewModel.getLicensedCount(),
+                            unlicensedAccounts = viewModel.getUnlicensedCount(),
                             surfaceColor = surfaceColor,
                             textSecondaryColor = textSecondaryColor
                         )
@@ -467,6 +467,7 @@ fun LinkedAccountsScreen(
                             uiState.filteredUsers.forEachIndexed { index, user ->
                                 LinkedUserRow(
                                     user = user,
+                                    licenseStatus = uiState.getLicenseStatus(user.userId),
                                     onClick = { onNavigateToAccountDetails(user.userId) },
                                     onRevoke = { viewModel.revokeUser(user.userId) },
                                     textColor = textColor,
@@ -497,8 +498,8 @@ fun LinkedAccountsScreen(
 @Composable
 private fun SummaryCard(
     totalAccounts: Int,
-    activeAccounts: Int,
-    pendingAccounts: Int,
+    licensedAccounts: Int,
+    unlicensedAccounts: Int,
     surfaceColor: Color,
     textSecondaryColor: Color
 ) {
@@ -521,15 +522,15 @@ private fun SummaryCard(
                 textSecondaryColor = textSecondaryColor
             )
             StatItem(
-                value = activeAccounts.toString(),
-                label = "Actifs",
+                value = licensedAccounts.toString(),
+                label = "Licenciés",
                 color = ValidatedGreen,
                 textSecondaryColor = textSecondaryColor
             )
             StatItem(
-                value = pendingAccounts.toString(),
-                label = "En attente",
-                color = PendingOrange,
+                value = unlicensedAccounts.toString(),
+                label = "Sans licence",
+                color = TextSecondaryDark,
                 textSecondaryColor = textSecondaryColor
             )
         }
@@ -561,6 +562,7 @@ private fun StatItem(
 @Composable
 private fun LinkedUserRow(
     user: LinkedUserDto,
+    licenseStatus: AccountLicenseStatus,
     onClick: () -> Unit,
     onRevoke: () -> Unit,
     textColor: Color,
@@ -612,8 +614,8 @@ private fun LinkedUserRow(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // Status badge
-        StatusBadge(status = user.status)
+        // License status badge (based on license assignment)
+        LicenseStatusBadge(licenseStatus = licenseStatus)
 
         // More options
         var showMenu by remember { mutableStateOf(false) }
@@ -666,6 +668,43 @@ private fun LinkedUserRow(
     }
 }
 
+/**
+ * Badge showing license status (whether a license is assigned)
+ */
+@Composable
+private fun LicenseStatusBadge(licenseStatus: AccountLicenseStatus) {
+    val (backgroundColor, textColor, text) = when (licenseStatus) {
+        AccountLicenseStatus.LICENSED -> Triple(
+            ValidatedGreen.copy(alpha = 0.15f),
+            ValidatedGreen,
+            "Licencié"
+        )
+        AccountLicenseStatus.UNLICENSED -> Triple(
+            TextSecondaryDark.copy(alpha = 0.15f),
+            TextSecondaryDark,
+            "Sans licence"
+        )
+        AccountLicenseStatus.PENDING_UNLINK -> Triple(
+            PendingOrange.copy(alpha = 0.15f),
+            PendingOrange,
+            "Déliaison"
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = backgroundColor
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = textColor
+        )
+    }
+}
+
 @Composable
 private fun StatusBadge(status: LinkStatus) {
     val (backgroundColor, textColor, text) = when (status) {
@@ -688,6 +727,11 @@ private fun StatusBadge(status: LinkStatus) {
             ErrorRed.copy(alpha = 0.15f),
             ErrorRed,
             "Révoqué"
+        )
+        LinkStatus.PENDING_ACTIVATION -> Triple(
+            PendingOrange.copy(alpha = 0.15f),
+            PendingOrange,
+            "Activation..."
         )
     }
 

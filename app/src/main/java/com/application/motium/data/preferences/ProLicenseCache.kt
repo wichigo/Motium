@@ -49,8 +49,12 @@ class ProLicenseCache private constructor(context: Context) {
         private const val KEY_LICENSE_STATUS = "license_status"
         private const val KEY_LAST_VALIDATED_AT = "last_validated_at"
 
-        // Cache validity: 7 days in milliseconds
+        // Cache validity: 7 days in milliseconds (hard expiration)
         private const val CACHE_VALIDITY_MS = 7L * 24 * 60 * 60 * 1000
+
+        // Soft expiration for licensed users: 30 days (longer grace period)
+        // After hard expiration but before soft, we'll still use cache but trigger refresh
+        private const val CACHE_VALIDITY_SOFT_MS = 30L * 24 * 60 * 60 * 1000
 
         @Volatile
         private var instance: ProLicenseCache? = null
@@ -79,6 +83,24 @@ class ProLicenseCache private constructor(context: Context) {
         fun isValid(): Boolean {
             val age = System.currentTimeMillis() - lastValidatedAt
             return age < CACHE_VALIDITY_MS
+        }
+
+        /**
+         * Check if cache is stale but still within soft expiration window.
+         * Returns true if expired (> 7 days) but < 30 days for licensed users.
+         * This allows graceful degradation when offline.
+         */
+        fun isStaleButUsable(): Boolean {
+            val age = System.currentTimeMillis() - lastValidatedAt
+            return age >= CACHE_VALIDITY_MS && age < CACHE_VALIDITY_SOFT_MS && isLicensed
+        }
+
+        /**
+         * Check if cache is within soft expiration (30 days for licensed users).
+         */
+        fun isWithinSoftExpiration(): Boolean {
+            val age = System.currentTimeMillis() - lastValidatedAt
+            return age < CACHE_VALIDITY_SOFT_MS
         }
 
         /**
@@ -178,11 +200,22 @@ class ProLicenseCache private constructor(context: Context) {
     /**
      * Get cached license status if valid, or null if cache is invalid/expired.
      * This is the main method to use for offline-first license checking.
+     *
+     * Uses soft expiration: for licensed users, cache is valid for 30 days.
      */
     fun getValidCachedLicenseStatus(userId: String): Boolean? {
         val cached = getCachedState(userId) ?: return null
 
         if (!cached.isValid()) {
+            // Check soft expiration for licensed users
+            if (cached.isStaleButUsable()) {
+                MotiumApplication.logger.w(
+                    "License cache stale but usable (${cached.getAgeHours()}h old, isLicensed=${cached.isLicensed})",
+                    TAG
+                )
+                return cached.isLicensed
+            }
+
             MotiumApplication.logger.d(
                 "License cache expired - returning null (${cached.getAgeHours()} hours old)",
                 TAG
@@ -195,6 +228,29 @@ class ProLicenseCache private constructor(context: Context) {
             TAG
         )
         return cached.isLicensed
+    }
+
+    /**
+     * Get cached license status with soft expiration support.
+     * Returns cached value even if expired, as long as within soft expiration window.
+     * Use this for graceful degradation when offline.
+     */
+    fun getCachedLicenseStatusWithSoftExpiration(userId: String): Boolean? {
+        val cached = getCachedState(userId) ?: return null
+
+        if (cached.isWithinSoftExpiration()) {
+            MotiumApplication.logger.i(
+                "Using cached license (soft expiration): isLicensed=${cached.isLicensed} (${cached.getAgeHours()}h old)",
+                TAG
+            )
+            return cached.isLicensed
+        }
+
+        MotiumApplication.logger.d(
+            "License cache beyond soft expiration (${cached.getAgeHours()}h old)",
+            TAG
+        )
+        return null
     }
 
     /**

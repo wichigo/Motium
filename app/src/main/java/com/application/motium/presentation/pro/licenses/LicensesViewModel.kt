@@ -4,20 +4,60 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
-import com.application.motium.data.supabase.LicenseRepository
-import com.application.motium.data.supabase.LinkedAccountRepository
+import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.repository.OfflineFirstLicenseRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
+import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
+import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicensesSummary
+import com.stripe.android.paymentsheet.PaymentSheetResult
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * UI State for Licenses screen
+ * UI State for Licenses screen (dialog/action state only - licenses come from reactive Flow)
+ */
+data class LicensesDialogState(
+    val error: String? = null,
+    val successMessage: String? = null,
+    val showPurchaseDialog: Boolean = false,
+    val isPurchasing: Boolean = false,
+    // Stripe Payment state (legacy)
+    val paymentReady: PaymentReadyState? = null,
+    // Stripe Deferred Payment state (preferred)
+    val deferredPaymentReady: DeferredPaymentReadyState? = null,
+    val pendingPurchase: PendingPurchase? = null,
+    val isRefreshingAfterPayment: Boolean = false,
+    // Pro account ID for payments
+    val proAccountId: String? = null,
+    // Assignment dialog state
+    val showAssignDialog: Boolean = false,
+    val selectedLicenseForAssignment: License? = null,
+    val linkedAccountsForAssignment: List<LinkedUserDto> = emptyList(),
+    val isLoadingAccounts: Boolean = false,
+    // Unlink confirm dialog state
+    val showUnlinkConfirmDialog: Boolean = false,
+    val licenseToUnlink: License? = null,
+    val isUnlinking: Boolean = false
+)
+
+/**
+ * Combined UI State for Licenses screen
  */
 data class LicensesUiState(
     val isLoading: Boolean = true,
@@ -39,6 +79,14 @@ data class LicensesUiState(
     val successMessage: String? = null,
     val showPurchaseDialog: Boolean = false,
     val isPurchasing: Boolean = false,
+    // Stripe Payment state (legacy)
+    val paymentReady: PaymentReadyState? = null,
+    // Stripe Deferred Payment state (preferred)
+    val deferredPaymentReady: DeferredPaymentReadyState? = null,
+    val pendingPurchase: PendingPurchase? = null,
+    val isRefreshingAfterPayment: Boolean = false,
+    // Pro account ID for payments
+    val proAccountId: String? = null,
     // Assignment dialog state
     val showAssignDialog: Boolean = false,
     val selectedLicenseForAssignment: License? = null,
@@ -51,62 +99,144 @@ data class LicensesUiState(
 )
 
 /**
- * ViewModel for managing licenses
+ * State when payment is ready to present via PaymentSheet (legacy mode)
  */
+data class PaymentReadyState(
+    val clientSecret: String,
+    val customerId: String,
+    val ephemeralKey: String?,
+    val amountCents: Int
+)
+
+/**
+ * State for deferred payment (IntentConfiguration mode)
+ */
+data class DeferredPaymentReadyState(
+    val amountCents: Long,
+    val priceType: String,
+    val quantity: Int
+)
+
+/**
+ * Tracks a pending purchase before and during payment
+ */
+data class PendingPurchase(
+    val quantity: Int,
+    val isLifetime: Boolean
+)
+
+/**
+ * ViewModel for managing licenses - Offline-first architecture.
+ * Reads from local Room database via Flow (through LicenseCacheManager), writes to Supabase with background sync.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
 class LicensesViewModel(
     private val context: Context,
-    private val licenseRepository: LicenseRepository = LicenseRepository.getInstance(context),
-    private val linkedAccountRepository: LinkedAccountRepository = LinkedAccountRepository.getInstance(context),
-    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context)
+    // Cache-first manager for reactive reads with background refresh
+    private val licenseCacheManager: com.application.motium.data.repository.LicenseCacheManager = com.application.motium.data.repository.LicenseCacheManager.getInstance(context),
+    // Offline-first repository for reactive reads (legacy, still used for some operations)
+    private val offlineFirstLicenseRepo: OfflineFirstLicenseRepository = OfflineFirstLicenseRepository.getInstance(context),
+    // Remote data sources for write operations requiring server validation
+    private val licenseRemoteDataSource: LicenseRemoteDataSource = LicenseRemoteDataSource.getInstance(context),
+    private val linkedAccountRemoteDataSource: LinkedAccountRemoteDataSource = LinkedAccountRemoteDataSource.getInstance(context),
+    private val proAccountRemoteDataSource: ProAccountRemoteDataSource = ProAccountRemoteDataSource.getInstance(context),
+    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context),
+    private val localUserRepository: LocalUserRepository = LocalUserRepository.getInstance(context),
+    private val subscriptionManager: SubscriptionManager = SubscriptionManager.getInstance(context)
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(LicensesUiState())
-    val uiState: StateFlow<LicensesUiState> = _uiState.asStateFlow()
+    companion object {
+        private const val TAG = "LicensesViewModel"
+    }
+
+    // Dialog/action state (non-reactive)
+    private val _dialogState = MutableStateFlow(LicensesDialogState())
+
+    // Pro account ID flow
+    private val _proAccountId = MutableStateFlow<String?>(null)
+
+    // Reactive licenses flow from cache-first manager (Room DB with background network refresh)
+    private val licensesFlow = _proAccountId.flatMapLatest { proAccountId ->
+        if (proAccountId != null) {
+            licenseCacheManager.getLicensesByProAccount(proAccountId)
+        } else {
+            flowOf(emptyList())
+        }
+    }
+
+    // Combined UI state: reactive licenses + dialog state
+    val uiState: StateFlow<LicensesUiState> = combine(
+        licensesFlow,
+        _dialogState,
+        _proAccountId
+    ) { licenses, dialogState, proAccountId ->
+        LicensesUiState(
+            isLoading = proAccountId == null,
+            licenses = licenses,
+            summary = LicensesSummary.fromLicenses(licenses),
+            error = dialogState.error,
+            successMessage = dialogState.successMessage,
+            showPurchaseDialog = dialogState.showPurchaseDialog,
+            isPurchasing = dialogState.isPurchasing,
+            paymentReady = dialogState.paymentReady,
+            deferredPaymentReady = dialogState.deferredPaymentReady,
+            pendingPurchase = dialogState.pendingPurchase,
+            isRefreshingAfterPayment = dialogState.isRefreshingAfterPayment,
+            proAccountId = dialogState.proAccountId ?: proAccountId,
+            showAssignDialog = dialogState.showAssignDialog,
+            selectedLicenseForAssignment = dialogState.selectedLicenseForAssignment,
+            linkedAccountsForAssignment = dialogState.linkedAccountsForAssignment,
+            isLoadingAccounts = dialogState.isLoadingAccounts,
+            showUnlinkConfirmDialog = dialogState.showUnlinkConfirmDialog,
+            licenseToUnlink = dialogState.licenseToUnlink,
+            isUnlinking = dialogState.isUnlinking
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = LicensesUiState()
+    )
 
     init {
-        loadLicenses()
+        loadProAccountId()
     }
 
     /**
-     * Load all licenses for the current Pro account
+     * Load pro account ID to start the licenses flow
      */
-    fun loadLicenses() {
+    private fun loadProAccountId() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
-
             try {
                 val proAccountId = authRepository.getCurrentProAccountId()
-                if (proAccountId == null) {
-                    _uiState.update { it.copy(
-                        isLoading = false,
-                        error = "Compte Pro non trouvé"
-                    )}
-                    return@launch
+                if (proAccountId != null) {
+                    _proAccountId.value = proAccountId
+                    MotiumApplication.logger.d("Pro account ID loaded: $proAccountId", TAG)
+                } else {
+                    _dialogState.update { it.copy(error = "Compte Pro non trouvé") }
                 }
-
-                val result = licenseRepository.getLicenses(proAccountId)
-                result.fold(
-                    onSuccess = { licenses ->
-                        val summary = LicensesSummary.fromLicenses(licenses)
-                        _uiState.update { it.copy(
-                            isLoading = false,
-                            licenses = licenses,
-                            summary = summary
-                        )}
-                    },
-                    onFailure = { e ->
-                        MotiumApplication.logger.e("Failed to load licenses: ${e.message}", "LicensesVM", e)
-                        _uiState.update { it.copy(
-                            isLoading = false,
-                            error = "Erreur: ${e.message}"
-                        )}
-                    }
-                )
             } catch (e: Exception) {
-                _uiState.update { it.copy(
-                    isLoading = false,
-                    error = "Erreur: ${e.message}"
-                )}
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Force refresh from server (triggers delta sync).
+     * Uses LicenseCacheManager for cache-first pattern with graceful offline handling.
+     */
+    fun refreshLicenses() {
+        viewModelScope.launch {
+            val proAccountId = _proAccountId.value ?: return@launch
+            try {
+                // Force refresh through cache manager (updates local DB)
+                val result = licenseCacheManager.forceRefresh(proAccountId)
+                result.onFailure { e ->
+                    MotiumApplication.logger.e("Failed to refresh licenses: ${e.message}", TAG, e)
+                    // Don't show error to user - cache-first means we keep showing cached data
+                }
+                // Flow will automatically update when local DB changes
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Refresh error: ${e.message}", TAG, e)
             }
         }
     }
@@ -115,68 +245,57 @@ class LicensesViewModel(
      * Show purchase dialog
      */
     fun showPurchaseDialog() {
-        _uiState.update { it.copy(showPurchaseDialog = true) }
+        _dialogState.update { it.copy(showPurchaseDialog = true) }
     }
 
     /**
      * Hide purchase dialog
      */
     fun hidePurchaseDialog() {
-        _uiState.update { it.copy(showPurchaseDialog = false) }
+        _dialogState.update { it.copy(showPurchaseDialog = false) }
     }
 
     /**
-     * Purchase licenses via Stripe (monthly or lifetime)
+     * Purchase licenses via Stripe (monthly or lifetime) - Deferred payment mode.
+     * Opens PaymentSheet immediately without pre-creating a PaymentIntent.
      */
     fun purchaseLicenses(quantity: Int, isLifetime: Boolean = false) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isPurchasing = true) }
+            _dialogState.update { it.copy(isPurchasing = true) }
 
             try {
-                val proAccountId = authRepository.getCurrentProAccountId()
+                val proAccountId = _proAccountId.value
                 if (proAccountId == null) {
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         isPurchasing = false,
                         error = "Compte Pro non trouve"
                     )}
                     return@launch
                 }
 
-                // TODO: Initialize Stripe payment before creating licenses
-                // val paymentResult = subscriptionManager.initializeProLicensePayment(
-                //     proAccountId = proAccountId,
-                //     email = currentUserEmail,
-                //     quantity = quantity,
-                //     isLifetime = isLifetime
-                // )
+                val priceType = if (isLifetime) "pro_license_lifetime" else "pro_license_monthly"
+                val amountCents = subscriptionManager.getAmountCents(priceType, quantity)
 
-                // For now, create placeholder licenses
-                val result = if (isLifetime) {
-                    licenseRepository.createLifetimeLicenses(proAccountId, quantity)
-                } else {
-                    licenseRepository.createLicenses(proAccountId, quantity)
-                }
+                MotiumApplication.logger.i("Initializing deferred license payment: $quantity x $priceType (${amountCents / 100.0}€)", TAG)
 
-                result.fold(
-                    onSuccess = {
-                        val typeText = if (isLifetime) "a vie" else "mensuelles"
-                        _uiState.update { it.copy(
-                            isPurchasing = false,
-                            showPurchaseDialog = false,
-                            successMessage = "$quantity licence(s) $typeText creee(s)"
-                        )}
-                        loadLicenses()
-                    },
-                    onFailure = { e ->
-                        _uiState.update { it.copy(
-                            isPurchasing = false,
-                            error = "Erreur: ${e.message}"
-                        )}
-                    }
-                )
-            } catch (e: Exception) {
-                _uiState.update { it.copy(
+                // Store pending purchase and open PaymentSheet
+                _dialogState.update { it.copy(
                     isPurchasing = false,
+                    showPurchaseDialog = false,
+                    pendingPurchase = PendingPurchase(quantity, isLifetime),
+                    proAccountId = proAccountId,
+                    deferredPaymentReady = DeferredPaymentReadyState(
+                        amountCents = amountCents,
+                        priceType = priceType,
+                        quantity = quantity
+                    )
+                )}
+
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Purchase error: ${e.message}", TAG, e)
+                _dialogState.update { it.copy(
+                    isPurchasing = false,
+                    pendingPurchase = null,
                     error = "Erreur: ${e.message}"
                 )}
             }
@@ -184,27 +303,146 @@ class LicensesViewModel(
     }
 
     /**
-     * Cancel a license (monthly only)
+     * Called from PaymentSheet's createIntentCallback to create the PaymentIntent on the server.
+     */
+    suspend fun confirmPayment(paymentMethodId: String): Result<String> {
+        val state = _dialogState.value
+        val proAccountId = state.proAccountId ?: _proAccountId.value
+            ?: return Result.failure(Exception("Compte Pro non trouvé"))
+        val deferredState = state.deferredPaymentReady
+            ?: return Result.failure(Exception("Payment not initialized"))
+
+        return subscriptionManager.confirmPaymentWithMethod(
+            paymentMethodId = paymentMethodId,
+            userId = null,
+            proAccountId = proAccountId,
+            priceType = deferredState.priceType,
+            quantity = deferredState.quantity
+        )
+    }
+
+    /**
+     * Handle PaymentSheet result
+     */
+    fun handlePaymentResult(result: PaymentSheetResult) {
+        when (result) {
+            is PaymentSheetResult.Completed -> {
+                _dialogState.update { it.copy(
+                    paymentReady = null,
+                    deferredPaymentReady = null,
+                    isRefreshingAfterPayment = true
+                )}
+                MotiumApplication.logger.i("Payment completed successfully", TAG)
+                // After successful payment, poll for new licenses from server
+                refreshLicensesAfterPayment()
+            }
+            is PaymentSheetResult.Canceled -> {
+                _dialogState.update { it.copy(
+                    paymentReady = null,
+                    deferredPaymentReady = null,
+                    pendingPurchase = null
+                )}
+                MotiumApplication.logger.i("Payment was canceled", TAG)
+            }
+            is PaymentSheetResult.Failed -> {
+                _dialogState.update { it.copy(
+                    paymentReady = null,
+                    deferredPaymentReady = null,
+                    pendingPurchase = null,
+                    error = result.error.message ?: "Le paiement a echoue"
+                )}
+                MotiumApplication.logger.e("Payment failed: ${result.error.message}", TAG, result.error)
+            }
+        }
+    }
+
+    /**
+     * Refresh licenses after successful payment.
+     * Polls server as webhook may have short delay, then updates local DB.
+     * Uses cache-first pattern with fallback to local DB.
+     */
+    private fun refreshLicensesAfterPayment() {
+        viewModelScope.launch {
+            val pendingPurchase = _dialogState.value.pendingPurchase
+            var attempts = 0
+            val maxAttempts = 5
+            val delayMs = 2000L
+
+            val initialLicenseCount = uiState.value.licenses.size
+            val expectedNewLicenses = pendingPurchase?.quantity ?: 0
+            val proAccountId = _proAccountId.value ?: return@launch
+
+            while (attempts < maxAttempts) {
+                delay(delayMs)
+                attempts++
+
+                try {
+                    // Try fetching from server via cache manager
+                    val result = licenseCacheManager.forceRefresh(proAccountId)
+
+                    result.onSuccess { licenses ->
+                        // Check if new licenses have been created
+                        if (licenses.size >= initialLicenseCount + expectedNewLicenses) {
+                            val typeText = if (pendingPurchase?.isLifetime == true) "a vie" else "mensuelles"
+                            _dialogState.update { it.copy(
+                                isRefreshingAfterPayment = false,
+                                pendingPurchase = null,
+                                successMessage = "${pendingPurchase?.quantity ?: expectedNewLicenses} licence(s) $typeText creee(s) avec succes"
+                            )}
+                            MotiumApplication.logger.i("Licenses created after payment: ${licenses.size}", TAG)
+                            return@launch
+                        }
+                    }
+
+                    // Also check local DB in case webhook already updated it
+                    val localLicenses = licenseCacheManager.getLicensesByProAccountOnce(proAccountId)
+                    if (localLicenses.size >= initialLicenseCount + expectedNewLicenses) {
+                        val typeText = if (pendingPurchase?.isLifetime == true) "a vie" else "mensuelles"
+                        _dialogState.update { it.copy(
+                            isRefreshingAfterPayment = false,
+                            pendingPurchase = null,
+                            successMessage = "${pendingPurchase?.quantity ?: expectedNewLicenses} licence(s) $typeText creee(s) avec succes"
+                        )}
+                        MotiumApplication.logger.i("Licenses found in local DB: ${localLicenses.size}", TAG)
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e("Failed to refresh licenses: ${e.message}", TAG, e)
+                }
+            }
+
+            // After max attempts, show generic success message
+            _dialogState.update { it.copy(
+                isRefreshingAfterPayment = false,
+                pendingPurchase = null,
+                successMessage = "Paiement reussi. Vos licences seront disponibles sous peu."
+            )}
+            MotiumApplication.logger.w("License refresh timed out, may need manual refresh", TAG)
+        }
+    }
+
+    /**
+     * Cancel a license (monthly only) - requires server validation
      */
     fun cancelLicense(licenseId: String) {
         viewModelScope.launch {
             try {
-                val result = licenseRepository.cancelLicense(licenseId)
+                val result = licenseRemoteDataSource.cancelLicense(licenseId)
                 result.fold(
                     onSuccess = {
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             successMessage = "Licence annulee"
                         )}
-                        loadLicenses()
+                        // Flow will auto-update when sync pulls changes
                     },
                     onFailure = { e ->
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             error = "Erreur: ${e.message}"
                         )}
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Erreur: ${e.message}") }
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
             }
         }
     }
@@ -217,7 +455,7 @@ class LicensesViewModel(
      * Show assignment dialog for an available license
      */
     fun showAssignmentDialog(license: License) {
-        _uiState.update { it.copy(
+        _dialogState.update { it.copy(
             showAssignDialog = true,
             selectedLicenseForAssignment = license,
             isLoadingAccounts = true
@@ -229,7 +467,7 @@ class LicensesViewModel(
      * Hide assignment dialog
      */
     fun hideAssignmentDialog() {
-        _uiState.update { it.copy(
+        _dialogState.update { it.copy(
             showAssignDialog = false,
             selectedLicenseForAssignment = null,
             linkedAccountsForAssignment = emptyList()
@@ -242,15 +480,14 @@ class LicensesViewModel(
     private fun loadUnlicensedAccounts() {
         viewModelScope.launch {
             try {
-                val proAccountId = authRepository.getCurrentProAccountId() ?: return@launch
+                val proAccountId = _proAccountId.value ?: return@launch
 
-                // Get all linked accounts
-                val linkedUsersResult = linkedAccountRepository.getLinkedUsers(proAccountId)
-                val licensesResult = licenseRepository.getLicenses(proAccountId)
+                // Get all linked accounts from remote
+                val linkedUsersResult = linkedAccountRemoteDataSource.getLinkedUsers(proAccountId)
+                val licenses = uiState.value.licenses
 
-                if (linkedUsersResult.isSuccess && licensesResult.isSuccess) {
+                if (linkedUsersResult.isSuccess) {
                     val linkedUsers = linkedUsersResult.getOrDefault(emptyList())
-                    val licenses = licensesResult.getOrDefault(emptyList())
 
                     // Get IDs of accounts that already have a license
                     val licensedAccountIds = licenses
@@ -263,18 +500,18 @@ class LicensesViewModel(
                         user.userId !in licensedAccountIds && user.isActive
                     }
 
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         linkedAccountsForAssignment = unlicensedAccounts,
                         isLoadingAccounts = false
                     )}
                 } else {
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         isLoadingAccounts = false,
                         error = "Erreur lors du chargement des comptes"
                     )}
                 }
             } catch (e: Exception) {
-                _uiState.update { it.copy(
+                _dialogState.update { it.copy(
                     isLoadingAccounts = false,
                     error = "Erreur: ${e.message}"
                 )}
@@ -283,18 +520,18 @@ class LicensesViewModel(
     }
 
     /**
-     * Assign a license to a linked account
+     * Assign a license to a linked account - requires server validation
      */
     fun assignLicenseToAccount(licenseId: String, linkedAccountId: String) {
         viewModelScope.launch {
             try {
-                val proAccountId = authRepository.getCurrentProAccountId()
+                val proAccountId = _proAccountId.value
                 if (proAccountId == null) {
-                    _uiState.update { it.copy(error = "Compte Pro non trouve") }
+                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
                     return@launch
                 }
 
-                val result = licenseRepository.assignLicenseToAccount(
+                val result = licenseRemoteDataSource.assignLicenseToAccount(
                     licenseId = licenseId,
                     proAccountId = proAccountId,
                     linkedAccountId = linkedAccountId
@@ -302,21 +539,21 @@ class LicensesViewModel(
 
                 result.fold(
                     onSuccess = {
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             showAssignDialog = false,
                             selectedLicenseForAssignment = null,
                             successMessage = "Licence assignee avec succes"
                         )}
-                        loadLicenses()
+                        // Flow will auto-update when sync pulls changes
                     },
                     onFailure = { e ->
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             error = e.message ?: "Erreur lors de l'assignation"
                         )}
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Erreur: ${e.message}") }
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
             }
         }
     }
@@ -329,7 +566,7 @@ class LicensesViewModel(
      * Show unlink confirmation dialog
      */
     fun showUnlinkConfirmDialog(license: License) {
-        _uiState.update { it.copy(
+        _dialogState.update { it.copy(
             showUnlinkConfirmDialog = true,
             licenseToUnlink = license
         )}
@@ -339,55 +576,55 @@ class LicensesViewModel(
      * Hide unlink confirmation dialog
      */
     fun hideUnlinkConfirmDialog() {
-        _uiState.update { it.copy(
+        _dialogState.update { it.copy(
             showUnlinkConfirmDialog = false,
             licenseToUnlink = null
         )}
     }
 
     /**
-     * Request to unlink a license (starts 30-day notice period)
+     * Request to unlink a license (starts 30-day notice period) - requires server
      */
     fun confirmUnlinkRequest() {
-        val license = _uiState.value.licenseToUnlink ?: return
+        val license = _dialogState.value.licenseToUnlink ?: return
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isUnlinking = true) }
+            _dialogState.update { it.copy(isUnlinking = true) }
 
             try {
-                val proAccountId = authRepository.getCurrentProAccountId()
+                val proAccountId = _proAccountId.value
                 if (proAccountId == null) {
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         isUnlinking = false,
                         error = "Compte Pro non trouve"
                     )}
                     return@launch
                 }
 
-                val result = licenseRepository.requestUnlink(
+                val result = licenseRemoteDataSource.requestUnlink(
                     licenseId = license.id,
                     proAccountId = proAccountId
                 )
 
                 result.fold(
                     onSuccess = {
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             isUnlinking = false,
                             showUnlinkConfirmDialog = false,
                             licenseToUnlink = null,
                             successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
                         )}
-                        loadLicenses()
+                        // Flow will auto-update when sync pulls changes
                     },
                     onFailure = { e ->
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             isUnlinking = false,
                             error = e.message ?: "Erreur lors de la demande de deliaison"
                         )}
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { it.copy(
+                _dialogState.update { it.copy(
                     isUnlinking = false,
                     error = "Erreur: ${e.message}"
                 )}
@@ -396,37 +633,37 @@ class LicensesViewModel(
     }
 
     /**
-     * Cancel an unlink request
+     * Cancel an unlink request - requires server
      */
     fun cancelUnlinkRequest(licenseId: String) {
         viewModelScope.launch {
             try {
-                val proAccountId = authRepository.getCurrentProAccountId()
+                val proAccountId = _proAccountId.value
                 if (proAccountId == null) {
-                    _uiState.update { it.copy(error = "Compte Pro non trouve") }
+                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
                     return@launch
                 }
 
-                val result = licenseRepository.cancelUnlinkRequest(
+                val result = licenseRemoteDataSource.cancelUnlinkRequest(
                     licenseId = licenseId,
                     proAccountId = proAccountId
                 )
 
                 result.fold(
                     onSuccess = {
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             successMessage = "Demande de deliaison annulee"
                         )}
-                        loadLicenses()
+                        // Flow will auto-update when sync pulls changes
                     },
                     onFailure = { e ->
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             error = e.message ?: "Erreur lors de l'annulation"
                         )}
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Erreur: ${e.message}") }
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
             }
         }
     }
@@ -439,21 +676,21 @@ class LicensesViewModel(
      * Clear error message
      */
     fun clearError() {
-        _uiState.update { it.copy(error = null) }
+        _dialogState.update { it.copy(error = null) }
     }
 
     /**
      * Clear success message
      */
     fun clearSuccessMessage() {
-        _uiState.update { it.copy(successMessage = null) }
+        _dialogState.update { it.copy(successMessage = null) }
     }
 
     /**
      * Get the display name for a linked account by ID
      */
     fun getLinkedAccountName(accountId: String): String {
-        val licenses = _uiState.value.licenses
+        val licenses = uiState.value.licenses
         // This would need to be loaded from LinkedAccountRepository
         // For now, return the account ID or load it async
         return accountId.take(8) + "..."

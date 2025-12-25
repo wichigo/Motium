@@ -22,12 +22,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.application.motium.data.supabase.LicenseRepository
-import com.application.motium.data.supabase.LinkedAccountRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
+import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.data.supabase.SupabaseTripRepository
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.supabase.TripRemoteDataSource
+import com.application.motium.data.supabase.VehicleRemoteDataSource
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicenseEffectiveStatus
 import com.application.motium.domain.model.LinkStatus
@@ -36,6 +36,7 @@ import com.application.motium.presentation.pro.licenses.UnlinkConfirmDialog
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -48,15 +49,17 @@ fun AccountDetailsScreen(
     accountId: String,
     onNavigateBack: () -> Unit = {},
     onNavigateToUserTrips: (String) -> Unit = {},
+    onNavigateToUserVehicles: (String) -> Unit = {},
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val themeManager = remember { ThemeManager.getInstance(context) }
-    val repository = remember { LinkedAccountRepository.getInstance(context) }
-    val tripRepository = remember { SupabaseTripRepository.getInstance(context) }
-    val vehicleRepository = remember { SupabaseVehicleRepository.getInstance(context) }
-    val licenseRepository = remember { LicenseRepository.getInstance(context) }
+    val linkedAccountRemoteDataSource = remember { LinkedAccountRemoteDataSource.getInstance(context) }
+    val tripRemoteDataSource = remember { TripRemoteDataSource.getInstance(context) }
+    val vehicleRemoteDataSource = remember { VehicleRemoteDataSource.getInstance(context) }
+    val licenseRemoteDataSource = remember { LicenseRemoteDataSource.getInstance(context) }
+    val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
 
     val isDarkMode by themeManager.isDarkMode.collectAsState()
@@ -96,7 +99,7 @@ fun AccountDetailsScreen(
             proAccountId = authRepository.getCurrentProAccountId()
 
             // Load user info
-            val result = repository.getLinkedUserById(accountId)
+            val result = linkedAccountRemoteDataSource.getLinkedUserById(accountId)
             result.fold(
                 onSuccess = { linkedUser ->
                     user = linkedUser
@@ -104,7 +107,7 @@ fun AccountDetailsScreen(
                     // Load stats and license from Supabase
                     coroutineScope.launch(Dispatchers.IO) {
                         // Get validated trips for this user
-                        val tripsResult = tripRepository.getAllTrips(accountId)
+                        val tripsResult = tripRemoteDataSource.getAllTrips(accountId)
                         tripsResult.fold(
                             onSuccess = { trips ->
                                 val validatedTrips = trips.filter { it.isValidated }
@@ -116,32 +119,49 @@ fun AccountDetailsScreen(
 
                         // Get vehicles count
                         try {
-                            val vehicles = vehicleRepository.getAllVehiclesForUser(accountId)
+                            val vehicles = vehicleRemoteDataSource.getAllVehiclesForUser(accountId)
                             associatedVehicles = vehicles.size
                         } catch (e: Exception) {
                             // Keep default
                         }
 
-                        // Load license for this account
+                        // Load license for this account - cache-first pattern
                         proAccountId?.let { proId ->
-                            // Get license assigned to this account
-                            val licenseResult = licenseRepository.getLicenseForAccount(proId, accountId)
-                            licenseResult.fold(
-                                onSuccess = { userLicense ->
-                                    license = userLicense
-                                },
-                                onFailure = { /* No license */ }
-                            )
+                            try {
+                                // Try local cache first (instant response)
+                                license = licenseCacheManager.getLicenseForAccount(proId, accountId).first()
+                                availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proId)
+                                availableLicensesCount = availableLicenses.size
 
-                            // Get available licenses count
-                            val availableResult = licenseRepository.getAvailableLicenses(proId)
-                            availableResult.fold(
-                                onSuccess = { licenses ->
-                                    availableLicenses = licenses
-                                    availableLicensesCount = licenses.size
-                                },
-                                onFailure = { /* Keep defaults */ }
-                            )
+                                // If cache empty, try remote (with graceful fallback)
+                                if (license == null || availableLicenses.isEmpty()) {
+                                    try {
+                                        val licenseResult = licenseRemoteDataSource.getLicenseForAccount(proId, accountId)
+                                        license = licenseResult.getOrNull()
+
+                                        val availableResult = licenseRemoteDataSource.getAvailableLicenses(proId)
+                                        availableResult.fold(
+                                            onSuccess = { licenses ->
+                                                availableLicenses = licenses
+                                                availableLicensesCount = licenses.size
+                                            },
+                                            onFailure = { /* Keep cached values */ }
+                                        )
+                                    } catch (networkError: Exception) {
+                                        // Keep cached values - graceful degradation
+                                        com.application.motium.MotiumApplication.logger.w(
+                                            "Network error, using cached license data: ${networkError.message}",
+                                            "AccountDetailsScreen"
+                                        )
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                com.application.motium.MotiumApplication.logger.e(
+                                    "Error loading license: ${e.message}",
+                                    "AccountDetailsScreen",
+                                    e
+                                )
+                            }
                         }
                     }
                 },
@@ -156,26 +176,43 @@ fun AccountDetailsScreen(
         }
     }
 
-    // Helper function to reload license data
+    // Helper function to reload license data - cache-first pattern
     fun reloadLicenseData() {
         coroutineScope.launch(Dispatchers.IO) {
             proAccountId?.let { proId ->
-                // Reload license for this account
-                val licenseResult = licenseRepository.getLicenseForAccount(proId, accountId)
-                licenseResult.fold(
-                    onSuccess = { userLicense -> license = userLicense },
-                    onFailure = { license = null }
-                )
+                try {
+                    // Try local cache first
+                    license = licenseCacheManager.getLicenseForAccount(proId, accountId).first()
+                    availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proId)
+                    availableLicensesCount = availableLicenses.size
 
-                // Reload available licenses count
-                val availableResult = licenseRepository.getAvailableLicenses(proId)
-                availableResult.fold(
-                    onSuccess = { licenses ->
-                        availableLicenses = licenses
-                        availableLicensesCount = licenses.size
-                    },
-                    onFailure = { /* Keep defaults */ }
-                )
+                    // Try refreshing from remote (with graceful fallback)
+                    try {
+                        val licenseResult = licenseRemoteDataSource.getLicenseForAccount(proId, accountId)
+                        license = licenseResult.getOrNull()
+
+                        val availableResult = licenseRemoteDataSource.getAvailableLicenses(proId)
+                        availableResult.fold(
+                            onSuccess = { licenses ->
+                                availableLicenses = licenses
+                                availableLicensesCount = licenses.size
+                            },
+                            onFailure = { /* Keep cached values */ }
+                        )
+                    } catch (networkError: Exception) {
+                        // Keep cached values - graceful degradation
+                        com.application.motium.MotiumApplication.logger.w(
+                            "Network error on reload, keeping cached data: ${networkError.message}",
+                            "AccountDetailsScreen"
+                        )
+                    }
+                } catch (e: Exception) {
+                    com.application.motium.MotiumApplication.logger.e(
+                        "Error reloading license: ${e.message}",
+                        "AccountDetailsScreen",
+                        e
+                    )
+                }
             }
         }
     }
@@ -256,6 +293,7 @@ fun AccountDetailsScreen(
                         item {
                             ProfileSection(
                                 user = user!!,
+                                license = license,
                                 cardColor = cardColor,
                                 textColor = textColor,
                                 textSecondaryColor = textSecondaryColor
@@ -298,7 +336,7 @@ fun AccountDetailsScreen(
                                     license?.let { lic ->
                                         proAccountId?.let { proId ->
                                             coroutineScope.launch(Dispatchers.IO) {
-                                                val result = licenseRepository.cancelUnlinkRequest(lic.id, proId)
+                                                val result = licenseRemoteDataSource.cancelUnlinkRequest(lic.id, proId)
                                                 result.fold(
                                                     onSuccess = {
                                                         successMessage = "Demande de deliaison annulee"
@@ -316,13 +354,15 @@ fun AccountDetailsScreen(
                         }
                     }
 
-                    // Bottom button - View Trips (with padding for bottom nav bar)
-                    Box(
+                    // Bottom buttons - View Trips and View Vehicles (with padding for bottom nav bar)
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(backgroundColor)
-                            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp)
+                            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        // View Trips button
                         Button(
                             onClick = { onNavigateToUserTrips(accountId) },
                             modifier = Modifier
@@ -333,9 +373,43 @@ fun AccountDetailsScreen(
                             ),
                             shape = RoundedCornerShape(28.dp)
                         ) {
+                            Icon(
+                                Icons.Default.Route,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 "Voir les trajets",
                                 color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                        }
+
+                        // View Vehicles button
+                        OutlinedButton(
+                            onClick = { onNavigateToUserVehicles(accountId) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MotiumPrimary
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, MotiumPrimary),
+                            shape = RoundedCornerShape(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.DirectionsCar,
+                                contentDescription = null,
+                                tint = MotiumPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Voir les véhicules ($associatedVehicles)",
+                                color = MotiumPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp
                             )
@@ -354,7 +428,7 @@ fun AccountDetailsScreen(
             onSelectLicense = { selectedLicense ->
                 proAccountId?.let { proId ->
                     coroutineScope.launch(Dispatchers.IO) {
-                        val result = licenseRepository.assignLicenseToAccount(
+                        val result = licenseRemoteDataSource.assignLicenseToAccount(
                             licenseId = selectedLicense.id,
                             proAccountId = proId,
                             linkedAccountId = accountId
@@ -385,7 +459,7 @@ fun AccountDetailsScreen(
                 proAccountId?.let { proId ->
                     isUnlinking = true
                     coroutineScope.launch(Dispatchers.IO) {
-                        val result = licenseRepository.requestUnlink(license!!.id, proId)
+                        val result = licenseRemoteDataSource.requestUnlink(license!!.id, proId)
                         result.fold(
                             onSuccess = {
                                 isUnlinking = false
@@ -416,6 +490,7 @@ fun AccountDetailsScreen(
 @Composable
 private fun ProfileSection(
     user: LinkedUserDto,
+    license: License?,
     cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color
@@ -450,21 +525,27 @@ private fun ProfileSection(
             color = textColor
         )
 
-        // Employee ID (using shortened userId)
+        // Invitation status (instead of ID)
+        val invitationStatusText = when (user.status) {
+            LinkStatus.ACTIVE -> "Invitation acceptée"
+            LinkStatus.PENDING -> "Invitation en attente"
+            LinkStatus.INACTIVE -> "Compte inactif"
+            LinkStatus.REVOKED -> "Accès révoqué"
+            LinkStatus.PENDING_ACTIVATION -> "Activation en cours"
+        }
         Text(
-            text = "ID: ${user.userId.take(8).uppercase()}",
+            text = invitationStatusText,
             style = MaterialTheme.typography.bodyMedium,
             color = textSecondaryColor
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Status badge
-        val (statusColor, statusText, statusIcon) = when (user.status) {
-            LinkStatus.ACTIVE -> Triple(ValidatedGreen, "Actif", Icons.Default.CheckCircle)
-            LinkStatus.PENDING -> Triple(PendingOrange, "En attente", Icons.Default.HourglassEmpty)
-            LinkStatus.INACTIVE -> Triple(TextSecondaryDark, "Inactif", Icons.Default.LinkOff)
-            LinkStatus.REVOKED -> Triple(ErrorRed, "Révoqué", Icons.Default.Cancel)
+        // Status badge based on license assignment
+        val (statusColor, statusText) = when {
+            license == null -> Pair(TextSecondaryDark, "Sans licence")
+            license.isPendingUnlink -> Pair(PendingOrange, "Déliaison en cours")
+            else -> Pair(ValidatedGreen, "Licencié")
         }
 
         Surface(
@@ -923,6 +1004,8 @@ private fun AssignLicenseFromAccountDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         title = {
             Text(
                 "Selectionner une licence",

@@ -11,6 +11,7 @@ import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.*
 import com.application.motium.service.ActivityRecognitionService
+import com.application.motium.worker.ActivityRecognitionHealthWorker
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
@@ -122,16 +123,19 @@ class WorkScheduleViewModel(
                             // Mode toujours actif: s'assurer que le service tourne
                             tripRepository.setAutoTrackingEnabled(true)
                             ActivityRecognitionService.startService(context)
+                            ActivityRecognitionHealthWorker.schedule(context)
                             MotiumApplication.logger.i("ALWAYS mode: Auto-tracking service started", "WorkScheduleViewModel")
                         }
                         TrackingMode.WORK_HOURS_ONLY -> {
                             // Mode horaires pro: démarrer le worker
                             AutoTrackingScheduleWorker.schedule(context)
                             AutoTrackingScheduleWorker.runNow(context)
+                            ActivityRecognitionHealthWorker.schedule(context)
                             MotiumApplication.logger.i("WORK_HOURS_ONLY mode: Worker started", "WorkScheduleViewModel")
                         }
                         TrackingMode.DISABLED -> {
                             // Mode désactivé: ne rien faire
+                            ActivityRecognitionHealthWorker.cancel(context)
                             MotiumApplication.logger.i("DISABLED mode: Manual control", "WorkScheduleViewModel")
                         }
                     }
@@ -352,32 +356,35 @@ class WorkScheduleViewModel(
                 AutoTrackingScheduleWorker.cancel(context)
                 tripRepository.setAutoTrackingEnabled(true)
                 ActivityRecognitionService.startService(context)
+                ActivityRecognitionHealthWorker.schedule(context)
 
                 MotiumApplication.logger.i(
-                    "✅ ALWAYS mode activated: Auto-tracking permanently enabled",
+                    "ALWAYS mode activated: Auto-tracking permanently enabled",
                     "WorkScheduleViewModel"
                 )
             }
             TrackingMode.WORK_HOURS_ONLY -> {
                 // Mode automatique: démarrer le worker qui vérifie périodiquement les horaires
                 AutoTrackingScheduleWorker.schedule(context)
+                ActivityRecognitionHealthWorker.schedule(context)
 
                 // Vérifier immédiatement si on est dans les horaires
                 AutoTrackingScheduleWorker.runNow(context)
 
                 MotiumApplication.logger.i(
-                    "✅ WORK_HOURS_ONLY mode activated: Auto-tracking managed by work schedule",
+                    "WORK_HOURS_ONLY mode activated: Auto-tracking managed by work schedule",
                     "WorkScheduleViewModel"
                 )
             }
             TrackingMode.DISABLED -> {
                 // Mode désactivé: arrêter le worker, arrêter le service
                 AutoTrackingScheduleWorker.cancel(context)
+                ActivityRecognitionHealthWorker.cancel(context)
                 tripRepository.setAutoTrackingEnabled(false)
                 ActivityRecognitionService.stopService(context)
 
                 MotiumApplication.logger.i(
-                    "✅ DISABLED mode activated: User has manual control",
+                    "DISABLED mode activated: User has manual control",
                     "WorkScheduleViewModel"
                 )
             }
@@ -385,12 +392,13 @@ class WorkScheduleViewModel(
     }
 
     /**
-     * Vérifie si l'utilisateur est dans ses horaires pro maintenant
+     * Vérifie si l'utilisateur est dans ses horaires pro maintenant (offline-first).
+     * Uses cached RPC result or falls back to local calculation.
      */
     fun isInWorkHours(userId: String, callback: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val inWorkHours = workScheduleRepository.isInWorkHours(userId)
+                val inWorkHours = workScheduleRepository.isInWorkHoursOfflineFirst(userId)
                 callback(inWorkHours)
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error checking work hours: ${e.message}", "WorkScheduleViewModel", e)
@@ -400,12 +408,13 @@ class WorkScheduleViewModel(
     }
 
     /**
-     * Vérifie si l'auto-tracking doit être actif maintenant
+     * Vérifie si l'auto-tracking doit être actif maintenant (offline-first).
+     * Uses cached RPC result or falls back to local calculation.
      */
     fun shouldAutotrack(userId: String, callback: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                val shouldTrack = workScheduleRepository.shouldAutotrack(userId)
+                val shouldTrack = workScheduleRepository.shouldAutotrackOfflineFirst(userId)
                 callback(shouldTrack)
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error checking should autotrack: ${e.message}", "WorkScheduleViewModel", e)

@@ -30,10 +30,11 @@ data class User(
 
 /** Statut de la liaison avec un compte Pro */
 enum class LinkStatus {
-    PENDING,   // Invitation envoyée, en attente d'acceptation
-    ACTIVE,    // Liaison active, compte lié et fonctionnel
-    INACTIVE,  // Utilisateur s'est délié (conserve contact mais perd accès aux trajets)
-    REVOKED    // Liaison révoquée par le Pro
+    PENDING,             // Invitation envoyée, en attente d'acceptation
+    PENDING_ACTIVATION,  // Activation en cours (offline-first, en attente de sync)
+    ACTIVE,              // Liaison active, compte lié et fonctionnel
+    INACTIVE,            // Utilisateur s'est délié (conserve contact mais perd accès aux trajets)
+    REVOKED              // Liaison révoquée par le Pro
 }
 
 data class Subscription(

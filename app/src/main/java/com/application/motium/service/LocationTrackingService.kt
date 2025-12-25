@@ -2055,7 +2055,7 @@ class LocationTrackingService : Service() {
     private suspend fun determineTripType(): String {
         return try {
             currentUserId?.let { userId ->
-                val isWorkHours = workScheduleRepository.isInWorkHours(userId)
+                val isWorkHours = workScheduleRepository.isInWorkHoursOfflineFirst(userId)
                 val tripType = if (isWorkHours) "PROFESSIONAL" else "PERSONAL"
                 MotiumApplication.logger.i(
                     "Trip type determined: $tripType (isWorkHours=$isWorkHours)",

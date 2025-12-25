@@ -61,8 +61,8 @@ class AutoTrackingScheduleWorker(
                     }
                 }
                 TrackingMode.WORK_HOURS_ONLY -> {
-                    // Mode horaires pro: vérifier si on est dans les horaires
-                    val inWorkHours = workScheduleRepository.isInWorkHours(userId)
+                    // Mode horaires pro: vérifier si on est dans les horaires (offline-first)
+                    val inWorkHours = workScheduleRepository.isInWorkHoursOfflineFirst(userId)
 
                     if (currentlyEnabled != inWorkHours) {
                         tripRepository.setAutoTrackingEnabled(inWorkHours)

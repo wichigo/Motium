@@ -161,6 +161,7 @@ fun LinkStatusBadge(
         LinkStatus.PENDING -> "En attente" to Color(0xFFF59E0B)
         LinkStatus.INACTIVE -> "Inactif" to Color(0xFF6B7280)
         LinkStatus.REVOKED -> "Révoqué" to Color(0xFFEF4444)
+        LinkStatus.PENDING_ACTIVATION -> "Activation..." to Color(0xFFF59E0B)
     }
 
     Surface(
@@ -340,6 +341,8 @@ fun UnlinkConfirmationDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         icon = {
             Icon(
                 imageVector = Icons.Default.LinkOff,
@@ -384,6 +387,8 @@ fun LinkActivationDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         icon = {
             Icon(
                 imageVector = Icons.Default.Business,
@@ -429,6 +434,8 @@ fun LinkActivationSuccessDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         icon = {
             Icon(
                 imageVector = Icons.Default.Business,

@@ -31,6 +31,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     private val client = SupabaseClient.client
     private val postgres = client.postgrest
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
+    private val rpcCacheManager by lazy { RpcCacheManager.getInstance(context) }
 
     // Room database for offline-first caching
     private val database = MotiumDatabase.getInstance(context)
@@ -424,6 +425,151 @@ class WorkScheduleRepository private constructor(private val context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error checking should autotrack: ${e.message}", "WorkScheduleRepository", e)
             false
+        }
+    }
+
+    // ==================== OFFLINE-FIRST RPC METHODS ====================
+
+    /**
+     * Offline-first version of isInWorkHours.
+     * Tries RPC first, caches result, falls back to local calculation on failure.
+     *
+     * @param userId User ID to check
+     * @return true if currently in work hours, false otherwise
+     */
+    suspend fun isInWorkHoursOfflineFirst(userId: String): Boolean = withContext(Dispatchers.IO) {
+        rpcCacheManager.withCache(
+            key = "is_in_work_hours_$userId",
+            ttlMinutes = 15, // Cache for 15 minutes
+            rpcCall = {
+                // Try RPC
+                val response = postgres.rpc("is_in_work_hours", RpcUserIdParam(userId))
+                val result = parseRpcBooleanResponse(response.data)
+                MotiumApplication.logger.d("RPC is_in_work_hours: $result", "WorkScheduleRepository")
+                result
+            },
+            fallback = {
+                // Fallback to local calculation
+                calculateIsInWorkHoursLocally(userId)
+            }
+        )
+    }
+
+    /**
+     * Offline-first version of shouldAutotrack.
+     * Tries RPC first, caches result, falls back to local calculation on failure.
+     *
+     * @param userId User ID to check
+     * @return true if auto-tracking should be active, false otherwise
+     */
+    suspend fun shouldAutotrackOfflineFirst(userId: String): Boolean = withContext(Dispatchers.IO) {
+        rpcCacheManager.withCache(
+            key = "should_autotrack_$userId",
+            ttlMinutes = 15, // Cache for 15 minutes
+            rpcCall = {
+                // Try RPC
+                val response = postgres.rpc("should_autotrack", RpcUserIdParam(userId))
+                val result = parseRpcBooleanResponse(response.data)
+                MotiumApplication.logger.d("RPC should_autotrack: $result", "WorkScheduleRepository")
+                result
+            },
+            fallback = {
+                // Fallback to local calculation
+                calculateShouldAutotrackLocally(userId)
+            }
+        )
+    }
+
+    /**
+     * Calculate if user is currently in work hours using local cached schedules.
+     * This is the offline fallback for isInWorkHours RPC.
+     */
+    private suspend fun calculateIsInWorkHoursLocally(userId: String): Boolean {
+        try {
+            val schedules = workScheduleDao.getWorkSchedulesForUser(userId)
+            if (schedules.isEmpty()) {
+                MotiumApplication.logger.d("No work schedules found locally, not in work hours", "WorkScheduleRepository")
+                return false
+            }
+
+            val now = java.util.Calendar.getInstance()
+            val currentDayOfWeek = (now.get(java.util.Calendar.DAY_OF_WEEK) - 1) // Convert to 0-6
+            val currentHour = now.get(java.util.Calendar.HOUR_OF_DAY)
+            val currentMinute = now.get(java.util.Calendar.MINUTE)
+
+            // Check if any schedule matches current day and time
+            val inWorkHours = schedules.any { schedule ->
+                if (schedule.dayOfWeek != currentDayOfWeek || !schedule.isActive) {
+                    return@any false
+                }
+
+                val isInRange = if (schedule.isOvernight) {
+                    // Overnight schedule: start time to 23:59 OR 00:00 to end time
+                    val afterStart = (currentHour > schedule.startHour) ||
+                            (currentHour == schedule.startHour && currentMinute >= schedule.startMinute)
+                    val beforeEnd = (currentHour < schedule.endHour) ||
+                            (currentHour == schedule.endHour && currentMinute <= schedule.endMinute)
+                    afterStart || beforeEnd
+                } else {
+                    // Normal schedule: start time to end time
+                    val afterStart = (currentHour > schedule.startHour) ||
+                            (currentHour == schedule.startHour && currentMinute >= schedule.startMinute)
+                    val beforeEnd = (currentHour < schedule.endHour) ||
+                            (currentHour == schedule.endHour && currentMinute <= schedule.endMinute)
+                    afterStart && beforeEnd
+                }
+
+                isInRange
+            }
+
+            MotiumApplication.logger.d(
+                "Local calculation: isInWorkHours=$inWorkHours (day=$currentDayOfWeek, time=$currentHour:$currentMinute)",
+                "WorkScheduleRepository"
+            )
+            return inWorkHours
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error calculating work hours locally: ${e.message}", "WorkScheduleRepository", e)
+            return false
+        }
+    }
+
+    /**
+     * Calculate if auto-tracking should be active using local cached settings and schedules.
+     * This is the offline fallback for shouldAutotrack RPC.
+     */
+    private suspend fun calculateShouldAutotrackLocally(userId: String): Boolean {
+        try {
+            // Get auto-tracking settings from cache
+            val settings = workScheduleDao.getAutoTrackingSettings(userId)
+            if (settings == null) {
+                MotiumApplication.logger.d("No auto-tracking settings found locally, defaulting to false", "WorkScheduleRepository")
+                return false
+            }
+
+            val shouldTrack = when (settings.trackingMode) {
+                "ALWAYS" -> {
+                    MotiumApplication.logger.d("Local: ALWAYS mode, should track", "WorkScheduleRepository")
+                    true
+                }
+                "WORK_HOURS_ONLY" -> {
+                    val inWorkHours = calculateIsInWorkHoursLocally(userId)
+                    MotiumApplication.logger.d("Local: WORK_HOURS_ONLY mode, in work hours=$inWorkHours", "WorkScheduleRepository")
+                    inWorkHours
+                }
+                "DISABLED" -> {
+                    MotiumApplication.logger.d("Local: DISABLED mode, should not track", "WorkScheduleRepository")
+                    false
+                }
+                else -> {
+                    MotiumApplication.logger.w("Unknown tracking mode: ${settings.trackingMode}, defaulting to false", "WorkScheduleRepository")
+                    false
+                }
+            }
+
+            return shouldTrack
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error calculating should autotrack locally: ${e.message}", "WorkScheduleRepository", e)
+            return false
         }
     }
 
