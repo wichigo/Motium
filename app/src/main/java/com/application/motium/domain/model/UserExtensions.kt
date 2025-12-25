@@ -51,5 +51,6 @@ fun User.getSubscriptionStatusMessage(): String {
         SubscriptionType.EXPIRED -> "Essai terminé - Abonnez-vous pour continuer"
         SubscriptionType.PREMIUM -> "Premium - Trajets illimités"
         SubscriptionType.LIFETIME -> "À vie - Trajets illimités"
+        SubscriptionType.LICENSED -> "Licence Pro - Trajets illimités"
     }
 }

@@ -4,17 +4,24 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
+import com.application.motium.data.preferences.ProLicenseCache
 import com.application.motium.data.security.DeviceFingerprintManager
 import com.application.motium.data.supabase.DeviceFingerprintRepository
+import com.application.motium.data.supabase.EmailRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.data.supabase.PhoneVerificationRepository
+import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.domain.model.*
 import com.application.motium.domain.repository.AuthRepository
 import com.application.motium.service.SupabaseConnectionService
 import com.application.motium.utils.CredentialManagerHelper
 import com.application.motium.utils.GoogleSignInHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class AuthViewModel(
     private val context: Context,
@@ -22,8 +29,17 @@ class AuthViewModel(
     private val googleSignInHelper: GoogleSignInHelper? = null,
     private val deviceFingerprintRepository: DeviceFingerprintRepository = DeviceFingerprintRepository.getInstance(context),
     private val phoneVerificationRepository: PhoneVerificationRepository = PhoneVerificationRepository.getInstance(context),
-    private val deviceFingerprintManager: DeviceFingerprintManager = DeviceFingerprintManager.getInstance(context)
+    private val deviceFingerprintManager: DeviceFingerprintManager = DeviceFingerprintManager.getInstance(context),
+    private val emailRepository: EmailRepository = EmailRepository.getInstance(context),
+    private val proAccountRemoteDataSource: ProAccountRemoteDataSource = ProAccountRemoteDataSource.getInstance(context),
+    private val licenseRemoteDataSource: LicenseRemoteDataSource = LicenseRemoteDataSource.getInstance(context),
+    private val proLicenseCache: ProLicenseCache = ProLicenseCache.getInstance(context)
 ) : ViewModel() {
+
+    companion object {
+        private const val TAG = "AuthViewModel"
+        private const val LICENSE_CHECK_TIMEOUT_MS = 10_000L // 10 seconds timeout
+    }
 
     val authState: StateFlow<AuthState> = authRepository.authState
         .stateIn(
@@ -37,6 +53,218 @@ class AuthViewModel(
 
     private val _registerState = MutableStateFlow(RegisterUiState())
     val registerState: StateFlow<RegisterUiState> = _registerState.asStateFlow()
+
+    private val _proLicenseState = MutableStateFlow<ProLicenseState>(ProLicenseState.Idle)
+    val proLicenseState: StateFlow<ProLicenseState> = _proLicenseState.asStateFlow()
+
+    /**
+     * Check if a Pro user has a valid license assigned.
+     * Uses CACHE-FIRST approach for immediate navigation, then refreshes in background.
+     *
+     * Flow:
+     * 1. IMMEDIATELY check cache - if valid Licensed, navigate instantly (no loading state)
+     * 2. Launch background network validation to refresh cache
+     * 3. Only update state from network if it's DIFFERENT from cache
+     * 4. Never override Licensed cache with network failure - require explicit unlicense
+     */
+    fun checkProLicense(userId: String) {
+        viewModelScope.launch {
+            // === STEP 1: CACHE-FIRST - Check cache IMMEDIATELY before any loading ===
+            val cachedState = proLicenseCache.getCachedState(userId)
+            val cacheValid = cachedState?.isValid() == true
+
+            if (cacheValid && cachedState.isLicensed && cachedState.proAccountId != null) {
+                // Cache says Licensed - navigate immediately, no Loading state shown
+                MotiumApplication.logger.i(
+                    "✅ Cache-first: Licensed (cached ${cachedState.getAgeHours()}h ago, proAccountId=${cachedState.proAccountId})",
+                    TAG
+                )
+                _proLicenseState.value = ProLicenseState.Licensed
+
+                // Continue to refresh cache in background (non-blocking)
+                refreshLicenseInBackground(userId)
+                return@launch
+            }
+
+            // Cache not valid or not licensed - need to check network
+            // Show loading only when we don't have a valid Licensed cache
+            _proLicenseState.value = ProLicenseState.Loading
+            MotiumApplication.logger.d("Cache miss or not licensed - checking network (cacheValid=$cacheValid)", TAG)
+
+            // === STEP 2: NETWORK CHECK with timeout ===
+            val networkResult = try {
+                withTimeoutOrNull(LICENSE_CHECK_TIMEOUT_MS) {
+                    checkProLicenseFromNetwork(userId)
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("License check exception: ${e.message}", TAG, e)
+                null
+            }
+
+            when (networkResult) {
+                is LicenseCheckResult.Licensed -> {
+                    // Cache and return success
+                    proLicenseCache.saveLicenseState(
+                        userId = userId,
+                        isLicensed = true,
+                        proAccountId = networkResult.proAccountId
+                    )
+                    _proLicenseState.value = ProLicenseState.Licensed
+                }
+                is LicenseCheckResult.NotLicensed -> {
+                    // Network confirms not licensed - update cache and state
+                    proLicenseCache.saveLicenseState(
+                        userId = userId,
+                        isLicensed = false,
+                        proAccountId = networkResult.proAccountId
+                    )
+                    _proLicenseState.value = ProLicenseState.NotLicensed
+                }
+                is LicenseCheckResult.NoProAccount -> {
+                    // No pro account found - BUT check if we have a stale cache first
+                    // This handles the case where network sync is incomplete
+                    if (cachedState != null && cachedState.isLicensed) {
+                        // We had a Licensed cache but network says no account - trust cache temporarily
+                        MotiumApplication.logger.w(
+                            "Network says NoProAccount but cache says Licensed - trusting cache (possible sync issue)",
+                            TAG
+                        )
+                        _proLicenseState.value = ProLicenseState.Licensed
+                        // Don't update cache - let it expire naturally or be updated by successful network call
+                    } else {
+                        // No cache or cache says not licensed - trust network
+                        proLicenseCache.saveLicenseState(
+                            userId = userId,
+                            isLicensed = false
+                        )
+                        _proLicenseState.value = ProLicenseState.NoProAccount
+                    }
+                }
+                null -> {
+                    // Network failed or timed out - try cache (even stale cache is better than error)
+                    handleNetworkFailure(userId)
+                }
+            }
+        }
+    }
+
+    /**
+     * Refresh license status in background without affecting current state.
+     * Only updates cache and state if result differs from current.
+     */
+    private fun refreshLicenseInBackground(userId: String) {
+        viewModelScope.launch {
+            try {
+                val networkResult = withTimeoutOrNull(LICENSE_CHECK_TIMEOUT_MS) {
+                    checkProLicenseFromNetwork(userId)
+                }
+
+                when (networkResult) {
+                    is LicenseCheckResult.Licensed -> {
+                        // Refresh cache with latest data
+                        proLicenseCache.saveLicenseState(
+                            userId = userId,
+                            isLicensed = true,
+                            proAccountId = networkResult.proAccountId
+                        )
+                        MotiumApplication.logger.d("Background refresh: License confirmed", TAG)
+                    }
+                    is LicenseCheckResult.NotLicensed -> {
+                        // License was revoked - update state and cache
+                        MotiumApplication.logger.w("Background refresh: License REVOKED - updating state", TAG)
+                        proLicenseCache.saveLicenseState(
+                            userId = userId,
+                            isLicensed = false,
+                            proAccountId = networkResult.proAccountId
+                        )
+                        _proLicenseState.value = ProLicenseState.NotLicensed
+                    }
+                    is LicenseCheckResult.NoProAccount -> {
+                        // Pro account gone - this is unusual, log but don't immediately kick user out
+                        MotiumApplication.logger.w(
+                            "Background refresh: No pro account found - keeping current state",
+                            TAG
+                        )
+                        // Don't update cache - might be a temporary network/sync issue
+                    }
+                    null -> {
+                        MotiumApplication.logger.d("Background refresh: Network unavailable", TAG)
+                    }
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.d("Background refresh failed: ${e.message}", TAG)
+            }
+        }
+    }
+
+    /**
+     * Perform network validation for pro license.
+     * Returns null if network call fails.
+     */
+    private suspend fun checkProLicenseFromNetwork(userId: String): LicenseCheckResult {
+        return withContext(Dispatchers.IO) {
+            val proAccount = proAccountRemoteDataSource.getProAccount(userId).getOrNull()
+            if (proAccount == null) {
+                MotiumApplication.logger.w("Pro account not found for user $userId", TAG)
+                return@withContext LicenseCheckResult.NoProAccount
+            }
+
+            val isLicensed = licenseRemoteDataSource.isOwnerLicensed(
+                proAccountId = proAccount.id,
+                ownerUserId = userId
+            ).getOrDefault(false)
+
+            if (isLicensed) {
+                MotiumApplication.logger.i("Pro user has license (network check)", TAG)
+                LicenseCheckResult.Licensed(proAccount.id)
+            } else {
+                MotiumApplication.logger.i("Pro user has no license (network check)", TAG)
+                LicenseCheckResult.NotLicensed(proAccount.id)
+            }
+        }
+    }
+
+    /**
+     * Handle network failure by falling back to cached license state.
+     * Only sets error state if no valid cache exists.
+     */
+    private fun handleNetworkFailure(userId: String) {
+        val cachedLicenseStatus = proLicenseCache.getValidCachedLicenseStatus(userId)
+
+        if (cachedLicenseStatus != null) {
+            // Use cached state
+            if (cachedLicenseStatus) {
+                MotiumApplication.logger.i("Using cached license state: LICENSED (network unavailable)", TAG)
+                _proLicenseState.value = ProLicenseState.Licensed
+            } else {
+                MotiumApplication.logger.i("Using cached license state: NOT LICENSED (network unavailable)", TAG)
+                _proLicenseState.value = ProLicenseState.NotLicensed
+            }
+        } else {
+            // No valid cache - set error state but don't kick user out
+            MotiumApplication.logger.w("License check failed and no valid cache - setting error state", TAG)
+            _proLicenseState.value = ProLicenseState.Error("Network unavailable. Please check your connection.")
+        }
+    }
+
+    /**
+     * Result of network license check.
+     */
+    private sealed class LicenseCheckResult {
+        data class Licensed(val proAccountId: String) : LicenseCheckResult()
+        data class NotLicensed(val proAccountId: String) : LicenseCheckResult()
+        data object NoProAccount : LicenseCheckResult()
+    }
+
+    /**
+     * Reset pro license state (e.g., on logout)
+     * Also clears the license cache to force re-validation on next login.
+     */
+    fun resetProLicenseState() {
+        _proLicenseState.value = ProLicenseState.Idle
+        proLicenseCache.clearCache()
+        MotiumApplication.logger.i("Pro license state and cache reset", TAG)
+    }
 
     fun signIn(email: String, password: String) {
         viewModelScope.launch {
@@ -178,6 +406,23 @@ class AuthViewModel(
                                     isLoading = false,
                                     isSuccess = true
                                 )
+
+                                // Send welcome email (non-blocking, fire-and-forget)
+                                viewModelScope.launch {
+                                    try {
+                                        emailRepository.sendWelcomeEmail(
+                                            email = email,
+                                            name = name,
+                                            accountType = if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
+                                        )
+                                    } catch (e: Exception) {
+                                        // Log but don't fail registration
+                                        MotiumApplication.logger.w(
+                                            "Failed to send welcome email: ${e.message}",
+                                            "AuthViewModel"
+                                        )
+                                    }
+                                }
 
                                 MotiumApplication.logger.i(
                                     "Registration with verification successful",
@@ -377,6 +622,23 @@ class AuthViewModel(
     fun resetRegisterState() {
         _registerState.value = RegisterUiState()
     }
+
+    /**
+     * Force le rafraîchissement de l'état d'authentification depuis Supabase.
+     * Utile après un paiement réussi pour mettre à jour le statut d'abonnement.
+     */
+    fun refreshAuthState(onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                authRepository.refreshAuthState()
+                MotiumApplication.logger.i("✅ Auth state refreshed", "AuthViewModel")
+                onComplete()
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("❌ Failed to refresh auth state: ${e.message}", "AuthViewModel", e)
+                onComplete()
+            }
+        }
+    }
 }
 
 data class LoginUiState(
@@ -399,3 +661,22 @@ data class RegisterUiState(
     val isSuccess: Boolean = false,
     val error: String? = null
 )
+
+/**
+ * State representing the license check status for Pro users.
+ * Used to determine if a Pro user has a valid license assigned.
+ */
+sealed class ProLicenseState {
+    /** Initial state before any check */
+    data object Idle : ProLicenseState()
+    /** License check in progress */
+    data object Loading : ProLicenseState()
+    /** Pro user has a valid license assigned */
+    data object Licensed : ProLicenseState()
+    /** Pro user exists but has no license assigned */
+    data object NotLicensed : ProLicenseState()
+    /** No pro account found for this user */
+    data object NoProAccount : ProLicenseState()
+    /** Error occurred during license check */
+    data class Error(val message: String?) : ProLicenseState()
+}

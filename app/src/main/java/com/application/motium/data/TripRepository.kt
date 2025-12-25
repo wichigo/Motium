@@ -6,7 +6,8 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.local.entities.toDataModel
 import com.application.motium.data.local.entities.toEntity
 import com.application.motium.data.supabase.SupabaseAuthRepository
-import com.application.motium.data.supabase.SupabaseTripRepository
+import com.application.motium.data.supabase.TripRemoteDataSource
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.domain.model.Trip as DomainTrip
 import com.application.motium.domain.model.TripType
 import com.application.motium.domain.model.LocationPoint
@@ -22,7 +23,9 @@ import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.*
 import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.preferences.ProLicenseCache
 import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.domain.model.UserRole
 import com.application.motium.utils.TripCalculator
 
 @Serializable
@@ -114,10 +117,11 @@ class TripRepository private constructor(context: Context) {
     // Garder SharedPreferences uniquement pour auto-tracking et migration
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
-    private val supabaseTripRepository = SupabaseTripRepository.getInstance(context)
+    private val tripRemoteDataSource = TripRemoteDataSource.getInstance(context)
     private val authRepository = SupabaseAuthRepository.getInstance(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
     private val vehicleRepository = VehicleRepository.getInstance(context)
+    private val proLicenseCache = ProLicenseCache.getInstance(context)
 
     // Migration automatique au premier lancement
     init {
@@ -267,11 +271,19 @@ class TripRepository private constructor(context: Context) {
 
             // SÉCURITÉ: Sauvegarder dans Room Database au lieu de SharedPreferences non chiffré
             if (userId != null) {
-                val tripEntity = tripWithUserId.toEntity(userId)
+                // OFFLINE-FIRST: Determine if this is a new trip or update
+                val isNewTrip = oldTrip == null
+
+                // OFFLINE-FIRST: Create entity with sync status
+                val tripEntity = tripWithUserId.toEntity(userId).copy(
+                    syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name,
+                    localUpdatedAt = System.currentTimeMillis(),
+                    needsSync = true
+                )
                 tripDao.insertTrip(tripEntity)
 
                 MotiumApplication.logger.i(
-                    "✅ Trip saved to Room Database: ${tripWithUserId.id}, ${tripWithUserId.getFormattedDistance()}, userId=$userId",
+                    "✅ Trip saved to Room Database: ${tripWithUserId.id}, ${tripWithUserId.getFormattedDistance()}, userId=$userId, syncStatus=PENDING_UPLOAD",
                     "TripRepository"
                 )
 
@@ -297,67 +309,38 @@ class TripRepository private constructor(context: Context) {
                 if (vehicleIdsToUpdate.isNotEmpty()) {
                     vehicleRepository.recalculateAndUpdateMultipleVehiclesMileage(vehicleIdsToUpdate)
                 }
+
+                // OFFLINE-FIRST: Queue operation for background sync instead of direct Supabase call
+                try {
+                    val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+                    syncManager.queueOperation(
+                        entityType = com.application.motium.data.local.entities.PendingOperationEntity.TYPE_TRIP,
+                        entityId = tripWithUserId.id,
+                        action = if (isNewTrip) {
+                            com.application.motium.data.local.entities.PendingOperationEntity.ACTION_CREATE
+                        } else {
+                            com.application.motium.data.local.entities.PendingOperationEntity.ACTION_UPDATE
+                        }
+                    )
+
+                    MotiumApplication.logger.i(
+                        "🔄 Trip queued for background sync: ${tripWithUserId.id} (${if (isNewTrip) "CREATE" else "UPDATE"})",
+                        "TripRepository"
+                    )
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e(
+                        "⚠️ Failed to queue trip for sync (will retry on next sync): ${e.message}",
+                        "TripRepository",
+                        e
+                    )
+                    // Don't fail the save - trip is still saved locally
+                }
             } else {
                 MotiumApplication.logger.w(
                     "⚠️ Cannot save trip - no userId available: ${tripWithUserId.id}",
                     "TripRepository"
                 )
                 return@withContext // Ne pas continuer sans userId
-            }
-
-            // SYNC OPTIMIZATION: Sync immédiat après création de trip
-            // Synchroniser ce trip spécifique immédiatement (pas besoin d'attendre 15 minutes)
-            try {
-                MotiumApplication.logger.i(
-                    "🔄 SYNC CHECK: Attempting to sync trip ${tripWithUserId.id} to Supabase\n" +
-                    "   Local user available: ${localUser != null}\n" +
-                    "   Resolved user ID: $userId\n" +
-                    "   Trip user ID: ${tripWithUserId.userId}\n" +
-                    "   Distance: ${tripWithUserId.getFormattedDistance()}\n" +
-                    "   Points: ${tripWithUserId.locations.size}",
-                    "TripRepository"
-                )
-
-                if (userId != null && tripWithUserId.userId != null) {
-                    val supabaseResult = supabaseTripRepository.saveTrip(tripWithUserId.toDomainTrip(userId), userId)
-                    if (supabaseResult.isSuccess) {
-                        MotiumApplication.logger.i("✅ Trip synced immediately to Supabase: ${tripWithUserId.id}", "TripRepository")
-
-                        // SYNC OPTIMIZATION: Marquer comme synchronisé après succès
-                        markTripsAsSynced(listOf(tripWithUserId.id))
-
-                        // SYNC OPTIMIZATION: Trigger sync rapide pour autres trips dirty (si présents)
-                        // Notification au SyncManager qu'un trip vient d'être créé
-                        com.application.motium.data.sync.SupabaseSyncManager.getInstance(appContext).forceSyncNow()
-                    } else {
-                        val error = supabaseResult.exceptionOrNull()
-                        MotiumApplication.logger.e(
-                            "❌ Failed to sync trip to Supabase: ${tripWithUserId.id}\n" +
-                            "   Error: ${error?.message}\n" +
-                            "   Stack trace: ${error?.stackTraceToString()?.take(500)}",
-                            "TripRepository",
-                            error
-                        )
-                    }
-                } else {
-                    MotiumApplication.logger.w(
-                        "⚠️ Cannot sync trip - No user ID available: ${tripWithUserId.id}\n" +
-                        "   Local user: ${localUser != null}\n" +
-                        "   Last user ID: ${prefs.getString(KEY_LAST_USER_ID, null)}\n" +
-                        "   Trip will sync when user authenticates\n" +
-                        "   Needs sync: ${tripWithUserId.needsSync}",
-                        "TripRepository"
-                    )
-                }
-            } catch (e: Exception) {
-                MotiumApplication.logger.e(
-                    "❌ Exception during trip sync to Supabase: ${e.message}\n" +
-                    "   Trip ID: ${tripWithUserId.id}\n" +
-                    "   Stack trace: ${e.stackTraceToString().take(500)}",
-                    "TripRepository",
-                    e
-                )
-                // Ne pas faire échouer la sauvegarde locale si Supabase échoue
             }
 
         } catch (e: Exception) {
@@ -378,6 +361,7 @@ class TripRepository private constructor(context: Context) {
      * Check if user can create a new trip based on subscription status.
      * TRIAL: Allowed while trial active
      * PREMIUM/LIFETIME: Always allowed
+     * LICENSED (Pro with license): Always allowed
      * EXPIRED: Not allowed
      */
     suspend fun canCreateTrip(): TripAccessCheckResult = withContext(Dispatchers.IO) {
@@ -385,7 +369,39 @@ class TripRepository private constructor(context: Context) {
             val user = localUserRepository.getLoggedInUser()
                 ?: return@withContext TripAccessCheckResult.Error("Utilisateur non connecté")
 
+            // PRIORITY 1: Check Pro license for Enterprise users
+            // This is critical because users.subscription_type may not be updated
+            // when a license is assigned via the licenses table
+            if (user.role == UserRole.ENTERPRISE) {
+                val cachedLicense = proLicenseCache.getCachedState(user.id)
+                if (cachedLicense != null && cachedLicense.isLicensed) {
+                    MotiumApplication.logger.d(
+                        "Pro user has valid license (cache: ${cachedLicense.getAgeHours()}h old) - allowing trip creation",
+                        "TripRepository"
+                    )
+                    return@withContext TripAccessCheckResult.Allowed(
+                        isInTrial = false,
+                        trialDaysRemaining = null
+                    )
+                }
+                // If no valid cache, fall through to check subscription
+                // (might be a newly licensed user without cache yet)
+            }
+
+            // PRIORITY 2: Check individual subscription (TRIAL/PREMIUM/LIFETIME)
             val subscription = user.subscription
+
+            // Also check if subscription_type is LICENSED (set after license assignment)
+            if (subscription.type == SubscriptionType.LICENSED) {
+                MotiumApplication.logger.d(
+                    "User has LICENSED subscription_type - allowing trip creation",
+                    "TripRepository"
+                )
+                return@withContext TripAccessCheckResult.Allowed(
+                    isInTrial = false,
+                    trialDaysRemaining = null
+                )
+            }
 
             if (subscription.hasValidAccess()) {
                 TripAccessCheckResult.Allowed(
@@ -571,23 +587,25 @@ class TripRepository private constructor(context: Context) {
                 vehicleRepository.recalculateAndUpdateVehicleMileage(vehicleId)
             }
 
-            // Supprimer de Supabase si l'utilisateur est connecté
-            // FIX RLS: Utiliser users.id depuis localUserRepository
+            // OFFLINE-FIRST: Queue delete operation for background sync instead of direct Supabase call
             try {
-                val localUser = localUserRepository.getLoggedInUser()
-                if (localUser != null) {
-                    val supabaseResult = supabaseTripRepository.deleteTrip(tripId, localUser.id)
-                    if (supabaseResult.isSuccess) {
-                        MotiumApplication.logger.i("Trip deleted from Supabase: $tripId", "TripRepository")
-                    } else {
-                        MotiumApplication.logger.w("Failed to delete trip from Supabase: $tripId", "TripRepository")
-                    }
-                } else {
-                    MotiumApplication.logger.i("User not authenticated, trip deleted locally only: $tripId", "TripRepository")
-                }
+                val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+                syncManager.queueDeleteOperation(
+                    entityType = com.application.motium.data.local.entities.PendingOperationEntity.TYPE_TRIP,
+                    entityId = tripId
+                )
+
+                MotiumApplication.logger.i(
+                    "🔄 Trip delete queued for background sync: $tripId",
+                    "TripRepository"
+                )
             } catch (e: Exception) {
-                MotiumApplication.logger.e("Error deleting trip from Supabase: ${e.message}", "TripRepository", e)
-                // Ne pas faire échouer la suppression locale si Supabase échoue
+                MotiumApplication.logger.e(
+                    "⚠️ Failed to queue trip delete for sync (will retry on next sync): ${e.message}",
+                    "TripRepository",
+                    e
+                )
+                // Don't fail the delete - trip is already deleted locally
             }
 
         } catch (e: Exception) {
@@ -658,7 +676,7 @@ class TripRepository private constructor(context: Context) {
                         "TripRepository"
                     )
 
-                    val result = supabaseTripRepository.syncTripsToSupabase(dirtyTrips.toDomainTripList(localUser.id), localUser.id)
+                    val result = tripRemoteDataSource.syncTripsToSupabase(dirtyTrips.toDomainTripList(localUser.id), localUser.id)
                     if (result.isSuccess) {
                         val syncedCount = result.getOrNull() ?: 0
                         MotiumApplication.logger.i("✅ Successfully synced $syncedCount trips to Supabase", "TripRepository")
@@ -848,7 +866,7 @@ class TripRepository private constructor(context: Context) {
             if (effectiveUserId != null) {
                 MotiumApplication.logger.i("🔄 Fetching trips from Supabase for user: $effectiveUserId", "TripRepository")
 
-                val result = supabaseTripRepository.getAllTrips(effectiveUserId)
+                val result = tripRemoteDataSource.getAllTrips(effectiveUserId)
                 if (result.isSuccess) {
                     val supabaseTrips = result.getOrNull() ?: emptyList()
                     MotiumApplication.logger.i("📥 Fetched ${supabaseTrips.size} trips from Supabase", "TripRepository")
@@ -955,6 +973,8 @@ class TripRepository private constructor(context: Context) {
             } else {
                 MotiumApplication.logger.w("⚠️ User not authenticated, skipping Supabase trip sync", "TripRepository")
             }
+        } catch (e: java.util.concurrent.CancellationException) {
+            // Normal cancellation (e.g., user navigated away) - don't log as error
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Error syncing trips from Supabase: ${e.message}", "TripRepository", e)
         }

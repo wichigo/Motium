@@ -203,6 +203,12 @@ private fun CurrentPlanBadge(subscriptionType: SubscriptionType) {
             icon = Icons.Default.Star,
             text = "Accès à vie"
         )
+        SubscriptionType.LICENSED -> BadgeInfo(
+            backgroundColor = MotiumGreen.copy(alpha = 0.1f),
+            contentColor = MotiumGreen,
+            icon = Icons.Default.Business,
+            text = "Licence Pro active"
+        )
     }
 
     Surface(

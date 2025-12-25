@@ -15,7 +15,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 /**
  * SubscriptionManager handles all Stripe payment and subscription logic.
@@ -32,26 +39,24 @@ class SubscriptionManager private constructor(private val context: Context) {
         private const val TAG = "SubscriptionManager"
 
         // ===== INDIVIDUAL PRICING (TTC - taxes incluses) =====
-        const val INDIVIDUAL_MONTHLY_PRICE = 5.00   // 5€ TTC/mois
-        const val INDIVIDUAL_LIFETIME_PRICE = 100.00 // 100€ TTC one-time
+        const val INDIVIDUAL_MONTHLY_PRICE = 4.99    // 4.99€ TTC/mois
+        const val INDIVIDUAL_LIFETIME_PRICE = 120.00 // 120€ TTC one-time
 
-        // ===== PRO LICENSE PRICING (HT - hors taxes) =====
-        const val PRO_LICENSE_MONTHLY_PRICE_HT = 5.00   // 5€ HT/mois par licence
-        const val PRO_LICENSE_LIFETIME_PRICE_HT = 100.00 // 100€ HT one-time par licence
+        // ===== PRO LICENSE PRICING (TTC - taxes incluses) =====
+        const val PRO_LICENSE_MONTHLY_PRICE = 6.00   // 6.00€ TTC/mois par licence (5.00€ HT)
+        const val PRO_LICENSE_LIFETIME_PRICE = 144.00 // 144€ TTC one-time par licence (120€ HT)
 
-        // ===== STRIPE PRICE IDs - TODO: Replace with real Stripe price IDs =====
-        // Individual
-        const val PRICE_ID_INDIVIDUAL_MONTHLY = "price_individual_monthly_placeholder"
-        const val PRICE_ID_INDIVIDUAL_LIFETIME = "price_individual_lifetime_placeholder"
-        // Pro licenses
-        const val PRICE_ID_PRO_LICENSE_MONTHLY = "price_pro_license_monthly_placeholder"
-        const val PRICE_ID_PRO_LICENSE_LIFETIME = "price_pro_license_lifetime_placeholder"
+        // ===== STRIPE PRODUCT IDs (Test Mode) =====
+        const val PRODUCT_INDIVIDUAL_MONTHLY = "prod_TdmBT4sDscYZer"
+        const val PRODUCT_INDIVIDUAL_LIFETIME = "prod_Tdm94ZsJEGevzK"
+        const val PRODUCT_PRO_LICENSE_MONTHLY = "prod_Tdm6mAbHVHJLxz"
+        const val PRODUCT_PRO_LICENSE_LIFETIME = "prod_TdmC9Jq3tCk94E"
 
         // Legacy constants (for backward compatibility)
-        const val PRICE_ID_PREMIUM_MONTHLY = PRICE_ID_INDIVIDUAL_MONTHLY
-        const val PRICE_ID_LIFETIME = PRICE_ID_INDIVIDUAL_LIFETIME
         const val PREMIUM_MONTHLY_PRICE = INDIVIDUAL_MONTHLY_PRICE
         const val LIFETIME_PRICE = INDIVIDUAL_LIFETIME_PRICE
+        const val PRO_LICENSE_MONTHLY_PRICE_HT = 5.00   // 6.00 TTC / 1.20 = 5.00 HT
+        const val PRO_LICENSE_LIFETIME_PRICE_HT = 120.00 // 144 TTC / 1.20 = 120 HT
 
         @Volatile
         private var instance: SubscriptionManager? = null
@@ -91,10 +96,68 @@ class SubscriptionManager private constructor(private val context: Context) {
      */
     @Serializable
     data class PaymentIntentResponse(
-        val client_secret: String,
-        val customer_id: String,
-        val ephemeral_key: String? = null
+        @SerialName("client_secret") val clientSecret: String,
+        @SerialName("customer_id") val customerId: String,
+        @SerialName("ephemeral_key") val ephemeralKey: String? = null,
+        @SerialName("payment_intent_id") val paymentIntentId: String? = null,
+        @SerialName("subscription_id") val subscriptionId: String? = null,
+        @SerialName("product_id") val productId: String? = null,
+        @SerialName("amount_cents") val amountCents: Int? = null
     )
+
+    /**
+     * Data class for error response from backend
+     */
+    @Serializable
+    private data class ErrorResponse(
+        val error: String
+    )
+
+    /**
+     * Request body for create-payment-intent Edge Function
+     */
+    @Serializable
+    private data class CreatePaymentIntentRequest(
+        val userId: String? = null,
+        val proAccountId: String? = null,
+        val email: String,
+        val priceType: String,
+        val quantity: Int = 1
+    )
+
+    /**
+     * Request body for confirm-payment-intent Edge Function (deferred payment)
+     */
+    @Serializable
+    private data class ConfirmPaymentIntentRequest(
+        @SerialName("payment_method_id") val paymentMethodId: String,
+        @SerialName("user_id") val userId: String? = null,
+        @SerialName("pro_account_id") val proAccountId: String? = null,
+        @SerialName("price_type") val priceType: String,
+        val quantity: Int = 1
+    )
+
+    /**
+     * Response from confirm-payment-intent Edge Function
+     */
+    @Serializable
+    data class ConfirmPaymentResponse(
+        @SerialName("client_secret") val clientSecret: String,
+        @SerialName("payment_intent_id") val paymentIntentId: String? = null,
+        val status: String? = null
+    )
+
+    // HTTP client for Edge Function calls
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
     /**
      * Sealed class representing payment states
@@ -102,7 +165,12 @@ class SubscriptionManager private constructor(private val context: Context) {
     sealed class PaymentState {
         data object Idle : PaymentState()
         data object Loading : PaymentState()
-        data class Ready(val clientSecret: String, val customerId: String) : PaymentState()
+        data class Ready(
+            val clientSecret: String,
+            val customerId: String,
+            val ephemeralKey: String?,
+            val amountCents: Int?
+        ) : PaymentState()
         data class Success(val subscriptionType: SubscriptionType) : PaymentState()
         data class Error(val message: String) : PaymentState()
         data object Cancelled : PaymentState()
@@ -182,7 +250,7 @@ class SubscriptionManager private constructor(private val context: Context) {
                     }
                 }
                 SubscriptionType.EXPIRED -> TrialStatus.Expired
-                SubscriptionType.PREMIUM, SubscriptionType.LIFETIME -> {
+                SubscriptionType.PREMIUM, SubscriptionType.LIFETIME, SubscriptionType.LICENSED -> {
                     TrialStatus.Subscribed(subscription.type)
                 }
             }
@@ -249,38 +317,53 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
-     * Initialize payment for subscription upgrade
-     *
-     * Note: This requires a backend endpoint to create PaymentIntent securely.
-     * The backend should:
-     * 1. Create or retrieve Stripe customer
-     * 2. Create PaymentIntent or Subscription
-     * 3. Return client_secret for PaymentSheet
+     * Call the create-payment-intent Edge Function
      */
-    suspend fun initializePayment(
-        userId: String,
+    private suspend fun callCreatePaymentIntent(
+        userId: String?,
+        proAccountId: String?,
         email: String,
-        priceId: String
-    ): Result<PaymentIntentResponse> = withContext(Dispatchers.IO) {
-        try {
-            _paymentState.value = PaymentState.Loading
+        priceType: String,
+        quantity: Int = 1
+    ): PaymentIntentResponse {
+        val url = "${BuildConfig.SUPABASE_URL}/functions/v1/create-payment-intent"
 
-            // TODO: Implement Supabase Edge Function call to create payment intent
-            // This keeps Stripe secret key secure on the server
-            // The Edge Function should:
-            // 1. Create or retrieve Stripe customer
-            // 2. Create PaymentIntent or Subscription
-            // 3. Return client_secret for PaymentSheet
+        val requestBody = CreatePaymentIntentRequest(
+            userId = userId,
+            proAccountId = proAccountId,
+            email = email,
+            priceType = priceType,
+            quantity = quantity
+        )
 
-            // For now, return a placeholder error
-            _paymentState.value = PaymentState.Error("Backend payment endpoint not configured")
-            Result.failure(Exception("Backend payment endpoint not configured. Please set up Supabase Edge Functions for Stripe."))
+        val jsonBody = json.encodeToString(CreatePaymentIntentRequest.serializer(), requestBody)
 
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Payment initialization failed: ${e.message}", TAG, e)
-            _paymentState.value = PaymentState.Error(e.message ?: "Erreur inconnue")
-            Result.failure(e)
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+            .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+            .post(jsonBody.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        MotiumApplication.logger.i("Calling create-payment-intent: $priceType, quantity=$quantity", TAG)
+
+        val response = httpClient.newCall(request).execute()
+        val responseBody = response.body?.string() ?: throw Exception("Empty response from server")
+
+        if (!response.isSuccessful) {
+            val errorMessage = try {
+                json.decodeFromString(ErrorResponse.serializer(), responseBody).error
+            } catch (e: Exception) {
+                "Erreur serveur: ${response.code}"
+            }
+            throw Exception(errorMessage)
         }
+
+        val paymentResponse = json.decodeFromString(PaymentIntentResponse.serializer(), responseBody)
+        MotiumApplication.logger.i("✅ Payment intent created: ${paymentResponse.productId}", TAG)
+
+        return paymentResponse
     }
 
     /**
@@ -297,31 +380,27 @@ class SubscriptionManager private constructor(private val context: Context) {
         try {
             _paymentState.value = PaymentState.Loading
 
-            val priceId = if (isLifetime) {
-                PRICE_ID_INDIVIDUAL_LIFETIME
-            } else {
-                PRICE_ID_INDIVIDUAL_MONTHLY
-            }
+            val priceType = if (isLifetime) "individual_lifetime" else "individual_monthly"
+            val price = if (isLifetime) INDIVIDUAL_LIFETIME_PRICE else INDIVIDUAL_MONTHLY_PRICE
 
-            val price = if (isLifetime) {
-                INDIVIDUAL_LIFETIME_PRICE
-            } else {
-                INDIVIDUAL_MONTHLY_PRICE
-            }
+            MotiumApplication.logger.i("Initializing individual payment: $priceType (${price}€)", TAG)
 
-            MotiumApplication.logger.i("Initializing individual payment: $priceId (${price}€)", TAG)
+            val response = callCreatePaymentIntent(
+                userId = userId,
+                proAccountId = null,
+                email = email,
+                priceType = priceType,
+                quantity = 1
+            )
 
-            // TODO: Call Supabase Edge Function to create PaymentIntent
-            // The Edge Function should:
-            // 1. Create or retrieve Stripe customer for userId/email
-            // 2. Create PaymentIntent (one-time) or Subscription (recurring)
-            // 3. Return client_secret for PaymentSheet
+            _paymentState.value = PaymentState.Ready(
+                clientSecret = response.clientSecret,
+                customerId = response.customerId,
+                ephemeralKey = response.ephemeralKey,
+                amountCents = response.amountCents
+            )
 
-            _paymentState.value = PaymentState.Error("Backend payment endpoint not configured")
-            Result.failure(Exception(
-                "Backend payment endpoint not configured. " +
-                    "Please set up Supabase Edge Functions for Stripe."
-            ))
+            Result.success(response)
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Individual payment initialization failed: ${e.message}", TAG, e)
@@ -346,30 +425,31 @@ class SubscriptionManager private constructor(private val context: Context) {
         try {
             _paymentState.value = PaymentState.Loading
 
-            val priceId = if (isLifetime) {
-                PRICE_ID_PRO_LICENSE_LIFETIME
-            } else {
-                PRICE_ID_PRO_LICENSE_MONTHLY
-            }
-
-            val priceHT = if (isLifetime) {
-                PRO_LICENSE_LIFETIME_PRICE_HT * quantity
-            } else {
-                PRO_LICENSE_MONTHLY_PRICE_HT * quantity
-            }
-
-            val priceTTC = priceHT * 1.20 // +20% VAT
+            val priceType = if (isLifetime) "pro_license_lifetime" else "pro_license_monthly"
+            val pricePerLicense = if (isLifetime) PRO_LICENSE_LIFETIME_PRICE else PRO_LICENSE_MONTHLY_PRICE
+            val totalPrice = pricePerLicense * quantity
 
             MotiumApplication.logger.i(
-                "Initializing pro license payment: $quantity x $priceId (${priceHT}€ HT / ${priceTTC}€ TTC)",
+                "Initializing pro license payment: $quantity x $priceType (${totalPrice}€ TTC)",
                 TAG
             )
 
-            // TODO: Call Supabase Edge Function
-            // Should create PaymentIntent with quantity parameter
+            val response = callCreatePaymentIntent(
+                userId = null,
+                proAccountId = proAccountId,
+                email = email,
+                priceType = priceType,
+                quantity = quantity
+            )
 
-            _paymentState.value = PaymentState.Error("Backend payment endpoint not configured")
-            Result.failure(Exception("Backend not configured"))
+            _paymentState.value = PaymentState.Ready(
+                clientSecret = response.clientSecret,
+                customerId = response.customerId,
+                ephemeralKey = response.ephemeralKey,
+                amountCents = response.amountCents
+            )
+
+            Result.success(response)
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Pro license payment initialization failed: ${e.message}", TAG, e)
@@ -415,7 +495,7 @@ class SubscriptionManager private constructor(private val context: Context) {
                 SubscriptionType.PREMIUM -> Instant.fromEpochMilliseconds(
                     System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000
                 )
-                SubscriptionType.LIFETIME -> null // Never expires
+                SubscriptionType.LIFETIME, SubscriptionType.LICENSED -> null // Never expires (license manages its own state)
                 SubscriptionType.TRIAL, SubscriptionType.EXPIRED -> null // Handled by trialEndsAt
             }
 
@@ -508,6 +588,88 @@ class SubscriptionManager private constructor(private val context: Context) {
      */
     fun resetPaymentState() {
         _paymentState.value = PaymentState.Idle
+    }
+
+    // ========================================
+    // Deferred Payment API (IntentConfiguration mode)
+    // ========================================
+
+    /**
+     * Confirm payment with a PaymentMethod ID (called from createIntentCallback).
+     * This creates the PaymentIntent on the server AFTER the user enters their card.
+     *
+     * @param paymentMethodId The Stripe PaymentMethod ID from PaymentSheet
+     * @param userId User ID for individual payments
+     * @param proAccountId Pro account ID for license purchases
+     * @param priceType Type of payment (individual_monthly, individual_lifetime, pro_license_monthly, pro_license_lifetime)
+     * @param quantity Number of items (1 for individual, N for licenses)
+     * @return Result containing the client_secret needed to complete payment
+     */
+    suspend fun confirmPaymentWithMethod(
+        paymentMethodId: String,
+        userId: String? = null,
+        proAccountId: String? = null,
+        priceType: String,
+        quantity: Int = 1
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/functions/v1/confirm-payment-intent"
+
+            val requestBody = ConfirmPaymentIntentRequest(
+                paymentMethodId = paymentMethodId,
+                userId = userId,
+                proAccountId = proAccountId,
+                priceType = priceType,
+                quantity = quantity
+            )
+
+            val jsonBody = json.encodeToString(ConfirmPaymentIntentRequest.serializer(), requestBody)
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            MotiumApplication.logger.i("Confirming payment: $priceType, quantity=$quantity, paymentMethod=$paymentMethodId", TAG)
+
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: throw Exception("Empty response from server")
+
+            if (!response.isSuccessful) {
+                val errorMessage = try {
+                    json.decodeFromString(ErrorResponse.serializer(), responseBody).error
+                } catch (e: Exception) {
+                    "Erreur serveur: ${response.code}"
+                }
+                throw Exception(errorMessage)
+            }
+
+            val confirmResponse = json.decodeFromString(ConfirmPaymentResponse.serializer(), responseBody)
+            MotiumApplication.logger.i("✅ Payment confirmed: ${confirmResponse.paymentIntentId}", TAG)
+
+            Result.success(confirmResponse.clientSecret)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Payment confirmation failed: ${e.message}", TAG, e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get the amount in cents for a given price type and quantity
+     */
+    fun getAmountCents(priceType: String, quantity: Int = 1): Long {
+        val pricePerUnit = when (priceType) {
+            "individual_monthly" -> INDIVIDUAL_MONTHLY_PRICE
+            "individual_lifetime" -> INDIVIDUAL_LIFETIME_PRICE
+            "pro_license_monthly" -> PRO_LICENSE_MONTHLY_PRICE
+            "pro_license_lifetime" -> PRO_LICENSE_LIFETIME_PRICE
+            else -> 0.0
+        }
+        return (pricePerUnit * 100 * quantity).toLong()
     }
 }
 

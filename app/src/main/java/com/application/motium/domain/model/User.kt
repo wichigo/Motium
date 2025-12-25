@@ -19,6 +19,9 @@ data class User(
     // Paramètre fiscal : prendre en compte toute la distance travail-maison (sans plafond 40km)
     val considerFullDistance: Boolean = false,
 
+    // Couleurs favorites de l'utilisateur (pour personnalisation UI)
+    val favoriteColors: List<String> = emptyList(),
+
     val createdAt: Instant,
     val updatedAt: Instant
 )
@@ -50,6 +53,7 @@ data class Subscription(
             SubscriptionType.TRIAL -> trialEndsAt?.let { now < it } ?: false
             SubscriptionType.EXPIRED -> false
             SubscriptionType.LIFETIME -> true
+            SubscriptionType.LICENSED -> true  // Pro users with assigned license always have access
             SubscriptionType.PREMIUM -> expiresAt?.let { now < it } ?: false
         }
     }
@@ -94,7 +98,8 @@ enum class SubscriptionType(val displayName: String) {
     TRIAL("Essai gratuit"),    // 7-day free trial with full access
     EXPIRED("Expiré"),         // Trial or subscription expired - no access
     PREMIUM("Premium"),        // Monthly subscription
-    LIFETIME("À vie");         // One-time lifetime purchase
+    LIFETIME("À vie"),         // One-time lifetime purchase
+    LICENSED("Licence Pro");   // Pro user with assigned license (via licenses table)
 
     companion object {
         /**
