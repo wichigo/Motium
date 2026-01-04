@@ -41,6 +41,14 @@ class NetworkConnectionManager(private val context: Context) {
         }
 
         override fun onLost(network: Network) {
+            // Vérifier s'il y a encore un réseau actif (ex: transition WiFi → 5G)
+            val stillConnected = isNetworkAvailable()
+            if (stillConnected) {
+                MotiumApplication.logger.i("🔄 Network switched (WiFi ↔ Cellular), still connected", "NetworkManager")
+                _connectionType.value = getConnectionType()
+                return
+            }
+
             MotiumApplication.logger.w("❌ Network connection lost", "NetworkManager")
             _isConnected.value = false
             _connectionType.value = ConnectionType.NONE
