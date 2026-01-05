@@ -123,7 +123,8 @@ class AutoTrackingScheduleWorker(
             )
                 .setConstraints(
                     Constraints.Builder()
-                        .setRequiresBatteryNotLow(false) // Peut tourner même avec batterie faible
+                        // BATTERY OPTIMIZATION: Ne pas exécuter si batterie faible
+                        .setRequiresBatteryNotLow(true)
                         .build()
                 )
                 .addTag(WORK_TAG)

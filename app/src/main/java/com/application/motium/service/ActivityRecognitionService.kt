@@ -3,10 +3,8 @@ package com.application.motium.service
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.*
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
@@ -15,72 +13,85 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
-import androidx.core.app.ActivityCompat
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.application.motium.MotiumApplication
 import com.application.motium.R
 import com.google.android.gms.location.*
 import kotlinx.coroutines.*
-import java.util.concurrent.atomic.AtomicInteger
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
+/**
+ * Service Foreground pour la détection d'activité (Activity Recognition).
+ *
+ * ## Architecture Samsung-compatible
+ * Utilise `PendingIntent.getForegroundService()` au lieu de `getBroadcast()` pour éviter
+ * que Samsung One UI ne tue le BroadcastReceiver.
+ *
+ * ## Flow
+ * 1. Google Play Services détecte une transition d'activité
+ * 2. Le PendingIntent déclenche onStartCommand() avec ACTION_ACTIVITY_TRANSITION
+ * 3. Le service extrait ActivityTransitionResult et notifie TripStateManager
+ * 4. TripStateManager gère la machine d'état (IDLE/MOVING/POSSIBLY_STOPPED)
+ */
 class ActivityRecognitionService : Service() {
 
     companion object {
+        private const val TAG = "ActivityRecognition"
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "ActivityRecognitionChannel"
-        private const val ACTIVITY_UPDATE_INTERVAL = 10000L // 10 secondes - DriveQuant optimal
 
-        // Seuils de confiance optimisés pour détection fiable
-        private const val VEHICLE_CONFIDENCE_THRESHOLD = 75
-        private const val BICYCLE_CONFIDENCE_THRESHOLD = 70
-        private const val FOOT_CONFIDENCE_THRESHOLD = 60
+        // Action pour les transitions d'activité reçues via PendingIntent.getForegroundService()
+        const val ACTION_ACTIVITY_TRANSITION = "com.application.motium.ACTION_ACTIVITY_TRANSITION"
+
+        // Action DEBUG pour injecter des transitions via ADB (tests uniquement)
+        // adb shell am startservice -a com.application.motium.ACTION_DEBUG_TRANSITION --es activity "VEHICLE" --es transition "ENTER" com.application.motium/.service.ActivityRecognitionService
+        const val ACTION_DEBUG_TRANSITION = "com.application.motium.ACTION_DEBUG_TRANSITION"
+        private const val EXTRA_DEBUG_ACTIVITY = "activity"  // VEHICLE, BICYCLE, STILL, WALKING, RUNNING
+        private const val EXTRA_DEBUG_TRANSITION = "transition"  // ENTER, EXIT
 
         // SharedPreferences pour stocker un request code unique par installation
         private const val PREFS_NAME = "ActivityRecognitionPrefs"
         private const val PREF_REQUEST_CODE = "activity_recognition_request_code"
+        private const val PREF_LAST_TRANSITION_TIME = "last_transition_time"
 
-        // Référence à l'instance du service pour permettre l'appel depuis ActivityRecognitionReceiver
+        // Délai max pour considérer un événement comme valide (3 minutes)
+        private const val MAX_EVENT_AGE_MS = 180000L
+
+        // Intervalle de ré-enregistrement périodique
+        private const val REREGISTER_INTERVAL_SAMSUNG_MS = 30 * 60 * 1000L  // 30 min Samsung
+        private const val REREGISTER_INTERVAL_DEFAULT_MS = 60 * 60 * 1000L  // 60 min autres
+
+        // Référence à l'instance du service
         @Volatile
         private var instance: ActivityRecognitionService? = null
 
         /**
          * Obtient un request code unique pour cette installation de l'app
-         * Le request code est généré une seule fois et sauvegardé dans SharedPreferences
-         * Cela garantit que chaque installation a un PendingIntent différent
          */
         private fun getUniqueRequestCode(context: Context): Int {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-            // Vérifier si on a déjà un request code
             var requestCode = prefs.getInt(PREF_REQUEST_CODE, 0)
 
             if (requestCode == 0) {
-                // Générer un nouveau request code basé sur le timestamp
                 requestCode = (System.currentTimeMillis() and 0x7FFFFFFF).toInt()
-
                 MotiumApplication.logger.i(
-                    "🆕 Generated NEW unique request code for this installation: $requestCode",
-                    "ActivityRecognition"
+                    "🆕 Generated NEW unique request code: $requestCode",
+                    TAG
                 )
-
-                // Sauvegarder pour les prochains démarrages
                 prefs.edit().putInt(PREF_REQUEST_CODE, requestCode).apply()
-            } else {
-                MotiumApplication.logger.d(
-                    "♻️ Using existing request code: $requestCode",
-                    "ActivityRecognition"
-                )
             }
 
             return requestCode
         }
 
         fun startService(context: Context) {
-            // Vérifier que les permissions de localisation sont accordées avant de démarrer
             if (!hasLocationPermissions(context)) {
                 MotiumApplication.logger.w(
                     "Cannot start ActivityRecognitionService: location permissions not granted",
-                    "ActivityRecognition"
+                    TAG
                 )
                 return
             }
@@ -91,209 +102,460 @@ class ActivityRecognitionService : Service() {
             } catch (e: SecurityException) {
                 MotiumApplication.logger.e(
                     "SecurityException when starting ActivityRecognitionService: ${e.message}",
-                    "ActivityRecognition",
-                    e
+                    TAG, e
                 )
             }
         }
 
         private fun hasLocationPermissions(context: Context): Boolean {
-            val fineLocation = android.content.pm.PackageManager.PERMISSION_GRANTED ==
+            val fineLocation = PackageManager.PERMISSION_GRANTED ==
                 androidx.core.content.ContextCompat.checkSelfPermission(
-                    context,
-                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                    context, Manifest.permission.ACCESS_FINE_LOCATION
                 )
-            val coarseLocation = android.content.pm.PackageManager.PERMISSION_GRANTED ==
+            val coarseLocation = PackageManager.PERMISSION_GRANTED ==
                 androidx.core.content.ContextCompat.checkSelfPermission(
-                    context,
-                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                    context, Manifest.permission.ACCESS_COARSE_LOCATION
                 )
             return fineLocation || coarseLocation
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, ActivityRecognitionService::class.java)
-            context.stopService(intent)
+            context.stopService(Intent(context, ActivityRecognitionService::class.java))
         }
 
         /**
-         * Force le ré-enregistrement du service Activity Recognition
-         * Utile après une réinstallation ou un changement d'UID pour nettoyer les anciens PendingIntents
+         * Nettoie les anciens enregistrements Activity Recognition.
+         * Note: L'ancien BroadcastReceiver a été supprimé, cette méthode nettoie
+         * les PendingIntents qui pourraient rester de l'ancienne implémentation.
          */
-        @SuppressLint("MissingPermission") // Permission checked at service startup
-        fun reregisterActivityRecognition(context: Context) {
-            MotiumApplication.logger.i("🔄 Force re-registering Activity Recognition to clean old UIDs", "ActivityRecognition")
-
+        @SuppressLint("MissingPermission")
+        fun cleanupOldRegistrations(context: Context) {
+            MotiumApplication.logger.i("🧹 Cleaning up old Activity Recognition registrations", TAG)
             try {
-                val activityRecognitionClient = ActivityRecognition.getClient(context.applicationContext)
-                val activityIntent = Intent(context.applicationContext, ActivityRecognitionReceiver::class.java)
+                val client = ActivityRecognition.getClient(context.applicationContext)
                 val requestCode = getUniqueRequestCode(context.applicationContext)
 
-                // Créer un PendingIntent pour annuler l'ancien
-                val pendingIntent = PendingIntent.getBroadcast(
+                // Nettoyer l'ancien style broadcast (migration depuis l'ancienne implémentation)
+                // L'action était utilisée par l'ancien ActivityRecognitionReceiver (supprimé)
+                val broadcastIntent = Intent("com.application.motium.ACTIVITY_TRANSITION_BROADCAST")
+                val broadcastPi = PendingIntent.getBroadcast(
                     context.applicationContext,
                     requestCode,
-                    activityIntent,
-                    PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_MUTABLE
+                    broadcastIntent,
+                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
                 )
-
-                // Tenter de supprimer les anciennes mises à jour (même avec un mauvais UID)
-                activityRecognitionClient.removeActivityUpdates(pendingIntent)
-                    .addOnSuccessListener {
-                        MotiumApplication.logger.i("✅ Old Activity Recognition registrations cleaned (requestCode=$requestCode)", "ActivityRecognition")
-                    }
-                    .addOnFailureListener { e ->
-                        MotiumApplication.logger.w("⚠️ Could not clean old registrations (may not exist): ${e.message}", "ActivityRecognition")
-                    }
+                broadcastPi?.let {
+                    client.removeActivityTransitionUpdates(it)
+                    MotiumApplication.logger.i("✅ Cleaned old broadcast PendingIntent", TAG)
+                }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Error during re-registration: ${e.message}", "ActivityRecognition", e)
+                MotiumApplication.logger.w("Could not clean old registrations: ${e.message}", TAG)
             }
         }
 
         /**
-         * Réinitialise complètement l'Activity Recognition
-         * Génère un nouveau request code et nettoie tous les anciens PendingIntents
+         * Met à jour la notification basée sur l'état du trajet.
          */
-        @SuppressLint("MissingPermission") // Permission checked at service startup
-        fun resetActivityRecognition(context: Context) {
-            MotiumApplication.logger.i("🔄 RESET Activity Recognition - generating new request code", "ActivityRecognition")
-
-            try {
-                // Supprimer l'ancien request code pour forcer la génération d'un nouveau
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val oldRequestCode = prefs.getInt(PREF_REQUEST_CODE, 0)
-
-                if (oldRequestCode != 0) {
-                    // Essayer de nettoyer l'ancien PendingIntent
-                    val activityRecognitionClient = ActivityRecognition.getClient(context.applicationContext)
-                    val activityIntent = Intent(context.applicationContext, ActivityRecognitionReceiver::class.java)
-
-                    val oldPendingIntent = PendingIntent.getBroadcast(
-                        context.applicationContext,
-                        oldRequestCode,
-                        activityIntent,
-                        PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_MUTABLE
-                    )
-
-                    if (oldPendingIntent != null) {
-                        activityRecognitionClient.removeActivityUpdates(oldPendingIntent)
-                        MotiumApplication.logger.i("✅ Removed old PendingIntent (requestCode=$oldRequestCode)", "ActivityRecognition")
-                    }
-                }
-
-                // Supprimer le request code sauvegardé
-                prefs.edit().remove(PREF_REQUEST_CODE).apply()
-
-                MotiumApplication.logger.i("✅ Activity Recognition reset complete - restart service to apply", "ActivityRecognition")
-
-            } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Error resetting Activity Recognition: ${e.message}", "ActivityRecognition", e)
-            }
+        fun updateNotificationState(state: TripNotificationState) {
+            instance?.updateNotificationFromState(state)
+                ?: MotiumApplication.logger.w(
+                    "Cannot update notification: service instance is null",
+                    "Notification"
+                )
         }
 
-        // NOTE: La méthode handleActivityDetection() a été supprimée car elle n'est plus utilisée
-        // avec la nouvelle ActivityTransition API. Le receiver appelle maintenant directement
-        // LocationTrackingService pour gérer les transitions.
+        /**
+         * Réinitialise l'Activity Recognition.
+         * Nettoie les anciens enregistrements et prépare pour un restart.
+         * Utilisé depuis Settings pour debug.
+         */
+        fun resetActivityRecognition(context: Context) {
+            MotiumApplication.logger.i("🔄 Resetting Activity Recognition", TAG)
+            cleanupOldRegistrations(context)
+            // Clear persisted state
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(PREF_LAST_TRANSITION_TIME)
+                .apply()
+        }
+
+        /**
+         * Force le ré-enregistrement des transitions d'activité.
+         * Appelé par le HealthWorker pour maintenir l'enregistrement actif.
+         */
+        fun reregisterActivityRecognition(context: Context) {
+            MotiumApplication.logger.i("🔄 Forcing reregister via companion object", TAG)
+            instance?.let {
+                it.reregisterActivityTransitions()
+            } ?: run {
+                MotiumApplication.logger.w(
+                    "Cannot reregister: service instance is null, starting service instead",
+                    TAG
+                )
+                startService(context)
+            }
+        }
     }
 
     private lateinit var activityRecognitionClient: ActivityRecognitionClient
+    private var transitionPendingIntent: PendingIntent? = null
+    private var activityTransitionRequest: ActivityTransitionRequest? = null
 
-    // Guard against redundant initialization (battery optimization)
+    // Guard against redundant initialization
     private var isActivityRecognitionActive = false
 
-    // CRASH FIX: Add exception handler to catch all uncaught exceptions in coroutines
+    // Coroutine scope for async operations
     private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
         MotiumApplication.logger.e(
-            "❌ Uncaught exception in ActivityRecognitionService coroutine: ${exception.message}",
-            "ActivityRecognition",
-            exception
+            "❌ Uncaught exception in ActivityRecognitionService: ${exception.message}",
+            TAG, exception
         )
     }
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob() + exceptionHandler)
 
-    private var lastDetectedActivity = DetectedActivity.UNKNOWN
-    private var lastConfirmedActivity = DetectedActivity.UNKNOWN  // Dernière activité confirmée (haute confiance)
-    private var hasStartedBuffering = false  // Flag pour savoir si on a déjà démarré le buffering
+    // Handler for notification updates
+    private val notificationHandler = Handler(Looper.getMainLooper())
 
-    // Système de détection d'immobilité prolongée (3 minutes)
-    private var stillDetectionStartTime: Long? = null // Timestamp du début de l'immobilité
-    private var wasStillFor3Minutes = false // Flag pour savoir si on a été immobile pendant 3 minutes
-    private val stillCheckHandler = Handler(Looper.getMainLooper())
-    private val STILL_TIMEOUT_MS = 180000L // 3 minutes en millisecondes
+    // Notification monitoring to ensure it stays visible
+    private val notificationMonitorHandler = Handler(Looper.getMainLooper())
+    private var notificationMonitorRunnable: Runnable? = null
+    private val NOTIFICATION_MONITOR_INTERVAL_MS = 60000L
 
-    // NOTE: Le monitoring "NO ACTIVITY DETECTED" a été supprimé car il était obsolète
-    // avec l'API ActivityTransition qui envoie uniquement les transitions (ENTER/EXIT)
-    // et non plus les activités périodiquement. L'API fonctionne correctement.
+    // Double registration: ré-enregistrement périodique
+    private var reregisterJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
-
-        // Stocker l'instance pour permettre l'appel depuis ActivityRecognitionReceiver
         instance = this
 
-        MotiumApplication.logger.i("ActivityRecognitionService created", "ActivityRecognition")
+        MotiumApplication.logger.i("🚀 ActivityRecognitionService created", TAG)
 
         createNotificationChannel()
         activityRecognitionClient = ActivityRecognition.getClient(this)
 
-        // FIX: Nettoyer les anciens PendingIntents au démarrage pour éviter les conflits d'UID
-        reregisterActivityRecognition(this)
+        // Initialiser TripStateManager avec le contexte
+        TripStateManager.initialize(applicationContext)
+
+        // Configurer les callbacks de TripStateManager
+        setupTripStateManagerCallbacks()
+
+        // Nettoyer les anciens PendingIntents broadcast (migration)
+        cleanupOldRegistrations(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // BATTERY OPTIMIZATION: Skip re-initialization if already running
-        if (isActivityRecognitionActive) {
-            MotiumApplication.logger.d(
-                "⚡ ActivityRecognitionService already active, skipping initialization",
-                "ActivityRecognition"
-            )
+        val action = intent?.action
+        MotiumApplication.logger.i("📨 onStartCommand - action: $action", TAG)
+
+        // ==================== TRAITEMENT DES TRANSITIONS ====================
+        // Si l'intent contient une transition d'activité (via PendingIntent.getForegroundService)
+        if (action == ACTION_ACTIVITY_TRANSITION) {
+            handleActivityTransitionIntent(intent)
+            // Double registration: ré-enregistrer après chaque transition reçue
+            scheduleReregistrationAfterTransition()
             return START_STICKY
         }
 
-        MotiumApplication.logger.i("🚀 ActivityRecognitionService onStartCommand - action: ${intent?.action}", "ActivityRecognition")
-
-        // Démarrage du service - startForeground DOIT être appelé en premier
-        MotiumApplication.logger.i("🔧 Starting foreground service and activity recognition", "ActivityRecognition")
-        startForegroundService()
-        startActivityRecognition()
-
-        // Mark as active after successful initialization
-        isActivityRecognitionActive = true
-
-        try {
-            MotiumApplication.logger.i("🔧 Starting LocationTrackingService in foreground mode", "ActivityRecognition")
-            LocationTrackingService.startService(this)
-        } catch (e: Exception) {
-            MotiumApplication.logger.e(
-                "Error starting LocationTrackingService: ${e.message}",
-                "ActivityRecognition",
-                e
-            )
+        // ==================== DEBUG TRANSITION (Tests ADB) ====================
+        // Permet d'injecter des transitions via ADB pour tester la state machine
+        if (action == ACTION_DEBUG_TRANSITION) {
+            handleDebugTransition(intent)
+            return START_STICKY
         }
 
-        // CRITICAL: Schedule keep-alive alarm to prevent Doze mode from killing service
+        // ==================== KEEP-ALIVE WAKEUP (Doze Mode Fix) ====================
+        // AlarmManager envoie périodiquement ce wake-up pour forcer ré-enregistrement
+        if (action == DozeModeFix.ACTION_KEEPALIVE_WAKEUP) {
+            MotiumApplication.logger.i("⏰ Keep-alive wakeup received from AlarmManager", TAG)
+            AutoTrackingDiagnostics.logKeepaliveTriggered(this)
+
+            // Replanifier la prochaine alarme
+            DozeModeFix.scheduleActivityRecognitionKeepAlive(this)
+
+            // Force ré-enregistrement des transitions
+            reregisterActivityTransitions()
+
+            return START_STICKY
+        }
+
+        // ==================== INITIALISATION DU SERVICE ====================
+        if (isActivityRecognitionActive) {
+            MotiumApplication.logger.d("⚡ Service already active, skipping init", TAG)
+            return START_STICKY
+        }
+
+        // Démarrer en foreground (DOIT être appelé rapidement)
+        startForegroundService()
+        startActivityRecognition()
+        isActivityRecognitionActive = true
+
+        // Démarrer le monitoring de notification
+        startNotificationMonitor()
+
+        // Double registration: planifier le ré-enregistrement périodique
+        schedulePeriodicReregistration()
+
+        // Schedule keep-alive alarm (Doze mode fix)
         DozeModeFix.scheduleActivityRecognitionKeepAlive(this)
 
         return START_STICKY
     }
 
+    /**
+     * Configure les callbacks de TripStateManager pour réagir aux changements d'état.
+     */
+    private fun setupTripStateManagerCallbacks() {
+        TripStateManager.onTripStarted = { tripId ->
+            MotiumApplication.logger.i("🚗 Trip started: $tripId - Starting GPS tracking", TAG)
+            // Démarrer LocationTrackingService pour le GPS
+            LocationTrackingService.startTrip(this, tripId)
+            updateNotification("Trajet en cours...")
+        }
+
+        TripStateManager.onTripEnded = { tripId ->
+            MotiumApplication.logger.i("🏁 Trip ended: $tripId - Stopping GPS tracking", TAG)
+            // Arrêter le GPS via LocationTrackingService
+            LocationTrackingService.endTrip(this, tripId)
+            updateNotification("Détection automatique activée")
+        }
+
+        TripStateManager.onStateChanged = { state ->
+            when (state) {
+                is TripStateManager.TrackingState.Idle -> {
+                    updateNotification("Détection automatique activée")
+                }
+                is TripStateManager.TrackingState.Moving -> {
+                    updateNotification("Trajet en cours...")
+                }
+                is TripStateManager.TrackingState.PossiblyStopped -> {
+                    updateNotification("Arrêt détecté...")
+                }
+            }
+        }
+    }
+
+    /**
+     * Traite une transition DEBUG injectée via ADB.
+     * Usage: adb shell am startservice -a com.application.motium.ACTION_DEBUG_TRANSITION \
+     *        --es activity "VEHICLE" --es transition "ENTER" \
+     *        com.application.motium/.service.ActivityRecognitionService
+     *
+     * Activities: VEHICLE, BICYCLE, STILL, WALKING, RUNNING
+     * Transitions: ENTER, EXIT
+     */
+    private fun handleDebugTransition(intent: Intent) {
+        val activityStr = intent.getStringExtra(EXTRA_DEBUG_ACTIVITY)?.uppercase() ?: "UNKNOWN"
+        val transitionStr = intent.getStringExtra(EXTRA_DEBUG_TRANSITION)?.uppercase() ?: "ENTER"
+
+        MotiumApplication.logger.i(
+            "🧪 DEBUG TRANSITION: $activityStr $transitionStr",
+            TAG
+        )
+
+        // Convertir en événement TripStateManager
+        val event = when {
+            activityStr == "VEHICLE" && transitionStr == "ENTER" -> TripStateManager.TrackingEvent.VehicleEnter
+            activityStr == "BICYCLE" && transitionStr == "ENTER" -> TripStateManager.TrackingEvent.BicycleEnter
+            activityStr == "STILL" && transitionStr == "ENTER" -> TripStateManager.TrackingEvent.StillEnter
+            activityStr == "WALKING" && transitionStr == "ENTER" -> TripStateManager.TrackingEvent.WalkingEnter
+            activityStr == "RUNNING" && transitionStr == "ENTER" -> TripStateManager.TrackingEvent.RunningEnter
+            // STILL_CONFIRMED permet de forcer l'expiration du timer 3min manuellement
+            activityStr == "STILL_CONFIRMED" -> TripStateManager.TrackingEvent.StillConfirmed
+            else -> {
+                MotiumApplication.logger.w(
+                    "🧪 Unknown debug transition: $activityStr $transitionStr (valid: VEHICLE, BICYCLE, STILL, WALKING, RUNNING, STILL_CONFIRMED)",
+                    TAG
+                )
+                return
+            }
+        }
+
+        // Log diagnostics
+        AutoTrackingDiagnostics.logActivityTransition(this, activityStr, transitionStr)
+
+        // Envoyer l'événement à la state machine
+        TripStateManager.onEvent(event)
+
+        MotiumApplication.logger.i(
+            "🧪 DEBUG: Event sent to TripStateManager, current state: ${TripStateManager.currentState}",
+            TAG
+        )
+    }
+
+    /**
+     * Traite un Intent contenant des données de transition d'activité.
+     * Appelé quand Google Play Services envoie une transition via le PendingIntent.
+     */
+    private fun handleActivityTransitionIntent(intent: Intent) {
+        MotiumApplication.logger.i("🔔 handleActivityTransitionIntent called", TAG)
+
+        if (!ActivityTransitionResult.hasResult(intent)) {
+            MotiumApplication.logger.w(
+                "❌ Intent does not contain ActivityTransitionResult!",
+                TAG
+            )
+            return
+        }
+
+        val result = ActivityTransitionResult.extractResult(intent)
+        if (result == null) {
+            MotiumApplication.logger.e("❌ Extracted result is NULL!", TAG)
+            return
+        }
+
+        MotiumApplication.logger.i(
+            "📱 Received ${result.transitionEvents.size} activity transition(s)",
+            TAG
+        )
+
+        // Sauvegarder le timestamp de la dernière transition reçue
+        saveLastTransitionTime()
+
+        // Traiter chaque événement de transition
+        val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        result.transitionEvents.forEach { event ->
+            val activityName = getActivityName(event.activityType)
+            val transitionType = if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) {
+                "ENTER"
+            } else {
+                "EXIT"
+            }
+            val timestamp = dateFormat.format(Date(event.elapsedRealTimeNanos / 1_000_000))
+
+            // Valider l'âge de l'événement (éviter les replays de cache)
+            val eventTimestampMs = event.elapsedRealTimeNanos / 1_000_000
+            val currentTimeMs = SystemClock.elapsedRealtime()
+            val eventAgeMs = currentTimeMs - eventTimestampMs
+
+            if (eventAgeMs > MAX_EVENT_AGE_MS) {
+                MotiumApplication.logger.w(
+                    "⏰ OBSOLETE EVENT IGNORED (age: ${eventAgeMs / 1000}s): $activityName $transitionType",
+                    TAG
+                )
+                AutoTrackingDiagnostics.logFailedTransition(
+                    this,
+                    "Obsolete: $activityName $transitionType (${eventAgeMs / 1000}s old)"
+                )
+                return@forEach
+            }
+
+            MotiumApplication.logger.i(
+                "🎯 Transition: $activityName $transitionType at $timestamp (age: ${eventAgeMs / 1000}s)",
+                TAG
+            )
+
+            // Log to diagnostics
+            AutoTrackingDiagnostics.logActivityTransition(this, activityName, transitionType)
+
+            // Convertir en événement TripStateManager
+            val stateEvent = convertToTripStateEvent(event)
+            if (stateEvent != null) {
+                TripStateManager.onEvent(stateEvent)
+            }
+        }
+    }
+
+    /**
+     * Convertit un ActivityTransitionEvent en TripStateManager.TrackingEvent.
+     */
+    private fun convertToTripStateEvent(event: ActivityTransitionEvent): TripStateManager.TrackingEvent? {
+        val activityType = event.activityType
+        val transitionType = event.transitionType
+
+        return when {
+            // Véhicule ENTER → démarrage trajet
+            activityType == DetectedActivity.IN_VEHICLE &&
+                    transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                TripStateManager.TrackingEvent.VehicleEnter
+            }
+
+            // Vélo ENTER → démarrage trajet
+            activityType == DetectedActivity.ON_BICYCLE &&
+                    transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                TripStateManager.TrackingEvent.BicycleEnter
+            }
+
+            // STILL ENTER → potentielle fin de trajet
+            activityType == DetectedActivity.STILL &&
+                    transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                TripStateManager.TrackingEvent.StillEnter
+            }
+
+            // WALKING ENTER → potentielle fin de trajet (traité comme STILL)
+            activityType == DetectedActivity.WALKING &&
+                    transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                TripStateManager.TrackingEvent.WalkingEnter
+            }
+
+            // RUNNING ENTER → potentielle fin de trajet
+            activityType == DetectedActivity.RUNNING &&
+                    transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                TripStateManager.TrackingEvent.RunningEnter
+            }
+
+            // ON_FOOT ENTER → fallback pour marche/course
+            activityType == DetectedActivity.ON_FOOT &&
+                    transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                TripStateManager.TrackingEvent.WalkingEnter
+            }
+
+            // EXIT events: ignorés (on attend le prochain ENTER)
+            else -> {
+                MotiumApplication.logger.d(
+                    "Transition not mapped to state event: ${getActivityName(activityType)} " +
+                            "${if (transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) "ENTER" else "EXIT"}",
+                    TAG
+                )
+                null
+            }
+        }
+    }
+
+    private fun getActivityName(activityType: Int): String {
+        return when (activityType) {
+            DetectedActivity.IN_VEHICLE -> "Véhicule"
+            DetectedActivity.ON_BICYCLE -> "Vélo"
+            DetectedActivity.ON_FOOT -> "À pied"
+            DetectedActivity.WALKING -> "Marche"
+            DetectedActivity.RUNNING -> "Course"
+            DetectedActivity.STILL -> "Immobile"
+            DetectedActivity.TILTING -> "Inclinaison"
+            DetectedActivity.UNKNOWN -> "Inconnu"
+            else -> "Autre ($activityType)"
+        }
+    }
+
+    private fun saveLastTransitionTime() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putLong(PREF_LAST_TRANSITION_TIME, System.currentTimeMillis())
+            .apply()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        MotiumApplication.logger.i("🛑 ActivityRecognitionService destroyed", "ActivityRecognition")
+        MotiumApplication.logger.i("🛑 ActivityRecognitionService destroyed", TAG)
 
-        // Reset the active flag so service can be restarted properly
         isActivityRecognitionActive = false
-
-        // Nettoyer l'instance
         instance = null
 
         // Cancel Doze mode keep-alive alarm
         DozeModeFix.cancelActivityRecognitionKeepAlive(this)
 
-        // Nettoyer le handler STILL pour éviter les fuites mémoire
-        stillCheckHandler.removeCallbacksAndMessages(null)
+        // Cancel periodic reregistration
+        reregisterJob?.cancel()
+        reregisterJob = null
 
+        // Clean up handlers
+        notificationHandler.removeCallbacksAndMessages(null)
+
+        // Stop notification monitoring
+        stopNotificationMonitor()
+
+        // Stop activity recognition
         stopActivityRecognition()
+
+        // Cancel all coroutines
         serviceScope.cancel()
     }
 
@@ -426,142 +688,210 @@ class ActivityRecognitionService : Service() {
         )
     }
 
+    /**
+     * Démarre la détection d'activité avec PendingIntent.getForegroundService().
+     *
+     * ## SAMSUNG FIX
+     * Utilise getForegroundService() au lieu de getBroadcast() car Samsung One UI
+     * tue les BroadcastReceivers même avec exemption batterie.
+     *
+     * ## FLAG_MUTABLE
+     * Requis pour que Google Play Services puisse ajouter les extras ActivityTransitionResult.
+     */
     private fun startActivityRecognition() {
-        MotiumApplication.logger.i("🔧 Requesting activity transition updates (nouvelle API)", "ActivityRecognition")
+        MotiumApplication.logger.i("🔧 Starting Activity Recognition with getForegroundService()", TAG)
 
         // Vérifier Google Play Services
-        try {
-            val apiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
-            val resultCode = apiAvailability.isGooglePlayServicesAvailable(this)
-            if (resultCode != com.google.android.gms.common.ConnectionResult.SUCCESS) {
-                MotiumApplication.logger.e(
-                    "❌ Google Play Services NOT available! Result code: $resultCode\n" +
-                    "Activity Recognition CANNOT work without Google Play Services.\n" +
-                    "Error: ${apiAvailability.getErrorString(resultCode)}",
-                    "ActivityRecognition"
-                )
-                // Continue anyway to log the attempt
-            } else {
-                MotiumApplication.logger.i("✅ Google Play Services available", "ActivityRecognition")
-            }
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Error checking Google Play Services: ${e.message}", "ActivityRecognition", e)
+        checkGooglePlayServices()
+
+        // Vérifier permission ACTIVITY_RECOGNITION
+        if (!checkActivityRecognitionPermission()) {
+            MotiumApplication.logger.e("❌ ACTIVITY_RECOGNITION permission not granted!", TAG)
+            return
         }
 
-        // Vérifier explicitement la permission ACTIVITY_RECOGNITION
-        val hasPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            android.content.pm.PackageManager.PERMISSION_GRANTED ==
-                androidx.core.content.ContextCompat.checkSelfPermission(
-                    this,
-                    android.Manifest.permission.ACTIVITY_RECOGNITION
-                )
-        } else {
-            true // Permission not needed before Android 10
-        }
-
-        MotiumApplication.logger.i(
-            "📋 ACTIVITY_RECOGNITION permission check: ${if (hasPermission) "GRANTED ✅" else "DENIED ❌"}",
-            "ActivityRecognition"
-        )
-
-        // DIAGNOSTICS SAMSUNG: Vérifier les causes connues d'échec Activity Recognition
+        // Diagnostics Samsung
         performSamsungDiagnostics()
 
-        // FIX: Utiliser applicationContext au lieu de "this" pour éviter les conflits d'UID
-        // FIX: Utiliser FLAG_CANCEL_CURRENT pour annuler les anciens PendingIntents avec un UID obsolète
-        val activityIntent = Intent(applicationContext, ActivityRecognitionReceiver::class.java)
-
-        // Utiliser un requestCode unique par installation pour garantir un PendingIntent différent
+        // Créer le PendingIntent qui pointe vers CE SERVICE (pas un BroadcastReceiver)
         val requestCode = getUniqueRequestCode(applicationContext)
 
-        val pendingIntent = PendingIntent.getBroadcast(
-            applicationContext,  // ✅ Utilise applicationContext au lieu de "this"
-            requestCode,         // ✅ Request code unique par installation
-            activityIntent,
-            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_MUTABLE  // ✅ Annule l'ancien PendingIntent
+        // CRITICAL: Intent vers le service avec action spécifique
+        val serviceIntent = Intent(applicationContext, ActivityRecognitionService::class.java).apply {
+            action = ACTION_ACTIVITY_TRANSITION
+        }
+
+        // CRITICAL: getForegroundService() + FLAG_MUTABLE (pas IMMUTABLE!)
+        // FLAG_MUTABLE est requis pour que Google Play Services puisse ajouter les extras
+        transitionPendingIntent = PendingIntent.getForegroundService(
+            applicationContext,
+            requestCode,
+            serviceIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
 
-        MotiumApplication.logger.d(
-            "PendingIntent created: $pendingIntent (requestCode=$requestCode, context=applicationContext)",
-            "ActivityRecognition"
+        MotiumApplication.logger.i(
+            "📌 PendingIntent created: getForegroundService(), requestCode=$requestCode, FLAG_MUTABLE",
+            TAG
         )
 
         try {
-            // Créer la requête de transitions
+            // Créer la liste des transitions à surveiller
             val transitions = createActivityTransitions()
-            val request = ActivityTransitionRequest(transitions)
+            activityTransitionRequest = ActivityTransitionRequest(transitions)
 
             MotiumApplication.logger.d(
-                "ActivityTransition request created with ${transitions.size} transitions",
-                "ActivityRecognition"
+                "ActivityTransition request: ${transitions.size} transitions",
+                TAG
             )
 
-            // Utiliser la nouvelle API ActivityTransition
-            val task = activityRecognitionClient.requestActivityTransitionUpdates(
-                request,
-                pendingIntent
-            )
-
-            MotiumApplication.logger.d("ActivityTransition request task created", "ActivityRecognition")
-
-            task.addOnSuccessListener {
+            // Enregistrer les transitions
+            activityRecognitionClient.requestActivityTransitionUpdates(
+                activityTransitionRequest!!,
+                transitionPendingIntent!!
+            ).addOnSuccessListener {
                 MotiumApplication.logger.i(
-                    "✅ Activity transition tracking started successfully\n" +
-                    "   Transitions: IN_VEHICLE (ENTER/EXIT), WALKING (ENTER), STILL (ENTER), ON_BICYCLE (ENTER/EXIT)\n" +
-                    "   PendingIntent: $pendingIntent\n" +
-                    "   API: ActivityTransition (nouvelle API recommandée par Google)\n" +
-                    "   Receiver: ActivityRecognitionReceiver",
-                    "ActivityRecognition"
+                    "✅ Activity Recognition started successfully!\n" +
+                            "   Method: getForegroundService() (Samsung-compatible)\n" +
+                            "   Transitions: IN_VEHICLE, ON_BICYCLE, STILL, WALKING, RUNNING",
+                    TAG
                 )
-            }.addOnFailureListener { exception ->
+            }.addOnFailureListener { e ->
                 MotiumApplication.logger.e(
-                    "❌ Failed to start activity transition tracking: ${exception.message}\n" +
-                    "   Exception type: ${exception.javaClass.simpleName}\n" +
-                    "   Stack trace: ${exception.stackTraceToString()}",
-                    "ActivityRecognition",
-                    exception
-                )
-            }.addOnCompleteListener { task2 ->
-                MotiumApplication.logger.d(
-                    "Activity transition request completed - Success: ${task2.isSuccessful}",
-                    "ActivityRecognition"
+                    "❌ Failed to start Activity Recognition: ${e.message}",
+                    TAG, e
                 )
             }
         } catch (e: SecurityException) {
             MotiumApplication.logger.e(
-                "❌ SECURITY EXCEPTION - Activity recognition permission not granted!",
-                "ActivityRecognition",
-                e
+                "❌ SecurityException - permission not granted!",
+                TAG, e
             )
         } catch (e: Exception) {
             MotiumApplication.logger.e(
-                "❌ UNEXPECTED EXCEPTION starting activity recognition: ${e.message}\n" +
-                "   Exception type: ${e.javaClass.simpleName}",
-                "ActivityRecognition",
-                e
+                "❌ Unexpected exception: ${e.message}",
+                TAG, e
             )
         }
     }
 
-    @SuppressLint("MissingPermission") // Permission checked at service startup
-    private fun stopActivityRecognition() {
-        // FIX: Utiliser les mêmes paramètres que startActivityRecognition() pour identifier le PendingIntent
-        val activityIntent = Intent(applicationContext, ActivityRecognitionReceiver::class.java)
-        val requestCode = getUniqueRequestCode(applicationContext)
+    private fun checkGooglePlayServices(): Boolean {
+        return try {
+            val apiAvailability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+            val resultCode = apiAvailability.isGooglePlayServicesAvailable(this)
+            if (resultCode != com.google.android.gms.common.ConnectionResult.SUCCESS) {
+                MotiumApplication.logger.e(
+                    "❌ Google Play Services NOT available! Code: $resultCode",
+                    TAG
+                )
+                false
+            } else {
+                MotiumApplication.logger.i("✅ Google Play Services available", TAG)
+                true
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error checking Play Services: ${e.message}", TAG, e)
+            false
+        }
+    }
 
-        val pendingIntent = PendingIntent.getBroadcast(
-            applicationContext,  // ✅ Utilise applicationContext
-            requestCode,         // ✅ Même request code unique que dans startActivityRecognition()
-            activityIntent,
-            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_MUTABLE
+    private fun checkActivityRecognitionPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val granted = PackageManager.PERMISSION_GRANTED ==
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        this, Manifest.permission.ACTIVITY_RECOGNITION
+                    )
+            MotiumApplication.logger.i(
+                "📋 ACTIVITY_RECOGNITION permission: ${if (granted) "GRANTED ✅" else "DENIED ❌"}",
+                TAG
+            )
+            granted
+        } else {
+            true // Not needed before Android 10
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopActivityRecognition() {
+        transitionPendingIntent?.let { pi ->
+            try {
+                activityRecognitionClient.removeActivityTransitionUpdates(pi)
+                MotiumApplication.logger.i("✅ Activity Recognition stopped", TAG)
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("❌ Error stopping AR: ${e.message}", TAG, e)
+            }
+        }
+        transitionPendingIntent = null
+        activityTransitionRequest = null
+    }
+
+    // ==================== DOUBLE REGISTRATION STRATEGY ====================
+
+    /**
+     * Planifie un ré-enregistrement périodique des transitions.
+     * Samsung: toutes les 30 min, autres: toutes les 60 min.
+     */
+    private fun schedulePeriodicReregistration() {
+        reregisterJob?.cancel()
+
+        val isSamsung = Build.MANUFACTURER.lowercase().contains("samsung")
+        val intervalMs = if (isSamsung) REREGISTER_INTERVAL_SAMSUNG_MS else REREGISTER_INTERVAL_DEFAULT_MS
+
+        MotiumApplication.logger.i(
+            "⏰ Scheduling periodic reregistration every ${intervalMs / 60000} min " +
+                    "(device: ${if (isSamsung) "Samsung" else "other"})",
+            TAG
         )
 
+        reregisterJob = serviceScope.launch {
+            while (isActive) {
+                delay(intervalMs)
+                MotiumApplication.logger.i("🔄 Periodic reregistration triggered", TAG)
+                reregisterActivityTransitions()
+            }
+        }
+    }
+
+    /**
+     * Planifie un ré-enregistrement 5 secondes après réception d'une transition.
+     * Permet de "rafraîchir" l'enregistrement après chaque événement reçu.
+     */
+    private fun scheduleReregistrationAfterTransition() {
+        serviceScope.launch {
+            delay(5000) // Attendre 5 secondes
+            MotiumApplication.logger.d("🔄 Post-transition reregistration", TAG)
+            reregisterActivityTransitions()
+        }
+    }
+
+    /**
+     * Ré-enregistre les transitions d'activité (remove + add).
+     * Note: internal pour permettre l'appel depuis le companion object (HealthWorker)
+     */
+    @SuppressLint("MissingPermission")
+    internal fun reregisterActivityTransitions() {
+        val pi = transitionPendingIntent
+        val request = activityTransitionRequest
+
+        if (pi == null || request == null) {
+            MotiumApplication.logger.w("Cannot reregister: PendingIntent or request is null", TAG)
+            return
+        }
+
         try {
-            // Utiliser la nouvelle API ActivityTransition
-            activityRecognitionClient.removeActivityTransitionUpdates(pendingIntent)
-            MotiumApplication.logger.i("✅ Activity transition tracking stopped successfully (requestCode=$requestCode)", "ActivityRecognition")
+            // Remove puis add pour forcer le rafraîchissement
+            activityRecognitionClient.removeActivityTransitionUpdates(pi)
+                .addOnCompleteListener {
+                    activityRecognitionClient.requestActivityTransitionUpdates(request, pi)
+                        .addOnSuccessListener {
+                            MotiumApplication.logger.i("✅ Activity transitions reregistered", TAG)
+                        }
+                        .addOnFailureListener { e ->
+                            MotiumApplication.logger.e("❌ Reregistration failed: ${e.message}", TAG)
+                        }
+                }
         } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Error stopping activity transition tracking: ${e.message}", "ActivityRecognition", e)
+            MotiumApplication.logger.e("❌ Error during reregistration: ${e.message}", TAG, e)
         }
     }
 
@@ -703,5 +1033,74 @@ class ActivityRecognitionService : Service() {
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Updates notification based on trip state from LocationTrackingService.
+     * Handles the "Trajet sauvegardé" temporary message with auto-reset.
+     */
+    private fun updateNotificationFromState(state: TripNotificationState) {
+        // Cancel any pending notification reset
+        notificationHandler.removeCallbacksAndMessages(null)
+
+        val text = state.toNotificationText()
+        MotiumApplication.logger.d("Updating notification: $text", "Notification")
+        updateNotification(text)
+
+        // If trip was saved, reset to Standby after 3 seconds
+        if (state is TripNotificationState.TripSaved) {
+            notificationHandler.postDelayed({
+                updateNotification(TripNotificationState.Standby.toNotificationText())
+            }, 3000L)
+        }
+    }
+
+    /**
+     * Starts periodic monitoring of the notification to ensure it stays visible.
+     * If the notification is dismissed (by user or system), it will be re-displayed.
+     */
+    private fun startNotificationMonitor() {
+        stopNotificationMonitor() // Clear any existing monitor
+
+        notificationMonitorRunnable = object : Runnable {
+            override fun run() {
+                ensureNotificationVisible()
+                notificationMonitorHandler.postDelayed(this, NOTIFICATION_MONITOR_INTERVAL_MS)
+            }
+        }
+
+        // Start monitoring after initial delay
+        notificationMonitorHandler.postDelayed(notificationMonitorRunnable!!, NOTIFICATION_MONITOR_INTERVAL_MS)
+        MotiumApplication.logger.d("Notification monitor started", "Notification")
+    }
+
+    /**
+     * Stops the notification monitoring.
+     */
+    private fun stopNotificationMonitor() {
+        notificationMonitorRunnable?.let {
+            notificationMonitorHandler.removeCallbacks(it)
+            notificationMonitorRunnable = null
+        }
+    }
+
+    /**
+     * Checks if the notification is still visible and re-displays it if needed.
+     * This handles cases where the user swipes to dismiss or the system removes it.
+     */
+    private fun ensureNotificationVisible() {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val activeNotifications = notificationManager.activeNotifications
+
+        val isNotificationVisible = activeNotifications.any { it.id == NOTIFICATION_ID }
+
+        if (!isNotificationVisible) {
+            MotiumApplication.logger.w(
+                "⚠️ Notification was dismissed - re-displaying foreground notification",
+                "Notification"
+            )
+            // Re-start foreground service with notification
+            startForegroundService()
+        }
     }
 }
