@@ -148,16 +148,28 @@
         </activity>
 
         <!-- Activity Recognition Service -->
+        <!-- exported="true" for DEBUG transitions via ADB (test only) -->
         <service
             android:name=".service.ActivityRecognitionService"
             android:foregroundServiceType="location"
-            android:exported="false" />
+            android:exported="true">
+            <!-- Intent filter for debug transitions (testing via ADB) -->
+            <intent-filter>
+                <action android:name="com.application.motium.ACTION_DEBUG_TRANSITION" />
+            </intent-filter>
+        </service>
 
         <!-- Location Tracking Service -->
+        <!-- exported="true" for DEBUG GPS injection via ADB (test only) -->
         <service
             android:name=".service.LocationTrackingService"
             android:foregroundServiceType="location"
-            android:exported="false" />
+            android:exported="true">
+            <!-- Intent filter for debug GPS injection (testing via ADB) -->
+            <intent-filter>
+                <action android:name="com.application.motium.ACTION_DEBUG_LOCATION" />
+            </intent-filter>
+        </service>
 
 
         <!-- Supabase Connection Service -->
@@ -178,16 +190,10 @@
                 android:resource="@xml/file_provider_paths" />
         </provider>
 
-        <!-- Activity Recognition Receiver -->
-        <!-- exported=true is REQUIRED to receive broadcasts from Google Play Services (external process) -->
-        <receiver
-            android:name=".service.ActivityRecognitionReceiver"
-            android:exported="true"
-            android:permission="com.google.android.gms.permission.ACTIVITY_RECOGNITION">
-            <intent-filter>
-                <action android:name="com.google.android.gms.location.ActivityRecognitionResult" />
-            </intent-filter>
-        </receiver>
+        <!-- NOTE: ActivityRecognitionReceiver REMOVED (2026-01)
+             Samsung One UI kills BroadcastReceivers even with battery exemption.
+             Transitions are now handled via PendingIntent.getForegroundService()
+             directly in ActivityRecognitionService.onStartCommand() -->
 
         <!-- Auto start receiver - BOOT_COMPLETED needs separate intent-filter -->
         <receiver
@@ -206,11 +212,9 @@
             </intent-filter>
         </receiver>
 
-        <!-- Activity Recognition keep-alive receiver (Doze Mode fix) -->
-        <receiver
-            android:name=".service.ActivityRecognitionKeepAliveReceiver"
-            android:enabled="true"
-            android:exported="false" />
+        <!-- NOTE: ActivityRecognitionKeepAliveReceiver REMOVED (2026-01)
+             Keep-alive now uses PendingIntent.getForegroundService() via DozeModeFix
+             to directly wake ActivityRecognitionService (Samsung-compatible) -->
 
     </application>
 

@@ -72,6 +72,9 @@ class LocationTrackingService : Service() {
         private const val MIN_TRIP_DISTANCE_BEFORE_STOP_CHECK = 300.0 // 300m minimum parcourus avant de vérifier arrêt (évite faux départ)
         private const val MAX_TRIP_DURATION_MS = 36000000L // 10 heures max par trajet (failsafe anti-boucle infinie)
 
+        // Notification distance update threshold
+        private const val DISTANCE_UPDATE_THRESHOLD_KM = 1.0 // Update notification every 1 km
+
         // Critères de détection de trajet fantôme (ghost trip detection)
         private const val GHOST_TRIP_TIMEOUT_MS = 600000L // 10 minutes sans GPS = trajet fantôme
         private const val TRIP_HEALTH_CHECK_INTERVAL_MS = 300000L // BATTERY OPTIMIZATION: Vérifier l'état du trajet toutes les 5 minutes (réduit consommation batterie)
@@ -93,6 +96,17 @@ class LocationTrackingService : Service() {
         private const val ACTION_RESUME_TRACKING = "com.application.motium.RESUME_TRACKING"
         private const val ACTION_END_TRIP = "com.application.motium.END_TRIP"
         private const val ACTION_MANUAL_STOP_TRIP = "com.application.motium.MANUAL_STOP_TRIP"
+
+        // TripStateManager integration: Actions directes de démarrage/fin de trajet
+        private const val ACTION_START_TRIP = "com.application.motium.START_TRIP"
+        private const val EXTRA_TRIP_ID = "trip_id"
+
+        // DEBUG: Injection de positions GPS simulées via ADB
+        const val ACTION_DEBUG_LOCATION = "com.application.motium.ACTION_DEBUG_LOCATION"
+        private const val EXTRA_DEBUG_LAT = "lat"
+        private const val EXTRA_DEBUG_LON = "lon"
+        private const val EXTRA_DEBUG_SPEED = "speed"
+        private const val EXTRA_DEBUG_ACCURACY = "accuracy"
 
         // LEGACY: Compatibilité avec ancien code
         private const val ACTION_VEHICLE_CONFIRMED = "com.application.motium.VEHICLE_CONFIRMED"
@@ -207,6 +221,59 @@ class LocationTrackingService : Service() {
             context.startService(intent)
         }
 
+        // ==================== TripStateManager Integration ====================
+
+        /**
+         * Démarre immédiatement un nouveau trajet avec le tripId fourni par TripStateManager.
+         * Pas de buffering - démarrage GPS instantané.
+         *
+         * Appelé par ActivityRecognitionService.setupTripStateManagerCallbacks() quand
+         * TripStateManager passe en état MOVING.
+         */
+        fun startTrip(context: Context, tripId: String) {
+            if (!hasLocationPermissions(context)) {
+                MotiumApplication.logger.w(
+                    "Cannot start trip: location permissions not granted",
+                    "LocationService"
+                )
+                return
+            }
+
+            try {
+                val intent = Intent(context, LocationTrackingService::class.java).apply {
+                    action = ACTION_START_TRIP
+                    putExtra(EXTRA_TRIP_ID, tripId)
+                }
+                context.startService(intent)
+                MotiumApplication.logger.i(
+                    "🚗 startTrip() called with tripId=$tripId",
+                    "LocationService"
+                )
+            } catch (e: Exception) {
+                MotiumApplication.logger.e(
+                    "Error sending startTrip command: ${e.message}",
+                    "LocationService",
+                    e
+                )
+            }
+        }
+
+        /**
+         * Termine un trajet spécifique par son tripId.
+         * Appelé par ActivityRecognitionService quand TripStateManager passe en état IDLE.
+         */
+        fun endTrip(context: Context, tripId: String) {
+            val intent = Intent(context, LocationTrackingService::class.java).apply {
+                action = ACTION_END_TRIP
+                putExtra(EXTRA_TRIP_ID, tripId)
+            }
+            context.startService(intent)
+            MotiumApplication.logger.i(
+                "🏁 endTrip() called with tripId=$tripId",
+                "LocationService"
+            )
+        }
+
         // LEGACY: Compatibilité avec ancien code
 
         /**
@@ -266,6 +333,9 @@ class LocationTrackingService : Service() {
 
     // NOUVELLE LOGIQUE: État du service avec machine à états
     private var tripState = TripState.STANDBY
+
+    // Distance tracking for notification updates (every 1 km)
+    private var lastNotifiedDistanceKm: Double = 0.0
 
     // Buffer temporaire pour points GPS non confirmés
     private val gpsBuffer = mutableListOf<TripLocation>()
@@ -372,6 +442,7 @@ class LocationTrackingService : Service() {
                         tripState = TripState.BUFFERING
                         gpsBuffer.clear()
                         lastGPSUpdateTime = 0  // 🔧 FIX: Réinitialiser le timestamp pour éviter détection ghost trip avec ancienne valeur
+                        lastNotifiedDistanceKm = 0.0  // Reset distance notification tracking
 
                         // BATTERY OPTIMIZATION: Démarrer GPS en haute fréquence pour collecter points précis
                         updateGPSFrequency(tripMode = true)
@@ -381,6 +452,7 @@ class LocationTrackingService : Service() {
                         startTripHealthCheck()
 
                         MotiumApplication.logger.i("State transition: STANDBY → BUFFERING (GPS + health check started)", "TripStateMachine")
+                        updateNotificationStatus()  // Show "Détection en cours..."
                     }
                     TripState.PAUSED -> {
                         // Reprendre depuis pause (même trajet)
@@ -694,6 +766,90 @@ class LocationTrackingService : Service() {
                 updateNotificationStatus()
             }
 
+            // ==================== TripStateManager Integration ====================
+            ACTION_START_TRIP -> {
+                // Nouveau trajet déclenché par TripStateManager (IN_VEHICLE ENTER)
+                // Démarrage GPS IMMÉDIAT, pas de buffering
+                val tripId = intent.getStringExtra(EXTRA_TRIP_ID)
+                MotiumApplication.logger.i(
+                    "🚗 START TRIP from TripStateManager - tripId=$tripId",
+                    "LocationService"
+                )
+
+                // S'assurer que le service est démarré
+                if (!isTracking) {
+                    startForegroundService()
+                    startNotificationWatch()
+                }
+
+                // Forcer le passage en TRIP_ACTIVE (pas de buffering)
+                when (tripState) {
+                    TripState.STANDBY, TripState.BUFFERING -> {
+                        // Créer le trajet immédiatement
+                        tripState = TripState.TRIP_ACTIVE
+                        gpsBuffer.clear()
+                        lastGPSUpdateTime = 0
+                        lastNotifiedDistanceKm = 0.0
+
+                        // Créer le TripData avec le tripId fourni
+                        currentTrip = TripData().apply {
+                            // Note: tripId de TripStateManager sera utilisé pour la sauvegarde
+                        }
+
+                        // Démarrer GPS haute fréquence
+                        updateGPSFrequency(tripMode = true)
+                        if (!isTracking) startLocationUpdates()
+
+                        // Démarrer health check
+                        startTripHealthCheck()
+
+                        MotiumApplication.logger.i(
+                            "State transition: ${if (tripState == TripState.STANDBY) "STANDBY" else "BUFFERING"} → TRIP_ACTIVE " +
+                            "(immediate start via TripStateManager, tripId=$tripId)",
+                            "TripStateMachine"
+                        )
+                    }
+                    TripState.STOP_PENDING, TripState.FINALIZING -> {
+                        // Annuler l'arrêt en cours - même trajet continue
+                        MotiumApplication.logger.i(
+                            "🔄 AUTO-RESUME from START_TRIP: Cancelling pending stop",
+                            "TripStateMachine"
+                        )
+                        stopDebounceHandler.removeCallbacksAndMessages(null)
+                        endPointHandler.removeCallbacksAndMessages(null)
+                        stopPendingStartTime = null
+                        isCollectingEndPoints = false
+                        endPointCandidates.clear()
+
+                        tripState = TripState.TRIP_ACTIVE
+                        MotiumApplication.logger.i(
+                            "State transition: ${tripState} → TRIP_ACTIVE (auto-resume)",
+                            "TripStateMachine"
+                        )
+                    }
+                    TripState.PAUSED -> {
+                        // Reprendre depuis pause
+                        tripState = TripState.TRIP_ACTIVE
+                        updateGPSFrequency(tripMode = true)
+                        if (!isTracking) startLocationUpdates()
+                        startTripHealthCheck()
+
+                        MotiumApplication.logger.i(
+                            "State transition: PAUSED → TRIP_ACTIVE (resumed via TripStateManager)",
+                            "TripStateMachine"
+                        )
+                    }
+                    else -> {
+                        MotiumApplication.logger.d(
+                            "START_TRIP ignored in state $tripState",
+                            "TripStateMachine"
+                        )
+                    }
+                }
+
+                updateNotificationStatus()
+            }
+
             ACTION_END_TRIP -> {
                 // Activité confirmée NON-véhicule (marche) → terminer et sauvegarder trajet
                 MotiumApplication.logger.i("🏁 END TRIP - Activity confirmed as non-vehicle", "LocationService")
@@ -754,18 +910,22 @@ class LocationTrackingService : Service() {
                             // Pas de trajet actif, vider buffer et retour STANDBY
                             gpsBuffer.clear()
                             tripState = TripState.STANDBY
-                            updateGPSFrequency(tripMode = false)
+                            // BATTERY FIX: Arrêter complètement le GPS au lieu de réduire la fréquence
+                            stopLocationUpdates()
+                            stopTripHealthCheck()
 
-                            MotiumApplication.logger.i("State transition: TRIP_ACTIVE → STANDBY (no active trip)", "TripStateMachine")
+                            MotiumApplication.logger.i("State transition: TRIP_ACTIVE → STANDBY (no active trip, GPS stopped)", "TripStateMachine")
                         }
                     }
                     TripState.BUFFERING -> {
                         // Si on a un trajet en buffer mais non confirmé, vider et retour STANDBY
                         gpsBuffer.clear()
                         tripState = TripState.STANDBY
-                        updateGPSFrequency(tripMode = false)
+                        // BATTERY FIX: Arrêter complètement le GPS au lieu de réduire la fréquence
+                        stopLocationUpdates()
+                        stopTripHealthCheck()
 
-                        MotiumApplication.logger.i("State transition: BUFFERING → STANDBY (trip not confirmed)", "TripStateMachine")
+                        MotiumApplication.logger.i("State transition: BUFFERING → STANDBY (trip not confirmed, GPS stopped)", "TripStateMachine")
                     }
                     TripState.PAUSED -> {
                         // Finaliser le trajet en pause
@@ -786,8 +946,11 @@ class LocationTrackingService : Service() {
                             // Pas de trajet, retour STANDBY
                             gpsBuffer.clear()
                             tripState = TripState.STANDBY
+                            // BATTERY FIX: Arrêter complètement le GPS
+                            stopLocationUpdates()
+                            stopTripHealthCheck()
 
-                            MotiumApplication.logger.i("State transition: PAUSED → STANDBY (no active trip)", "TripStateMachine")
+                            MotiumApplication.logger.i("State transition: PAUSED → STANDBY (no active trip, GPS stopped)", "TripStateMachine")
                         }
                     }
                     TripState.STOP_PENDING -> {
@@ -832,9 +995,11 @@ class LocationTrackingService : Service() {
                             // Pas de trajet actif, vider buffer et retour STANDBY
                             gpsBuffer.clear()
                             tripState = TripState.STANDBY
-                            updateGPSFrequency(tripMode = false)
+                            // BATTERY FIX: Arrêter complètement le GPS au lieu de réduire la fréquence
+                            stopLocationUpdates()
+                            stopTripHealthCheck()
 
-                            MotiumApplication.logger.i("State transition: $tripState → STANDBY (manual stop, no active trip)", "TripStateMachine")
+                            MotiumApplication.logger.i("State transition: $tripState → STANDBY (manual stop, no active trip, GPS stopped)", "TripStateMachine")
                         }
                     }
                     TripState.STOP_PENDING -> {
@@ -866,8 +1031,11 @@ class LocationTrackingService : Service() {
                             // Pas de trajet, retour STANDBY
                             gpsBuffer.clear()
                             tripState = TripState.STANDBY
+                            // BATTERY FIX: Arrêter complètement le GPS
+                            stopLocationUpdates()
+                            stopTripHealthCheck()
 
-                            MotiumApplication.logger.i("State transition: STOP_PENDING → STANDBY (manual stop, no active trip)", "TripStateMachine")
+                            MotiumApplication.logger.i("State transition: STOP_PENDING → STANDBY (manual stop, no active trip, GPS stopped)", "TripStateMachine")
                         }
                     }
                     TripState.PAUSED -> {
@@ -889,8 +1057,11 @@ class LocationTrackingService : Service() {
                             // Pas de trajet, retour STANDBY
                             gpsBuffer.clear()
                             tripState = TripState.STANDBY
+                            // BATTERY FIX: Arrêter complètement le GPS
+                            stopLocationUpdates()
+                            stopTripHealthCheck()
 
-                            MotiumApplication.logger.i("State transition: PAUSED → STANDBY (manual stop, no active trip)", "TripStateMachine")
+                            MotiumApplication.logger.i("State transition: PAUSED → STANDBY (manual stop, no active trip, GPS stopped)", "TripStateMachine")
                         }
                     }
                     else -> {
@@ -919,6 +1090,38 @@ class LocationTrackingService : Service() {
             ACTION_STOP_TRACKING -> {
                 // Arrêt complet du service
                 stopSelf()
+            }
+
+            ACTION_DEBUG_LOCATION -> {
+                // DEBUG: Injection de position GPS simulée via ADB
+                val lat = intent.getDoubleExtra(EXTRA_DEBUG_LAT, 0.0)
+                val lon = intent.getDoubleExtra(EXTRA_DEBUG_LON, 0.0)
+                val speed = intent.getFloatExtra(EXTRA_DEBUG_SPEED, 15f) // 15 m/s = 54 km/h par défaut
+                val accuracy = intent.getFloatExtra(EXTRA_DEBUG_ACCURACY, 5f) // 5m de précision
+
+                if (lat != 0.0 && lon != 0.0) {
+                    // Créer une Location simulée
+                    val mockLocation = Location("debug").apply {
+                        latitude = lat
+                        longitude = lon
+                        this.speed = speed
+                        this.accuracy = accuracy
+                        time = System.currentTimeMillis()
+                        elapsedRealtimeNanos = System.nanoTime()
+                        altitude = 300.0
+                        bearing = 0f
+                    }
+
+                    MotiumApplication.logger.i(
+                        "🧪 DEBUG GPS: lat=$lat, lon=$lon, speed=${speed}m/s (${speed * 3.6}km/h), acc=${accuracy}m",
+                        "DebugGPS"
+                    )
+
+                    // Injecter directement dans le pipeline de traitement
+                    processLocationUpdate(mockLocation)
+                } else {
+                    MotiumApplication.logger.w("DEBUG GPS: Invalid coordinates lat=$lat, lon=$lon", "DebugGPS")
+                }
             }
 
             else -> {
@@ -1835,6 +2038,9 @@ class LocationTrackingService : Service() {
                 "TripTracker"
             )
         }
+
+        // Update notification if distance threshold reached
+        maybeUpdateDistanceNotification()
     }
 
     private fun finishCurrentTrip() {
@@ -2198,6 +2404,8 @@ class LocationTrackingService : Service() {
                         "end: ${endAddress ?: "unknown"}",
                         "DatabaseSave"
                     )
+                    // Show "Trajet sauvegardé" notification (resets to standby after 3 seconds)
+                    ActivityRecognitionService.updateNotificationState(TripNotificationState.TripSaved)
                 } else {
                     MotiumApplication.logger.w(
                         "⚠️ Trip NOT saved - subscription expired or no valid access. " +
@@ -2218,13 +2426,36 @@ class LocationTrackingService : Service() {
     }
 
     /**
-     * Met à jour la notification uniquement lors de changements d'état importants
-     * (démarrage/fin de trajet) pour éviter les vibrations constantes
+     * Met à jour la notification selon l'état actuel du trajet.
+     * Délègue à ActivityRecognitionService qui possède la notification.
      */
     private fun updateNotificationStatus() {
-        // Ne plus créer/mettre à jour de notification séparée
-        // ActivityRecognitionService gère la notification unique "Suivi de vos déplacements"
-        MotiumApplication.logger.d("updateNotificationStatus called but disabled (no separate notification)", "LocationService")
+        val state = when (tripState) {
+            TripState.STANDBY -> TripNotificationState.Standby
+            TripState.BUFFERING -> TripNotificationState.Detecting
+            TripState.TRIP_ACTIVE -> {
+                val distanceKm = (currentTrip?.totalDistance ?: 0.0) / 1000.0
+                TripNotificationState.TripActive(distanceKm)
+            }
+            TripState.PAUSED -> TripNotificationState.Paused
+            TripState.STOP_PENDING -> TripNotificationState.StopDetected
+            TripState.FINALIZING -> TripNotificationState.Finalizing
+        }
+        ActivityRecognitionService.updateNotificationState(state)
+    }
+
+    /**
+     * Checks if notification should be updated based on distance traveled.
+     * Updates notification every DISTANCE_UPDATE_THRESHOLD_KM (1 km).
+     */
+    private fun maybeUpdateDistanceNotification() {
+        if (tripState != TripState.TRIP_ACTIVE) return
+
+        val currentDistanceKm = (currentTrip?.totalDistance ?: 0.0) / 1000.0
+        if (currentDistanceKm - lastNotifiedDistanceKm >= DISTANCE_UPDATE_THRESHOLD_KM) {
+            lastNotifiedDistanceKm = currentDistanceKm
+            updateNotificationStatus()
+        }
     }
 
     private fun startNotificationWatch() {
