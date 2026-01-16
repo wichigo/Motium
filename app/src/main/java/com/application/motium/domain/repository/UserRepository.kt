@@ -9,6 +9,5 @@ interface UserRepository {
     suspend fun getCurrentUser(): User?
     suspend fun insertUser(user: User)
     suspend fun updateUser(user: User)
-    suspend fun updateMonthlyTripCount(userId: String, count: Int)
     suspend fun deleteUser(user: User)
 }

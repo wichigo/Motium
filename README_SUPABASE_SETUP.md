@@ -31,7 +31,7 @@ Les fonctions dans les expressions d'index doivent être marquées IMMUTABLE. La
 3. Dans le fichier `SupabaseClient.kt`, remplacez :
 
 ```kotlin
-const val SUPABASE_URL = "https://your-project.supabase.co"  // Votre Project URL
+const val SUPABASE_URL = "http://176.168.117.243:8000"  // Votre Project URL (self-hosted)
 const val SUPABASE_ANON_KEY = "your-anon-key-here"          // Votre anon public key
 ```
 
@@ -91,7 +91,7 @@ Si vous avez des données existantes à migrer, vous pouvez :
 Pour plus de sécurité, créez un fichier `local.properties` :
 
 ```
-SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_URL=http://176.168.117.243:8000
 SUPABASE_ANON_KEY=your-anon-key-here
 ```
 

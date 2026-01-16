@@ -6,6 +6,23 @@
       "env": {
         "DEFAULT_MINIMUM_TOKENS": "10000"
       }
-    }
+    },
+    "supabase": {
+      "command": "python",
+      "args": ["E:\\Professionnel\\mcp-servers\\mcp-supabase\\server.py"],
+      "env": {
+        "SUPABASE_URL": "http://176.168.117.243:8000",
+        "SUPABASE_KEY": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFub24iLCAiaXNzIjogInN1cGFiYXNlIiwgImlhdCI6IDE3MDQwNjcyMDAsICJleHAiOiAxODYxOTIwMDAwfQ.LUYd4QDV4W3yQc-HgbBHCmsjL1fkPU4xfTdlhabLN4M",
+        "SUPABASE_SERVICE_KEY": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogInNlcnZpY2Vfcm9sZSIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwNDA2NzIwMCwgImV4cCI6IDE4NjE5MjAwMDB9.s3pKh4L_rPbNgqwjm7Gm-AqmImf6oVML_FBAlGrtIqw"
+      }
+    },
+    "appium-lite": {
+          "command": "python",
+          "args": ["-m", "mcp_appium_lite"],
+       "cwd": "E:\\Professionnel\\mcp-appium-lite-project",
+        "env": {
+          "MCP_APPIUM_API_KEY": "dev_premium_2025"
+        }
+      }
   }
 }

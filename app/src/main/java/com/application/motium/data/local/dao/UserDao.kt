@@ -73,4 +73,21 @@ interface UserDao {
      */
     @Query("UPDATE users SET lastSyncedAt = :timestamp WHERE id = :userId")
     suspend fun updateLastSyncedAt(userId: String, timestamp: Long)
+
+    /**
+     * Update sync status for offline-first synchronization.
+     * Used after successfully uploading user profile to Supabase.
+     */
+    @Query("""
+        UPDATE users
+        SET syncStatus = :syncStatus,
+            serverUpdatedAt = :serverUpdatedAt,
+            localUpdatedAt = :serverUpdatedAt
+        WHERE id = :userId
+    """)
+    suspend fun updateSyncStatus(
+        userId: String,
+        syncStatus: String,
+        serverUpdatedAt: Long
+    )
 }

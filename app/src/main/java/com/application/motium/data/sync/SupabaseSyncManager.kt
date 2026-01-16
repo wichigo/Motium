@@ -19,7 +19,8 @@ class SupabaseSyncManager private constructor(private val context: Context) {
         // SYNC OPTIMIZATION: Intervalle augmenté de 5 → 15 minutes pour économie batterie
         // Les trajets sont rarement modifiés après création, donc sync moins fréquent suffit
         private const val SYNC_INTERVAL_MS = 15 * 60 * 1000L // 15 minutes (optimisé batterie)
-        private const val QUICK_SYNC_INTERVAL_MS = 30 * 1000L // 30 secondes pour sync rapide après échec
+        // BATTERY OPTIMIZATION: Quick sync augmenté de 30s → 2min pour économiser la batterie
+        private const val QUICK_SYNC_INTERVAL_MS = 2 * 60 * 1000L // 2 minutes (was 30 secondes)
 
         @Volatile
         private var instance: SupabaseSyncManager? = null

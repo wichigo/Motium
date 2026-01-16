@@ -21,9 +21,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.application.motium.data.Trip
 import com.application.motium.data.TripLocation
-import com.application.motium.data.supabase.LinkedAccountRepository
+import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
-import com.application.motium.data.supabase.SupabaseTripRepository
+import com.application.motium.data.supabase.TripRemoteDataSource
 import com.application.motium.domain.model.Trip as DomainTrip
 import com.application.motium.domain.model.TripType  // Used in conversion function
 import com.application.motium.presentation.individual.home.NewHomeTripCard
@@ -83,8 +83,8 @@ fun LinkedUserTripsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val themeManager = remember { ThemeManager.getInstance(context) }
-    val linkedAccountRepository = remember { LinkedAccountRepository.getInstance(context) }
-    val tripRepository = remember { SupabaseTripRepository.getInstance(context) }
+    val linkedAccountRemoteDataSource = remember { LinkedAccountRemoteDataSource.getInstance(context) }
+    val tripRemoteDataSource = remember { TripRemoteDataSource.getInstance(context) }
 
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
@@ -113,7 +113,7 @@ fun LinkedUserTripsScreen(
         isLoadingMore = true
 
         try {
-            val result = tripRepository.getTripsWithPagination(
+            val result = tripRemoteDataSource.getTripsWithPagination(
                 userId = userId,
                 limit = pageSize,
                 offset = trips.size,
@@ -150,7 +150,7 @@ fun LinkedUserTripsScreen(
         isLoading = true
         try {
             // Load user info
-            val userResult = linkedAccountRepository.getLinkedUserById(userId)
+            val userResult = linkedAccountRemoteDataSource.getLinkedUserById(userId)
             userResult.fold(
                 onSuccess = { linkedUser ->
                     user = linkedUser
@@ -159,7 +159,7 @@ fun LinkedUserTripsScreen(
             )
 
             // Load first page of validated trips
-            val tripsResult = tripRepository.getTripsWithPagination(
+            val tripsResult = tripRemoteDataSource.getTripsWithPagination(
                 userId = userId,
                 limit = pageSize,
                 offset = 0,

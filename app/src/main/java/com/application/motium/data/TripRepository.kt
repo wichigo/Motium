@@ -53,8 +53,6 @@ data class Trip(
     val isWorkHomeTrip: Boolean = false, // Trajet travail-maison (perso uniquement, donne droit aux indemnités)
     val createdAt: Long = System.currentTimeMillis(),  // Timestamp de création
     val updatedAt: Long = System.currentTimeMillis(),   // Timestamp de mise à jour
-    val lastSyncedAt: Long? = null,  // SYNC OPTIMIZATION: Timestamp de dernière synchronisation vers Supabase
-    val needsSync: Boolean = true,  // SYNC OPTIMIZATION: Flag indiquant si le trip doit être synchronisé
     val userId: String? = null,  // SECURITY: User ID pour isolation des données
     val matchedRouteCoordinates: String? = null  // CACHE: Map-matched route coordinates as JSON [[lon,lat],...]
 ) {
@@ -275,10 +273,10 @@ class TripRepository private constructor(context: Context) {
                 val isNewTrip = oldTrip == null
 
                 // OFFLINE-FIRST: Create entity with sync status
-                val tripEntity = tripWithUserId.toEntity(userId).copy(
+                val tripEntity = tripWithUserId.toEntity(
+                    userId = userId,
                     syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name,
-                    localUpdatedAt = System.currentTimeMillis(),
-                    needsSync = true
+                    localUpdatedAt = System.currentTimeMillis()
                 )
                 tripDao.insertTrip(tripEntity)
 
@@ -667,8 +665,10 @@ class TripRepository private constructor(context: Context) {
             if (localUser != null) {
                 val localTrips = getAllTrips()
 
-                // SYNC OPTIMIZATION: Ne synchroniser que les trips marqués comme "dirty" (needsSync = true)
-                val dirtyTrips = localTrips.filter { it.needsSync }
+                // SYNC OPTIMIZATION: Ne synchroniser que les trips marqués comme "dirty" (syncStatus != SYNCED)
+                // Note: Trip data model doesn't have syncStatus, so we load from DAO directly
+                val dirtyTripEntities = tripDao.getTripsNeedingSync(localUser.id)
+                val dirtyTrips = dirtyTripEntities.map { it.toDataModel() }
 
                 if (dirtyTrips.isNotEmpty()) {
                     MotiumApplication.logger.i(
@@ -836,7 +836,8 @@ class TripRepository private constructor(context: Context) {
                 if (tripEntity.reimbursementAmount != reimbursement) {
                     val updatedTrip = tripEntity.copy(
                         reimbursementAmount = reimbursement,
-                        needsSync = true,
+                        syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name,
+                        localUpdatedAt = System.currentTimeMillis(),
                         updatedAt = System.currentTimeMillis()
                     )
                     tripDao.insertTrip(updatedTrip)
@@ -855,6 +856,117 @@ class TripRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error recalculating reimbursements: ${e.message}", "TripRepository", e)
             return@withContext 0
+        }
+    }
+
+    /**
+     * Get trips for multiple users with filters (for Pro export).
+     * Reads from Room database (offline-first).
+     *
+     * @param userIds List of user IDs to fetch trips for
+     * @param startDate Start date as Instant
+     * @param endDate End date as Instant
+     * @param tripTypes List of trip types ("PROFESSIONAL", "PERSONAL")
+     * @return Map of userId to list of trips
+     */
+    suspend fun getTripsForUsers(
+        userIds: List<String>,
+        startDate: Instant,
+        endDate: Instant,
+        tripTypes: List<String>
+    ): Map<String, List<DomainTrip>> = withContext(Dispatchers.IO) {
+        try {
+            val result = mutableMapOf<String, List<DomainTrip>>()
+
+            userIds.forEach { userId ->
+                // Get all trips for this user from Room
+                val userTripEntities = tripDao.getTripsForUser(userId)
+
+                // Filter by date range and trip type
+                val filteredTrips = userTripEntities
+                    .filter { entity ->
+                        // Date filter
+                        val tripStart = entity.startTime
+                        val tripEnd = entity.endTime ?: System.currentTimeMillis()
+                        val inDateRange = tripStart >= startDate.toEpochMilliseconds() &&
+                                         tripEnd <= endDate.toEpochMilliseconds()
+
+                        // Type filter
+                        val matchesType = entity.tripType in tripTypes
+
+                        inDateRange && matchesType
+                    }
+                    .map { it.toDataModel().toDomainTrip(userId) }
+
+                result[userId] = filteredTrips
+            }
+
+            MotiumApplication.logger.i(
+                "Loaded trips for ${userIds.size} users from Room: ${result.values.sumOf { it.size }} total trips",
+                "TripRepository"
+            )
+
+            return@withContext result
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error loading trips for users: ${e.message}", "TripRepository", e)
+            return@withContext emptyMap()
+        }
+    }
+
+    /**
+     * Synchronize auto-tracking SharedPreferences cache with Room database.
+     * Call this at app startup BEFORE checking isAutoTrackingEnabled().
+     *
+     * This fixes the issue where auto-tracking settings from Room/Supabase are not
+     * reflected in the SharedPreferences cache on app startup, causing the service
+     * to not start even when mode is set to ALWAYS.
+     *
+     * @param userId The current user ID
+     * @return true if auto-tracking should be enabled, false otherwise
+     */
+    suspend fun syncAutoTrackingCacheFromRoom(userId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val workScheduleDao = com.application.motium.data.local.MotiumDatabase.getInstance(appContext).workScheduleDao()
+            val settingsEntity = workScheduleDao.getAutoTrackingSettings(userId)
+
+            if (settingsEntity != null) {
+                val mode = try {
+                    TrackingMode.valueOf(settingsEntity.trackingMode)
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w(
+                        "Invalid tracking mode in Room: ${settingsEntity.trackingMode}, defaulting to DISABLED",
+                        "TripRepository"
+                    )
+                    TrackingMode.DISABLED
+                }
+
+                setTrackingMode(mode)
+
+                // CRITICAL: Sync KEY_AUTO_TRACKING based on mode
+                // For ALWAYS mode, enable auto-tracking
+                // For WORK_HOURS_ONLY, the AutoTrackingScheduleWorker will handle it
+                // For DISABLED, keep it disabled
+                val shouldBeEnabled = mode == TrackingMode.ALWAYS
+                setAutoTrackingEnabled(shouldBeEnabled)
+
+                MotiumApplication.logger.i(
+                    "✅ Auto-tracking cache synced from Room: mode=$mode, enabled=$shouldBeEnabled",
+                    "TripRepository"
+                )
+                return@withContext shouldBeEnabled
+            } else {
+                MotiumApplication.logger.i(
+                    "ℹ️ No auto-tracking settings in Room for user $userId, keeping current cache",
+                    "TripRepository"
+                )
+                return@withContext isAutoTrackingEnabled()
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "❌ Failed to sync auto-tracking cache: ${e.message}",
+                "TripRepository", e
+            )
+            return@withContext isAutoTrackingEnabled()
         }
     }
 
@@ -889,23 +1001,47 @@ class TripRepository private constructor(context: Context) {
                     // Identifier les trips Supabase par ID
                     val supabaseTripIds = dataTrips.map { it.id }.toSet()
 
-                    // UNIQUEMENT garder les trips locaux qui n'ont PAS encore été synchronisés (needsSync = true)
-                    // Les trips avec needsSync = false qui ne sont plus dans Supabase ont été supprimés côté serveur
+                    // UNIQUEMENT garder les trips locaux qui n'ont PAS encore été synchronisés (syncStatus != SYNCED)
+                    // Les trips avec syncStatus = SYNCED qui ne sont plus dans Supabase ont été supprimés côté serveur
                     val localOnlyTripsToKeep = localTripEntities
-                        .filter { it.id !in supabaseTripIds && it.needsSync }
+                        .filter { it.id !in supabaseTripIds && it.syncStatus != com.application.motium.data.local.entities.SyncStatus.SYNCED.name }
                         .map { it.toDataModel() }
 
                     // Identifier les trips locaux à supprimer (supprimés côté Supabase)
+                    // SAFETY: Only delete trips that:
+                    // 1. Are not on Supabase
+                    // 2. Were previously SYNCED (successfully uploaded)
+                    // 3. Were last updated more than 24h ago (grace period to handle sync failures)
+                    val gracePeriodMs = 24 * 60 * 60 * 1000L // 24 hours
+                    val now = System.currentTimeMillis()
                     val tripsToDelete = localTripEntities
-                        .filter { it.id !in supabaseTripIds && !it.needsSync }
+                        .filter { localTrip ->
+                            localTrip.id !in supabaseTripIds
+                            && localTrip.syncStatus == com.application.motium.data.local.entities.SyncStatus.SYNCED.name
+                            && (now - localTrip.localUpdatedAt) > gracePeriodMs
+                        }
 
-                    // Supprimer les trips qui ont été supprimés sur Supabase
+                    // Supprimer les trips qui ont été supprimés sur Supabase (après grace period)
                     if (tripsToDelete.isNotEmpty()) {
                         tripsToDelete.forEach { tripEntity ->
                             tripDao.deleteTripById(tripEntity.id)
                         }
                         MotiumApplication.logger.i(
-                            "🗑️ Deleted ${tripsToDelete.size} trips that were removed from Supabase",
+                            "🗑️ Deleted ${tripsToDelete.size} trips that were removed from Supabase (after 24h grace period)",
+                            "TripRepository"
+                        )
+                    }
+
+                    // Log trips that would be deleted but are within grace period
+                    val tripsInGracePeriod = localTripEntities
+                        .filter { localTrip ->
+                            localTrip.id !in supabaseTripIds
+                            && localTrip.syncStatus == com.application.motium.data.local.entities.SyncStatus.SYNCED.name
+                            && (now - localTrip.localUpdatedAt) <= gracePeriodMs
+                        }
+                    if (tripsInGracePeriod.isNotEmpty()) {
+                        MotiumApplication.logger.i(
+                            "⏳ ${tripsInGracePeriod.size} trips not on Supabase but within 24h grace period - keeping for now",
                             "TripRepository"
                         )
                     }
@@ -933,7 +1069,27 @@ class TripRepository private constructor(context: Context) {
 
                     if (allTripsToSave.isNotEmpty()) {
                         try {
-                            val entities = allTripsToSave.map { it.toEntity(effectiveUserId) }
+                            // FIX: Preserve syncStatus for local trips that haven't been uploaded yet
+                            // Bug: toEntity() defaults syncStatus = SYNCED, which caused local pending trips
+                            // to be marked as SYNCED and then deleted on next sync when not found on server
+                            val localTripMap = localTripEntities.associateBy { it.id }
+                            val entities = allTripsToSave.map { trip ->
+                                val existingLocal = localTripMap[trip.id]
+                                // Preserve PENDING_UPLOAD status for trips that haven't been synced yet
+                                val preservedSyncStatus = if (existingLocal != null &&
+                                    existingLocal.syncStatus != com.application.motium.data.local.entities.SyncStatus.SYNCED.name) {
+                                    existingLocal.syncStatus
+                                } else {
+                                    com.application.motium.data.local.entities.SyncStatus.SYNCED.name
+                                }
+                                trip.toEntity(
+                                    userId = effectiveUserId,
+                                    syncStatus = preservedSyncStatus,
+                                    localUpdatedAt = existingLocal?.localUpdatedAt ?: System.currentTimeMillis(),
+                                    serverUpdatedAt = existingLocal?.serverUpdatedAt,
+                                    version = existingLocal?.version ?: 1
+                                )
+                            }
                             tripDao.insertTrips(entities)
                             MotiumApplication.logger.i("✅ Successfully inserted ${entities.size} trips into Room", "TripRepository")
                         } catch (e: Exception) {
@@ -1021,6 +1177,8 @@ private fun Trip.toDomainTrip(userId: String = ""): DomainTrip {
         reimbursementAmount = this.reimbursementAmount,
         isWorkHomeTrip = this.isWorkHomeTrip,
         tracePoints = locationPoints,
+        notes = this.notes,
+        matchedRouteCoordinates = this.matchedRouteCoordinates,
         createdAt = Instant.fromEpochMilliseconds(createdAt), // Preserve original creation time
         updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis()) // Update modification time
     )
@@ -1077,10 +1235,11 @@ private fun DomainTrip.toDataTrip(): Trip {
         },
         reimbursementAmount = reimbursementAmount,
         isWorkHomeTrip = isWorkHomeTrip,
-        createdAt = createdAt.toEpochMilliseconds(),  // Preserve creation time
-        updatedAt = updatedAt.toEpochMilliseconds(),  // Preserve update time
-        lastSyncedAt = System.currentTimeMillis(),  // 🔧 FIX: Mark as synced since it came from Supabase
-        needsSync = false  // 🔧 FIX: Trip from Supabase doesn't need sync
+        notes = notes,
+        matchedRouteCoordinates = matchedRouteCoordinates,
+        createdAt = createdAt.toEpochMilliseconds(),
+        updatedAt = updatedAt.toEpochMilliseconds(),
+        userId = userId
     )
 }
 

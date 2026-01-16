@@ -75,20 +75,20 @@ interface ExpenseDao {
     /**
      * Get expenses that need to be synced to Supabase.
      */
-    @Query("SELECT * FROM expenses WHERE userId = :userId AND needsSync = 1")
+    @Query("SELECT * FROM expenses WHERE userId = :userId AND syncStatus != 'SYNCED'")
     suspend fun getExpensesNeedingSync(userId: String): List<ExpenseEntity>
 
     /**
      * Mark an expense as synced.
      */
-    @Query("UPDATE expenses SET needsSync = 0, lastSyncedAt = :timestamp WHERE id = :expenseId")
+    @Query("UPDATE expenses SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE id = :expenseId")
     suspend fun markExpenseAsSynced(expenseId: String, timestamp: Long)
 
     /**
      * Mark an expense as needing sync.
      */
-    @Query("UPDATE expenses SET needsSync = 1 WHERE id = :expenseId")
-    suspend fun markExpenseAsNeedingSync(expenseId: String)
+    @Query("UPDATE expenses SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :expenseId")
+    suspend fun markExpenseAsNeedingSync(expenseId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
      * Delete all expenses for a user.

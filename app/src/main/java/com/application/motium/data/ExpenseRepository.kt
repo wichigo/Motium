@@ -9,7 +9,7 @@ import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.preferences.SecureSessionStorage
-import com.application.motium.data.supabase.SupabaseExpenseRepository
+import com.application.motium.data.supabase.ExpenseRemoteDataSource
 import com.application.motium.domain.model.Expense
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -25,7 +25,7 @@ class ExpenseRepository private constructor(private val context: Context) {
     private val database = MotiumDatabase.getInstance(context)
     private val expenseDao: ExpenseDao = database.expenseDao()
     private val localUserRepository = LocalUserRepository.getInstance(context)
-    private val supabaseExpenseRepository = SupabaseExpenseRepository.getInstance(context)
+    private val expenseRemoteDataSource = ExpenseRemoteDataSource.getInstance(context)
     private val secureSessionStorage = SecureSessionStorage(context)
 
     /**
@@ -146,13 +146,13 @@ class ExpenseRepository private constructor(private val context: Context) {
                 ?: return@withContext Result.failure(Exception("User not authenticated"))
 
             // Save locally first (offline-first)
-            val entity = expense.toEntity(userId, needsSync = true)
+            val entity = expense.toEntity(userId, syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             expenseDao.insertExpense(entity)
             MotiumApplication.logger.i("✅ Expense saved locally: ${expense.id}", "ExpenseRepository")
 
             // Try to sync with Supabase
             try {
-                val result = supabaseExpenseRepository.saveExpense(expense)
+                val result = expenseRemoteDataSource.saveExpense(expense)
                 if (result.isSuccess) {
                     expenseDao.markExpenseAsSynced(expense.id, System.currentTimeMillis())
                     MotiumApplication.logger.i("✅ Expense synced to Supabase: ${expense.id}", "ExpenseRepository")
@@ -179,7 +179,7 @@ class ExpenseRepository private constructor(private val context: Context) {
 
             // Try to delete from Supabase
             try {
-                supabaseExpenseRepository.deleteExpense(expenseId)
+                expenseRemoteDataSource.deleteExpense(expenseId)
                 MotiumApplication.logger.i("✅ Expense deleted from Supabase: $expenseId", "ExpenseRepository")
             } catch (e: Exception) {
                 MotiumApplication.logger.w("⚠️ Could not delete from Supabase: ${e.message}", "ExpenseRepository")
@@ -203,7 +203,7 @@ class ExpenseRepository private constructor(private val context: Context) {
 
             MotiumApplication.logger.i("🔄 Fetching expenses from Supabase for user: $effectiveUserId", "ExpenseRepository")
 
-            val result = supabaseExpenseRepository.getAllExpenses(effectiveUserId)
+            val result = expenseRemoteDataSource.getAllExpenses(effectiveUserId)
             if (result.isSuccess) {
                 val supabaseExpenses = result.getOrNull() ?: emptyList()
                 MotiumApplication.logger.i("📥 Fetched ${supabaseExpenses.size} expenses from Supabase", "ExpenseRepository")
@@ -215,13 +215,13 @@ class ExpenseRepository private constructor(private val context: Context) {
                 // Identifier les expenses Supabase par ID
                 val supabaseExpenseIds = supabaseExpenses.map { it.id }.toSet()
 
-                // Garder les expenses locales non encore synchronisées (needsSync = true)
+                // Garder les expenses locales non encore synchronisées (syncStatus != SYNCED)
                 val localOnlyExpensesToKeep = localExpenseEntities
-                    .filter { it.id !in supabaseExpenseIds && it.needsSync }
+                    .filter { it.id !in supabaseExpenseIds && it.syncStatus != com.application.motium.data.local.entities.SyncStatus.SYNCED.name }
 
                 // Supprimer les expenses qui ont été supprimées sur Supabase
                 val expensesToDelete = localExpenseEntities
-                    .filter { it.id !in supabaseExpenseIds && !it.needsSync }
+                    .filter { it.id !in supabaseExpenseIds && it.syncStatus == com.application.motium.data.local.entities.SyncStatus.SYNCED.name }
 
                 if (expensesToDelete.isNotEmpty()) {
                     expensesToDelete.forEach { entity ->
@@ -235,7 +235,7 @@ class ExpenseRepository private constructor(private val context: Context) {
 
                 // Convertir les expenses Supabase en entities Room
                 val supabaseEntities = supabaseExpenses.map { expense ->
-                    expense.toEntity(effectiveUserId, lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                    expense.toEntity(effectiveUserId, syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
                 }
 
                 // Sauvegarder dans Room: expenses Supabase + expenses locales non synchronisées
@@ -273,7 +273,7 @@ class ExpenseRepository private constructor(private val context: Context) {
             for (entity in expensesNeedingSync) {
                 try {
                     val expense = entity.toDomainModel()
-                    val result = supabaseExpenseRepository.saveExpense(expense)
+                    val result = expenseRemoteDataSource.saveExpense(expense)
                     if (result.isSuccess) {
                         expenseDao.markExpenseAsSynced(entity.id, System.currentTimeMillis())
                     }

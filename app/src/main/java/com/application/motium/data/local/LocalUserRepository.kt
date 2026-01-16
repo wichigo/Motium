@@ -1,9 +1,12 @@
 package com.application.motium.data.local
 
 import android.content.Context
+import com.application.motium.data.local.entities.PendingOperationEntity
+import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.local.entities.UserEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.domain.model.User
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -14,6 +17,7 @@ import kotlinx.coroutines.flow.map
  */
 class LocalUserRepository(context: Context) {
 
+    private val appContext = context.applicationContext
     private val database = MotiumDatabase.getInstance(context)
     private val userDao = database.userDao()
 
@@ -36,6 +40,23 @@ class LocalUserRepository(context: Context) {
         val entity = user.toEntity(
             lastSyncedAt = System.currentTimeMillis(),
             isLocallyConnected = isLocallyConnected
+        )
+        userDao.insertUser(entity)
+    }
+
+    /**
+     * Save user data from server without triggering sync.
+     * Used after successful upload to Supabase to mark as SYNCED.
+     * Does NOT queue a pending operation - prevents re-queueing loop.
+     */
+    suspend fun saveUserFromServer(user: User, syncStatus: SyncStatus = SyncStatus.SYNCED) {
+        val entity = user.toEntity(
+            lastSyncedAt = System.currentTimeMillis(),
+            isLocallyConnected = true
+        ).copy(
+            syncStatus = syncStatus.name,
+            localUpdatedAt = System.currentTimeMillis(),
+            serverUpdatedAt = System.currentTimeMillis()
         )
         userDao.insertUser(entity)
     }
@@ -70,13 +91,35 @@ class LocalUserRepository(context: Context) {
 
     /**
      * Update user data.
+     * Marks the user as PENDING_UPLOAD and queues a sync operation for offline-first sync.
      */
     suspend fun updateUser(user: User) {
         val entity = user.toEntity(
             lastSyncedAt = System.currentTimeMillis(),
             isLocallyConnected = true
+        ).copy(
+            syncStatus = SyncStatus.PENDING_UPLOAD.name,
+            localUpdatedAt = System.currentTimeMillis()
         )
         userDao.updateUser(entity)
+
+        // Queue pending sync operation for uploading user preferences to Supabase
+        queueUserSyncOperation(user.id)
+    }
+
+    /**
+     * Queue a pending sync operation for user profile update.
+     * Uses OfflineFirstSyncManager to trigger immediate sync if online.
+     */
+    private suspend fun queueUserSyncOperation(userId: String) {
+        val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+        syncManager.queueOperation(
+            entityType = PendingOperationEntity.TYPE_USER,
+            entityId = userId,
+            action = PendingOperationEntity.ACTION_UPDATE,
+            payload = null,
+            priority = 0
+        )
     }
 
     /**

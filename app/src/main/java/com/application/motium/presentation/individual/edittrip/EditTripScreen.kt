@@ -107,7 +107,7 @@ fun EditTripScreen(
     val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
 
     // Supabase repository for restoring GPS trace if needed
-    val supabaseTripRepository = remember { com.application.motium.data.supabase.SupabaseTripRepository.getInstance(context) }
+    val tripRemoteDataSource = remember { com.application.motium.data.supabase.TripRemoteDataSource.getInstance(context) }
     val secureSessionStorage = remember { com.application.motium.data.preferences.SecureSessionStorage(context) }
 
     // Load vehicles when currentUser becomes available (same logic as Add Trip)
@@ -131,32 +131,33 @@ fun EditTripScreen(
         }
     }
 
-    // Load trip and expenses
-    // Include currentUser?.id as dependency to retry when auth becomes available
+    // OFFLINE-FIRST: Load trip from Room Database
+    // Fallback vers Supabase uniquement pour restauration de GPS trace corrompue
     LaunchedEffect(tripId, currentUser?.id) {
         coroutineScope.launch {
-            // Load trip from local Room database
-            val allTrips = tripRepository.getAllTrips()
-            var trip = allTrips.firstOrNull { it.id == tripId }
+            // STRATEGY 1 (OFFLINE-FIRST): Load trip from local Room database
+            MotiumApplication.logger.i("📂 Loading trip from Room Database for editing: tripId=$tripId", "EditTripScreen")
+            var trip = tripRepository.getTripById(tripId)
 
             if (trip != null) {
-                // Check if local trip has suspiciously few GPS points (might be corrupted)
+                // FALLBACK: Check if local trip has suspiciously few GPS points (might be corrupted)
                 // Try to restore full GPS trace from Supabase if local has <= 5 points
+                // This handles cases where local GPS trace was corrupted during sync
                 val localPointsCount = trip.locations.size
                 if (localPointsCount <= 5) {
                     // Try to get userId from auth state, fallback to secure storage
                     val userId = currentUser?.id ?: secureSessionStorage.restoreSession()?.userId
-                    MotiumApplication.logger.d("EditTripScreen: Checking GPS restoration - localPoints=$localPointsCount, userId=$userId", "EditTripScreen")
+                    MotiumApplication.logger.d("🔍 Checking GPS trace integrity - localPoints=$localPointsCount, userId=$userId", "EditTripScreen")
                     if (!userId.isNullOrEmpty()) {
-                        MotiumApplication.logger.i("⚠️ Local trip has only $localPointsCount points, trying to restore from Supabase...", "EditTripScreen")
+                        MotiumApplication.logger.i("⚠️ Local trip has only $localPointsCount points, trying to restore from Supabase (FALLBACK)...", "EditTripScreen")
                         try {
-                            val supabaseResult = supabaseTripRepository.getTripById(tripId, userId)
+                            val supabaseResult = tripRemoteDataSource.getTripById(tripId, userId)
                             if (supabaseResult.isSuccess) {
                                 val supabaseTrip = supabaseResult.getOrNull()
                                 val supabasePointsCount = supabaseTrip?.tracePoints?.size ?: 0
                                 if (supabasePointsCount > localPointsCount) {
                                     // Supabase has more points - convert to data Trip and use it
-                                    MotiumApplication.logger.i("✅ Restored GPS trace from Supabase: $localPointsCount → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "EditTripScreen")
+                                    MotiumApplication.logger.i("✅ GPS trace restored from Supabase: $localPointsCount → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "EditTripScreen")
                                     val restoredLocations = supabaseTrip.tracePoints!!.map { point ->
                                         TripLocation(
                                             latitude = point.latitude,
@@ -177,7 +178,7 @@ fun EditTripScreen(
                                 }
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to restore from Supabase: ${e.message}", "EditTripScreen", e)
+                            MotiumApplication.logger.e("❌ Failed to restore GPS trace (will use local): ${e.message}", "EditTripScreen", e)
                         }
                     }
                 }

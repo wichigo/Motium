@@ -63,20 +63,21 @@ interface TripDao {
     /**
      * Get trips that need to be synced to Supabase.
      */
-    @Query("SELECT * FROM trips WHERE userId = :userId AND needsSync = 1")
+    @Query("SELECT * FROM trips WHERE userId = :userId AND syncStatus != 'SYNCED'")
     suspend fun getTripsNeedingSync(userId: String): List<TripEntity>
 
     /**
      * Mark a trip as synced.
+     * Updates syncStatus to SYNCED so download phase won't trigger conflict resolution.
      */
-    @Query("UPDATE trips SET needsSync = 0, lastSyncedAt = :timestamp WHERE id = :tripId")
+    @Query("UPDATE trips SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE id = :tripId")
     suspend fun markTripAsSynced(tripId: String, timestamp: Long)
 
     /**
      * Mark a trip as needing sync.
      */
-    @Query("UPDATE trips SET needsSync = 1 WHERE id = :tripId")
-    suspend fun markTripAsNeedingSync(tripId: String)
+    @Query("UPDATE trips SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :tripId")
+    suspend fun markTripAsNeedingSync(tripId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
      * Delete all trips for a user.

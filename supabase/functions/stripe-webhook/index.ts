@@ -16,6 +16,7 @@ serve(async (req) => {
 
     const stripe = new Stripe(stripeSecretKey, {
       apiVersion: "2023-10-16",
+      httpClient: Stripe.createFetchHttpClient(),
     })
 
     // Get Supabase client with service role
@@ -33,7 +34,7 @@ serve(async (req) => {
     let event: Stripe.Event
 
     try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
+      event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret)
     } catch (err) {
       console.error("Webhook signature verification failed:", err.message)
       return new Response(`Webhook Error: ${err.message}`, { status: 400 })
@@ -45,13 +46,25 @@ serve(async (req) => {
     switch (event.type) {
       case "payment_intent.succeeded": {
         const paymentIntent = event.data.object as Stripe.PaymentIntent
-        await handlePaymentSuccess(supabase, paymentIntent)
+        await handlePaymentIntentSucceeded(supabase, paymentIntent)
+        break
+      }
+
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session
+        await handleCheckoutSessionCompleted(supabase, session)
         break
       }
 
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice
-        await handleInvoicePaid(supabase, invoice)
+        await handleInvoicePaid(supabase, stripe, invoice)
+        break
+      }
+
+      case "invoice.payment_failed": {
+        const invoice = event.data.object as Stripe.Invoice
+        await handleInvoicePaymentFailed(supabase, invoice)
         break
       }
 
@@ -64,7 +77,7 @@ serve(async (req) => {
 
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription
-        await handleSubscriptionCanceled(supabase, subscription)
+        await handleSubscriptionDeleted(supabase, subscription)
         break
       }
 
@@ -89,86 +102,275 @@ serve(async (req) => {
 /**
  * Handle successful one-time payment (lifetime subscriptions)
  */
-async function handlePaymentSuccess(
+async function handlePaymentIntentSucceeded(
   supabase: any,
   paymentIntent: Stripe.PaymentIntent
 ) {
-  const { supabase_user_id, price_type, quantity } = paymentIntent.metadata
+  const {
+    supabase_user_id,
+    supabase_pro_account_id,
+    price_type,
+    product_id,
+    quantity
+  } = paymentIntent.metadata
 
-  if (!supabase_user_id || !price_type) {
-    console.log("Missing metadata in payment intent")
-    return
-  }
+  console.log(`Processing payment success: ${paymentIntent.id}, type: ${price_type}`)
 
-  console.log(`Processing payment success for user ${supabase_user_id}, type: ${price_type}`)
+  // Insert into stripe_payments table with all Stripe references
+  await supabase.from("stripe_payments").insert({
+    user_id: supabase_user_id || null,
+    pro_account_id: supabase_pro_account_id || null,
+    stripe_payment_intent_id: paymentIntent.id,
+    stripe_charge_id: paymentIntent.latest_charge as string || null,
+    stripe_customer_id: paymentIntent.customer as string,
+    payment_type: "one_time_payment",
+    amount_cents: paymentIntent.amount,
+    amount_received_cents: paymentIntent.amount_received,
+    currency: paymentIntent.currency,
+    status: "succeeded",
+    receipt_url: paymentIntent.latest_charge
+      ? `https://dashboard.stripe.com/payments/${paymentIntent.latest_charge}`
+      : null,
+    metadata: paymentIntent.metadata,
+    paid_at: new Date().toISOString(),
+  })
 
-  if (price_type === "individual_lifetime") {
-    // Activate lifetime subscription for individual user
-    await supabase
-      .from("users")
-      .update({
-        subscription_type: "LIFETIME",
-        subscription_expires_at: null, // Never expires
-        stripe_subscription_id: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", supabase_user_id)
-
-    console.log(`Activated LIFETIME subscription for user ${supabase_user_id}`)
-
-  } else if (price_type === "pro_license_lifetime") {
-    // Create lifetime licenses for Pro account
+  // Create a "subscription" record for all purchase types (lifetime and monthly)
+  if (price_type) {
+    const isLifetime = price_type.includes("lifetime")
     const qty = parseInt(quantity || "1")
 
-    // Get pro_account_id from user
-    const { data: userData } = await supabase
-      .from("users")
-      .select("pro_account_id")
-      .eq("id", supabase_user_id)
-      .single()
+    const subscriptionData = {
+      user_id: supabase_user_id || null,
+      pro_account_id: supabase_pro_account_id || null,
+      stripe_subscription_id: `${isLifetime ? 'lifetime' : 'onetime'}_${paymentIntent.id}`,
+      stripe_customer_id: paymentIntent.customer as string,
+      stripe_product_id: product_id,
+      subscription_type: price_type,
+      status: "active",
+      quantity: qty,
+      currency: paymentIntent.currency,
+      unit_amount_cents: paymentIntent.amount / qty,
+      current_period_start: new Date().toISOString(),
+      current_period_end: isLifetime ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      metadata: paymentIntent.metadata,
+    }
 
-    if (userData?.pro_account_id) {
-      // Create licenses
+    await supabase.from("stripe_subscriptions").insert(subscriptionData)
+    console.log(`Created subscription record: ${price_type}`)
+    // NOTE: users.subscription_type is synchronized automatically by SQL trigger
+    // sync_user_subscription_cache() in stripe_integration.sql - NO direct update needed
+  }
+
+  // Create licenses if Pro (monthly or lifetime) - OUTSIDE the lifetime block
+  if (supabase_pro_account_id && (price_type === "pro_license_monthly" || price_type === "pro_license_lifetime")) {
+    const qty = parseInt(quantity || "1")
+
+    // Idempotency check: skip if licenses already exist for this payment intent
+    const { data: existingLicenses } = await supabase
+      .from("licenses")
+      .select("id")
+      .eq("stripe_payment_intent_id", paymentIntent.id)
+
+    if (existingLicenses && existingLicenses.length > 0) {
+      console.log(`Licenses already exist for PI ${paymentIntent.id}, skipping creation`)
+    } else {
+      const isLifetime = price_type === "pro_license_lifetime"
+      const now = new Date()
+      // For monthly licenses, set end_date to 30 days from now
+      // (will be updated to actual subscription period end when subscription is created)
+      const endDate = isLifetime ? null : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+
       const licenses = Array.from({ length: qty }, () => ({
-        pro_account_id: userData.pro_account_id,
-        is_lifetime: true,
+        pro_account_id: supabase_pro_account_id,
+        is_lifetime: isLifetime,
         status: "active",
-        created_at: new Date().toISOString(),
+        stripe_payment_intent_id: paymentIntent.id, // For idempotency
+        price_monthly_ht: isLifetime ? 0 : 5.00, // 6.00 TTC / 1.20 = 5.00 HT
+        vat_rate: 0.20,
+        start_date: now.toISOString(),
+        end_date: endDate, // null for lifetime, 30 days for monthly
+        billing_starts_at: now.toISOString(),
+        created_at: now.toISOString(),
+        updated_at: now.toISOString(),
       }))
-
       await supabase.from("licenses").insert(licenses)
-      console.log(`Created ${qty} lifetime licenses for pro account ${userData.pro_account_id}`)
+      console.log(`Created ${qty} ${isLifetime ? 'lifetime' : 'monthly'} licenses for pro account ${supabase_pro_account_id}, end_date: ${endDate}`)
     }
   }
 }
 
 /**
+ * Handle checkout session completion
+ */
+async function handleCheckoutSessionCompleted(
+  supabase: any,
+  session: Stripe.Checkout.Session
+) {
+  console.log(`Checkout session completed: ${session.id}`)
+  // Most logic is handled by invoice.paid or payment_intent.succeeded
+}
+
+/**
  * Handle paid invoice (subscription renewals)
  */
-async function handleInvoicePaid(supabase: any, invoice: Stripe.Invoice) {
+async function handleInvoicePaid(
+  supabase: any,
+  stripe: Stripe,
+  invoice: Stripe.Invoice
+) {
   const subscriptionId = invoice.subscription as string
-  if (!subscriptionId) return
+  if (!subscriptionId) {
+    console.log(`ℹ️ Invoice ${invoice.id} paid but no subscription ID - likely one-time payment`)
+    return
+  }
 
-  // Extend subscription expiry
-  const { data: user } = await supabase
-    .from("users")
-    .select("id")
+  console.log(`📧 Invoice paid for subscription: ${subscriptionId}`)
+  console.log(`   Invoice ID: ${invoice.id}`)
+  console.log(`   Amount: ${invoice.amount_paid} ${invoice.currency}`)
+  console.log(`   Billing reason: ${invoice.billing_reason}`)
+
+  // Get the subscription from Stripe
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+  const metadata = subscription.metadata
+
+  console.log(`   Subscription status: ${subscription.status}`)
+  console.log(`   Subscription metadata: ${JSON.stringify(metadata)}`)
+  console.log(`   Cancel at period end: ${subscription.cancel_at_period_end}`)
+
+  const {
+    supabase_user_id,
+    supabase_pro_account_id,
+    price_type,
+  } = metadata
+
+  console.log(`   Extracted: user_id=${supabase_user_id || 'null'}, price_type=${price_type || 'null'}`)
+
+  const periodEnd = new Date(subscription.current_period_end * 1000).toISOString()
+  console.log(`   New period end: ${periodEnd}`)
+
+  // Extract subscription item and price info for reference
+  const subscriptionItem = subscription.items.data[0]
+  const stripePriceId = subscriptionItem?.price?.id || null
+  const stripeSubscriptionItemId = subscriptionItem?.id || null
+
+  // Insert payment record with all Stripe references
+  await supabase.from("stripe_payments").insert({
+    user_id: supabase_user_id || null,
+    pro_account_id: supabase_pro_account_id || null,
+    stripe_invoice_id: invoice.id,
+    stripe_payment_intent_id: invoice.payment_intent as string,
+    stripe_charge_id: invoice.charge as string || null,
+    stripe_subscription_id: subscriptionId,
+    stripe_customer_id: invoice.customer as string,
+    payment_type: "subscription_payment",
+    amount_cents: invoice.amount_paid,
+    amount_received_cents: invoice.amount_paid,
+    currency: invoice.currency,
+    status: "succeeded",
+    invoice_number: invoice.number,
+    invoice_pdf_url: invoice.invoice_pdf,
+    hosted_invoice_url: invoice.hosted_invoice_url,
+    period_start: new Date(invoice.period_start * 1000).toISOString(),
+    period_end: new Date(invoice.period_end * 1000).toISOString(),
+    metadata: metadata,
+    paid_at: new Date().toISOString(),
+  })
+
+  // Update subscription period in stripe_subscriptions with all Stripe references
+  await supabase.from("stripe_subscriptions")
+    .update({
+      current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+      current_period_end: periodEnd,
+      stripe_price_id: stripePriceId,
+      status: subscription.status,
+      updated_at: new Date().toISOString(),
+    })
     .eq("stripe_subscription_id", subscriptionId)
-    .single()
 
-  if (user) {
-    const expiresAt = new Date()
-    expiresAt.setMonth(expiresAt.getMonth() + 1)
-
-    await supabase
-      .from("users")
+  // Renew Pro licenses if this is a pro_license_monthly subscription
+  if (supabase_pro_account_id && price_type === "pro_license_monthly") {
+    // Update all monthly licenses for this pro account with new end_date and Stripe references
+    const { error } = await supabase
+      .from("licenses")
       .update({
-        subscription_expires_at: expiresAt.toISOString(),
+        status: "active",
+        end_date: periodEnd, // Renew end_date to new subscription period end
+        stripe_subscription_id: subscriptionId,
+        stripe_subscription_item_id: stripeSubscriptionItemId,
+        stripe_price_id: stripePriceId,
+        billing_starts_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
-      .eq("id", user.id)
+      .eq("pro_account_id", supabase_pro_account_id)
+      .eq("is_lifetime", false)
 
-    console.log(`Extended subscription for user ${user.id} until ${expiresAt.toISOString()}`)
+    if (error) {
+      console.error("Error renewing licenses:", error)
+    } else {
+      console.log(`✅ Renewed monthly licenses for pro account ${supabase_pro_account_id}, new end_date: ${periodEnd}`)
+
+      // Also update subscription_expires_at for all users with assigned licenses from this pro account
+      // This keeps the user's cached expiration date in sync with the license end_date
+      const { data: assignedLicenses } = await supabase
+        .from("licenses")
+        .select("linked_account_id")
+        .eq("pro_account_id", supabase_pro_account_id)
+        .eq("is_lifetime", false)
+        .not("linked_account_id", "is", null)
+
+      if (assignedLicenses && assignedLicenses.length > 0) {
+        const userIds = assignedLicenses.map(l => l.linked_account_id).filter(Boolean)
+        for (const userId of userIds) {
+          await supabase.from("users").update({
+            subscription_expires_at: periodEnd,
+            updated_at: new Date().toISOString(),
+          }).eq("id", userId)
+        }
+        console.log(`✅ Updated subscription_expires_at for ${userIds.length} users with licenses`)
+      }
+    }
+  }
+
+  // NOTE: Individual subscription renewal is handled automatically by the SQL trigger
+  // sync_user_subscription_cache() in stripe_integration.sql when stripe_subscriptions is updated above.
+  // NO direct update to users.subscription_type needed here to avoid race conditions.
+  if (supabase_user_id && price_type?.includes("individual")) {
+    console.log(`ℹ️ Individual subscription ${subscriptionId} renewed - users.subscription_type synced via trigger`)
+  }
+}
+
+/**
+ * Handle failed invoice payment
+ */
+async function handleInvoicePaymentFailed(
+  supabase: any,
+  invoice: Stripe.Invoice
+) {
+  console.log(`Invoice payment failed: ${invoice.id}`)
+
+  // Record the failed payment
+  await supabase.from("stripe_payments").insert({
+    stripe_invoice_id: invoice.id,
+    stripe_customer_id: invoice.customer as string,
+    payment_type: "subscription_payment",
+    amount_cents: invoice.amount_due,
+    currency: invoice.currency,
+    status: "failed",
+    failure_message: "Payment failed",
+    invoice_number: invoice.number,
+    period_start: new Date(invoice.period_start * 1000).toISOString(),
+    period_end: new Date(invoice.period_end * 1000).toISOString(),
+  })
+
+  // Update subscription status
+  if (invoice.subscription) {
+    await supabase.from("stripe_subscriptions")
+      .update({
+        status: "past_due",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("stripe_subscription_id", invoice.subscription as string)
   }
 }
 
@@ -179,52 +381,102 @@ async function handleSubscriptionUpdate(
   supabase: any,
   subscription: Stripe.Subscription
 ) {
-  const { supabase_user_id, price_type, quantity } = subscription.metadata
+  const metadata = subscription.metadata
+  const {
+    supabase_user_id,
+    supabase_pro_account_id,
+    price_type,
+    product_id,
+    quantity
+  } = metadata
 
-  if (!supabase_user_id) {
-    console.log("Missing supabase_user_id in subscription metadata")
-    return
+  console.log(`Subscription update: ${subscription.id}, status: ${subscription.status}`)
+
+  // Check if subscription exists
+  const { data: existing } = await supabase
+    .from("stripe_subscriptions")
+    .select("id")
+    .eq("stripe_subscription_id", subscription.id)
+    .single()
+
+  // Extract subscription item and price info
+  const subscriptionItem = subscription.items.data[0]
+  const stripePriceId = subscriptionItem?.price?.id || null
+  const stripeSubscriptionItemId = subscriptionItem?.id || null
+
+  const subscriptionData = {
+    user_id: supabase_user_id || null,
+    pro_account_id: supabase_pro_account_id || null,
+    stripe_subscription_id: subscription.id,
+    stripe_customer_id: subscription.customer as string,
+    stripe_product_id: product_id || subscriptionItem?.price?.product || null,
+    stripe_price_id: stripePriceId,
+    subscription_type: price_type || "individual_monthly",
+    status: subscription.status,
+    quantity: parseInt(quantity || "1"),
+    currency: subscription.currency,
+    unit_amount_cents: subscriptionItem?.price?.unit_amount || null,
+    current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+    current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+    cancel_at_period_end: subscription.cancel_at_period_end,
+    canceled_at: subscription.canceled_at
+      ? new Date(subscription.canceled_at * 1000).toISOString()
+      : null,
+    ended_at: subscription.ended_at
+      ? new Date(subscription.ended_at * 1000).toISOString()
+      : null,
+    metadata: metadata,
+    updated_at: new Date().toISOString(),
   }
 
-  if (subscription.status === "active" || subscription.status === "trialing") {
-    const expiresAt = new Date(subscription.current_period_end * 1000)
+  if (existing) {
+    // Update existing
+    await supabase.from("stripe_subscriptions")
+      .update(subscriptionData)
+      .eq("id", existing.id)
+  } else {
+    // Insert new
+    await supabase.from("stripe_subscriptions").insert({
+      ...subscriptionData,
+      created_at: new Date().toISOString(),
+    })
+  }
 
-    if (price_type === "individual_monthly") {
-      await supabase
-        .from("users")
-        .update({
-          subscription_type: "PREMIUM",
-          subscription_expires_at: expiresAt.toISOString(),
-          stripe_subscription_id: subscription.id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", supabase_user_id)
+  // NOTE: users.subscription_type is synchronized automatically by SQL trigger
+  // sync_user_subscription_cache() in stripe_integration.sql - NO direct update needed.
+  // The trigger fires on INSERT/UPDATE of stripe_subscriptions above.
+  if (supabase_user_id && price_type?.includes("individual")) {
+    console.log(`ℹ️ Subscription ${subscription.id} updated - users.subscription_type synced via trigger`)
+  }
 
-      console.log(`Activated PREMIUM subscription for user ${supabase_user_id}`)
-
-    } else if (price_type === "pro_license_monthly") {
-      // Handle Pro license subscription
+  // Create licenses if Pro monthly and active
+  if (supabase_pro_account_id && price_type === "pro_license_monthly") {
+    if (subscription.status === "active") {
       const qty = parseInt(quantity || "1")
+      const periodEnd = new Date(subscription.current_period_end * 1000).toISOString()
 
-      const { data: userData } = await supabase
-        .from("users")
-        .select("pro_account_id")
-        .eq("id", supabase_user_id)
-        .single()
+      // Check existing licenses for this subscription
+      const { data: existingLicenses } = await supabase
+        .from("licenses")
+        .select("id")
+        .eq("stripe_subscription_id", subscription.id)
 
-      if (userData?.pro_account_id) {
-        // Create monthly licenses
+      if (!existingLicenses || existingLicenses.length === 0) {
         const licenses = Array.from({ length: qty }, () => ({
-          pro_account_id: userData.pro_account_id,
+          pro_account_id: supabase_pro_account_id,
           is_lifetime: false,
           status: "active",
           stripe_subscription_id: subscription.id,
-          expires_at: expiresAt.toISOString(),
+          stripe_subscription_item_id: stripeSubscriptionItemId,
+          stripe_price_id: stripePriceId,
+          start_date: new Date().toISOString(),
+          end_date: periodEnd, // Set end_date to subscription period end
+          billing_starts_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         }))
-
         await supabase.from("licenses").insert(licenses)
-        console.log(`Created ${qty} monthly licenses for pro account ${userData.pro_account_id}`)
+        console.log(`Created ${qty} monthly licenses for pro account ${supabase_pro_account_id}, end_date: ${periodEnd}, price_id: ${stripePriceId}`)
       }
     }
   }
@@ -233,34 +485,36 @@ async function handleSubscriptionUpdate(
 /**
  * Handle subscription cancellation
  */
-async function handleSubscriptionCanceled(
+async function handleSubscriptionDeleted(
   supabase: any,
   subscription: Stripe.Subscription
 ) {
-  const { supabase_user_id, price_type } = subscription.metadata
+  const metadata = subscription.metadata
 
-  if (!supabase_user_id) return
+  console.log(`Subscription deleted: ${subscription.id}`)
 
-  if (price_type === "individual_monthly") {
-    // Downgrade to FREE
-    await supabase
-      .from("users")
-      .update({
-        subscription_type: "FREE",
-        stripe_subscription_id: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", supabase_user_id)
+  // Update stripe_subscriptions
+  await supabase.from("stripe_subscriptions")
+    .update({
+      status: "canceled",
+      canceled_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("stripe_subscription_id", subscription.id)
 
-    console.log(`Downgraded user ${supabase_user_id} to FREE`)
+  // NOTE: users.subscription_type is synchronized automatically by SQL trigger
+  // sync_user_subscription_cache() in stripe_integration.sql - NO direct update needed.
+  // The trigger fires on UPDATE of stripe_subscriptions above (status = 'canceled').
+  if (metadata.supabase_user_id && metadata.price_type?.includes("individual")) {
+    console.log(`ℹ️ Subscription ${subscription.id} canceled - users.subscription_type synced via trigger`)
+  }
 
-  } else if (price_type === "pro_license_monthly") {
-    // Cancel licenses linked to this subscription
-    await supabase
-      .from("licenses")
-      .update({ status: "canceled" })
+  // Cancel licenses if Pro
+  if (metadata.supabase_pro_account_id && metadata.price_type?.includes("pro_license")) {
+    await supabase.from("licenses")
+      .update({ status: "cancelled" })
       .eq("stripe_subscription_id", subscription.id)
-
-    console.log(`Canceled licenses for subscription ${subscription.id}`)
   }
 }
+

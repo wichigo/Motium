@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,7 +46,6 @@ import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.UserRole
 import com.application.motium.domain.model.isPremium
-import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.CompanyLinkCard
@@ -68,14 +68,19 @@ import com.application.motium.utils.DeepLinkHandler
 import com.application.motium.utils.ThemeManager
 import com.application.motium.utils.LogcatCapture
 import com.application.motium.service.ActivityRecognitionService
+import com.application.motium.service.TripSimulator
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.local.entities.SyncStatus
+import com.application.motium.data.repository.OfflineFirstProAccountRepository
+import com.application.motium.domain.model.AuthResult
 import android.content.Intent
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import com.application.motium.data.subscription.SubscriptionManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -203,6 +208,7 @@ fun SettingsScreen(
     }
 
     // Pro Company Info state (for ENTERPRISE users)
+    val offlineFirstProAccountRepo = remember { com.application.motium.data.repository.OfflineFirstProAccountRepository.getInstance(context) }
     val proAccountRemoteDataSource = remember { ProAccountRemoteDataSource.getInstance(context) }
     var proAccount by remember { mutableStateOf<ProAccountDto?>(null) }
     var isLoadingProAccount by remember { mutableStateOf(false) }
@@ -221,7 +227,8 @@ fun SettingsScreen(
     var isLoadingDepartments by remember { mutableStateOf(false) }
 
     // Pro License state (for ENTERPRISE users)
-    val licenseRemoteDataSource = remember { LicenseRemoteDataSource.getInstance(context) }
+    val offlineFirstLicenseRepo = remember { com.application.motium.data.repository.OfflineFirstLicenseRepository.getInstance(context) }
+    // offlineFirstProAccountRepo already declared above
     val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
     val supabaseAuthRepository = remember { SupabaseAuthRepository.getInstance(context) }
     var ownerLicense by remember { mutableStateOf<License?>(null) }
@@ -231,57 +238,82 @@ fun SettingsScreen(
     var showLicenseSelectionDialog by remember { mutableStateOf(false) }
     var cachedProAccountId by remember { mutableStateOf<String?>(null) }
 
-    // Load Pro account data for ENTERPRISE users
+    // Load Pro account data for ENTERPRISE users - OFFLINE-FIRST PATTERN
     LaunchedEffect(currentUser?.id, currentUser?.role) {
         if (currentUser?.role == UserRole.ENTERPRISE && currentUser.id.isNotEmpty()) {
             isLoadingProAccount = true
             isLoadingDepartments = true
-            val result = proAccountRemoteDataSource.getProAccount(currentUser.id)
-            result.onSuccess { account ->
-                proAccount = account
-                account?.let {
-                    proCompanyName = it.companyName
-                    proSiret = it.siret ?: ""
-                    proVatNumber = it.vatNumber ?: ""
-                    proLegalForm = it.legalForm?.let { form ->
-                        try { LegalForm.valueOf(form) } catch (e: Exception) { null }
-                    }
-                    proBillingAddress = it.billingAddress ?: ""
-                    proBillingEmail = it.billingEmail ?: ""
-                    // Load departments
-                    departments = proSettingsRepository.getDepartments(it.id)
+            isLoadingLicense = true
 
-                    // Load owner's license - cache-first pattern
-                    cachedProAccountId = it.id
-                    isLoadingLicense = true
+            try {
+                // Step 1: Try local cache first (offline-first)
+                val localProAccount = offlineFirstProAccountRepo.getProAccountForUserOnce(currentUser.id)
+
+                if (localProAccount != null) {
+                    // Found in local cache - use cached data
+                    MotiumApplication.logger.d("ProAccount found in local cache: ${localProAccount.id}", "SettingsScreen")
+                    cachedProAccountId = localProAccount.id
+                    proCompanyName = localProAccount.companyName
+                    proSiret = localProAccount.siret ?: ""
+                    proVatNumber = localProAccount.vatNumber ?: ""
+                    proLegalForm = localProAccount.legalForm // Already LegalForm enum
+                    proBillingAddress = localProAccount.billingAddress ?: ""
+                    proBillingEmail = localProAccount.billingEmail ?: ""
+
+                    // Load departments from local if available (or skip if offline)
                     try {
-                        // Try local cache first (instant response)
-                        ownerLicense = licenseCacheManager.getLicenseForAccount(it.id, currentUser.id).first()
-                        availableLicenses = licenseCacheManager.getAvailableLicensesOnce(it.id)
+                        departments = proSettingsRepository.getDepartments(localProAccount.id)
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("Could not load departments: ${e.message}", "SettingsScreen")
+                    }
 
-                        // If cache empty or stale, try remote (with graceful fallback)
-                        if (ownerLicense == null || availableLicenses.isEmpty()) {
-                            try {
-                                val ownerLicenseResult = licenseRemoteDataSource.getLicenseForAccount(it.id, currentUser.id)
-                                ownerLicense = ownerLicenseResult.getOrNull()
-
-                                val availableResult = licenseRemoteDataSource.getAvailableLicenses(it.id)
-                                availableLicenses = availableResult.getOrElse { emptyList() }
-                            } catch (networkError: Exception) {
-                                MotiumApplication.logger.w("Network error, using cached data: ${networkError.message}", "SettingsScreen")
-                                // Keep cached values - graceful degradation
-                            }
-                        } else {
-                            MotiumApplication.logger.d("Using cached license data", "SettingsScreen")
-                        }
+                    // Load license from local cache
+                    try {
+                        ownerLicense = licenseCacheManager.getLicenseForAccount(localProAccount.id, currentUser.id).first()
+                        availableLicenses = licenseCacheManager.getAvailableLicensesOnce(localProAccount.id)
+                        MotiumApplication.logger.d("Loaded license data from local DB", "SettingsScreen")
                     } catch (e: Exception) {
                         MotiumApplication.logger.e("Error loading license: ${e.message}", "SettingsScreen", e)
                     }
-                    isLoadingLicense = false
+                } else {
+                    // Step 2: Fall back to remote API
+                    MotiumApplication.logger.d("ProAccount not in cache, trying remote", "SettingsScreen")
+                    val result = proAccountRemoteDataSource.getProAccount(currentUser.id)
+                    result.onSuccess { account ->
+                        proAccount = account
+                        account?.let {
+                            proCompanyName = it.companyName
+                            proSiret = it.siret ?: ""
+                            proVatNumber = it.vatNumber ?: ""
+                            proLegalForm = it.legalForm?.let { form ->
+                                try { LegalForm.valueOf(form) } catch (e: Exception) { null }
+                            }
+                            proBillingAddress = it.billingAddress ?: ""
+                            proBillingEmail = it.billingEmail ?: ""
+                            departments = proSettingsRepository.getDepartments(it.id)
+                            cachedProAccountId = it.id
+
+                            // Load license from local DB
+                            try {
+                                ownerLicense = licenseCacheManager.getLicenseForAccount(it.id, currentUser.id).first()
+                                availableLicenses = licenseCacheManager.getAvailableLicensesOnce(it.id)
+                                MotiumApplication.logger.d("Loaded license data from local DB", "SettingsScreen")
+                            } catch (e: Exception) {
+                                MotiumApplication.logger.e("Error loading license: ${e.message}", "SettingsScreen", e)
+                            }
+                        }
+                    }
+                    result.onFailure { e ->
+                        MotiumApplication.logger.e("Failed to load Pro account: ${e.message}", "SettingsScreen", e)
+                    }
                 }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error loading Pro data: ${e.message}", "SettingsScreen", e)
             }
+
             isLoadingProAccount = false
             isLoadingDepartments = false
+            isLoadingLicense = false
         }
     }
 
@@ -462,19 +494,29 @@ fun SettingsScreen(
                             showConsiderFullDistanceConfirmDialog = true
                         } else {
                             // Disable directly without confirmation
+                            considerFullDistance = false
                             CoroutineScope(Dispatchers.IO).launch {
                                 try {
                                     val user = localUserRepository.getLoggedInUser()
                                     if (user != null) {
                                         val updatedUser = user.copy(considerFullDistance = false)
-                                        localUserRepository.updateUser(updatedUser)
-                                        MotiumApplication.logger.i("considerFullDistance set to false", "SettingsScreen")
+
+                                        // 1. Update local (immédiat, pour UI)
+                                        localUserRepository.saveUserFromServer(updatedUser, SyncStatus.SYNCED)
+
+                                        // 2. Sync direct vers Supabase
+                                        val result = supabaseAuthRepository.updateUserProfile(updatedUser)
+                                        if (result is AuthResult.Success) {
+                                            MotiumApplication.logger.i("✅ considerFullDistance synced to Supabase: false", "SettingsScreen")
+                                        } else {
+                                            val error = (result as? AuthResult.Error)?.message ?: "Unknown error"
+                                            MotiumApplication.logger.e("❌ Failed to sync considerFullDistance: $error", "SettingsScreen")
+                                        }
                                     }
                                 } catch (e: Exception) {
                                     MotiumApplication.logger.e("Error updating considerFullDistance: ${e.message}", "SettingsScreen", e)
                                 }
                             }
-                            considerFullDistance = false
                         }
                     },
                     surfaceColor = surfaceColor,
@@ -524,6 +566,15 @@ fun SettingsScreen(
                 )
             }
 
+            // Developer Options Section (Debug)
+            item {
+                DeveloperOptionsSection(
+                    surfaceColor = surfaceColor,
+                    textColor = textColor,
+                    textSecondaryColor = textSecondaryColor
+                )
+            }
+
             // Logout Section
             item {
                 LogoutSection(
@@ -566,8 +617,10 @@ fun SettingsScreen(
 
     // Subscription management dialog (for premium users)
     if (showSubscriptionManagementDialog) {
+        val subscriptionManager = remember { SubscriptionManager.getInstance(context) }
         SubscriptionManagementDialog(
             currentUser = currentUser,
+            subscriptionManager = subscriptionManager,
             surfaceColor = surfaceColor,
             textColor = textColor,
             textSecondaryColor = textSecondaryColor,
@@ -575,6 +628,18 @@ fun SettingsScreen(
             onUpgradeToLifetime = {
                 showSubscriptionManagementDialog = false
                 onNavigateToUpgrade()
+            },
+            onCancellationComplete = {
+                showSubscriptionManagementDialog = false
+                // Refresh user data to reflect cancellation
+                scope.launch {
+                    try {
+                        val freshUser = localUserRepository.getLoggedInUser()
+                        // User will be updated via webhook, dialog closing is enough
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.e("Failed to refresh user after cancellation: ${e.message}", "Settings", e)
+                    }
+                }
             }
         )
     }
@@ -586,23 +651,17 @@ fun SettingsScreen(
             isAssigning = isAssigningLicense,
             onDismiss = { showLicenseSelectionDialog = false },
             onSelectLicense = { license ->
-                // Assign the selected license to the owner
+                // Assign the selected license to the owner - offline-first with sync
                 isAssigningLicense = true
                 scope.launch {
                     try {
                         cachedProAccountId?.let { proAccountId ->
                             currentUser?.id?.let { userId ->
-                                val result = licenseRemoteDataSource.assignLicenseToOwner(proAccountId, userId)
-                                result.fold(
-                                    onSuccess = { assignedLicense ->
-                                        ownerLicense = assignedLicense
-                                        availableLicenses = availableLicenses.filter { it.id != assignedLicense.id }
-                                        Toast.makeText(context, "Licence attribuée avec succès", Toast.LENGTH_SHORT).show()
-                                    },
-                                    onFailure = { e ->
-                                        Toast.makeText(context, "Erreur: ${e.message}", Toast.LENGTH_LONG).show()
-                                    }
-                                )
+                                offlineFirstLicenseRepo.assignLicenseToOwner(proAccountId, userId)
+                                // Reload from local DB to get updated state
+                                ownerLicense = licenseCacheManager.getLicenseForAccount(proAccountId, userId).first()
+                                availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proAccountId)
+                                Toast.makeText(context, "Licence attribuée avec succès", Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (e: Exception) {
@@ -620,20 +679,30 @@ fun SettingsScreen(
         ConsiderFullDistanceConfirmDialog(
             onConfirm = {
                 // Save the setting
+                considerFullDistance = true
+                showConsiderFullDistanceConfirmDialog = false
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         val user = localUserRepository.getLoggedInUser()
                         if (user != null) {
                             val updatedUser = user.copy(considerFullDistance = true)
-                            localUserRepository.updateUser(updatedUser)
-                            MotiumApplication.logger.i("considerFullDistance set to true", "SettingsScreen")
+
+                            // 1. Update local (immédiat, pour UI)
+                            localUserRepository.saveUserFromServer(updatedUser, SyncStatus.SYNCED)
+
+                            // 2. Sync direct vers Supabase
+                            val result = supabaseAuthRepository.updateUserProfile(updatedUser)
+                            if (result is AuthResult.Success) {
+                                MotiumApplication.logger.i("✅ considerFullDistance synced to Supabase: true", "SettingsScreen")
+                            } else {
+                                val error = (result as? AuthResult.Error)?.message ?: "Unknown error"
+                                MotiumApplication.logger.e("❌ Failed to sync considerFullDistance: $error", "SettingsScreen")
+                            }
                         }
                     } catch (e: Exception) {
                         MotiumApplication.logger.e("Error updating considerFullDistance: ${e.message}", "SettingsScreen", e)
                     }
                 }
-                considerFullDistance = true
-                showConsiderFullDistanceConfirmDialog = false
             },
             onDismiss = {
                 // Cancel - don't change the setting
@@ -2735,16 +2804,25 @@ fun LicenseSelectionDialog(
 @Composable
 fun SubscriptionManagementDialog(
     currentUser: User?,
+    subscriptionManager: SubscriptionManager,
     surfaceColor: Color,
     textColor: Color,
     textSecondaryColor: Color,
     onDismiss: () -> Unit,
-    onUpgradeToLifetime: () -> Unit
+    onUpgradeToLifetime: () -> Unit,
+    onCancellationComplete: () -> Unit
 ) {
+    val coroutineScope = rememberCoroutineScope()
     val subscriptionType = currentUser?.subscription?.type
     val isLifetime = subscriptionType == SubscriptionType.LIFETIME
     val isMonthlyPremium = subscriptionType == SubscriptionType.PREMIUM
     val expiresAt = currentUser?.subscription?.expiresAt
+
+    // Cancellation state
+    var showCancelConfirmation by remember { mutableStateOf(false) }
+    var isCanceling by remember { mutableStateOf(false) }
+    var cancelError by remember { mutableStateOf<String?>(null) }
+    var cancellationSuccess by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2974,26 +3052,209 @@ fun SubscriptionManagementDialog(
                     }
                 }
 
-                // Cancel/manage info
+                // Cancel subscription button
                 if (isMonthlyPremium) {
-                    Text(
-                        text = "Pour annuler votre abonnement, contactez-nous à support@motium.org",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = textSecondaryColor.copy(alpha = 0.7f)
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Show success message if cancellation completed
+                    cancellationSuccess?.let { message ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFF4CAF50).copy(alpha = 0.1f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFF4CAF50),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF4CAF50)
+                                )
+                            }
+                        }
+                    }
+
+                    // Show error if any
+                    cancelError?.let { error ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFF5252).copy(alpha = 0.1f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF5252),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFFF5252)
+                                )
+                            }
+                        }
+                    }
+
+                    // Cancel button (only show if not already canceled and no success message)
+                    if (cancellationSuccess == null) {
+                        TextButton(
+                            onClick = { showCancelConfirmation = true },
+                            enabled = !isCanceling,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (isCanceling) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color(0xFFFF5252)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Text(
+                                text = if (isCanceling) "Résiliation en cours..." else "Résilier mon abonnement",
+                                color = Color(0xFFFF5252),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = {
+                if (cancellationSuccess != null) {
+                    onCancellationComplete()
+                } else {
+                    onDismiss()
+                }
+            }) {
                 Text(
-                    "Fermer",
+                    if (cancellationSuccess != null) "OK" else "Fermer",
                     color = MotiumPrimary
                 )
             }
         },
         dismissButton = {}
     )
+
+    // Cancellation confirmation dialog
+    if (showCancelConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirmation = false },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = Color(0xFFFF5252),
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Résilier votre abonnement ?",
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Votre abonnement restera actif jusqu'au ${
+                            expiresAt?.let {
+                                java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
+                                    .format(java.util.Date(it.toEpochMilliseconds()))
+                            } ?: "fin de la période"
+                        }.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Après cette date, vous n'aurez plus accès aux fonctionnalités Premium mais vos données seront conservées.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCancelConfirmation = false
+                        isCanceling = true
+                        cancelError = null
+
+                        coroutineScope.launch {
+                            val userId = currentUser?.id
+                            if (userId != null) {
+                                val result = subscriptionManager.cancelSubscription(
+                                    userId = userId,
+                                    cancelImmediately = false
+                                )
+                                result.fold(
+                                    onSuccess = { response ->
+                                        cancellationSuccess = "Abonnement résilié. Actif jusqu'au ${
+                                            response.currentPeriodEnd?.let {
+                                                try {
+                                                    val instant = kotlinx.datetime.Instant.parse(it)
+                                                    java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
+                                                        .format(java.util.Date(instant.toEpochMilliseconds()))
+                                                } catch (e: Exception) {
+                                                    it
+                                                }
+                                            } ?: "fin de période"
+                                        }"
+                                        isCanceling = false
+                                    },
+                                    onFailure = { error ->
+                                        cancelError = error.message ?: "Erreur lors de la résiliation"
+                                        isCanceling = false
+                                    }
+                                )
+                            } else {
+                                cancelError = "Utilisateur non connecté"
+                                isCanceling = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF5252)
+                    )
+                ) {
+                    Text("Confirmer la résiliation")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCancelConfirmation = false }) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -3205,6 +3466,96 @@ fun DeveloperOptionsSection(
                 // Spacer between buttons
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // Auto-Tracking Logs Export Section
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFFFFE0B2)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "🚗",
+                            fontSize = 24.sp
+                        )
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Export Auto-Tracking Logs",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            fontSize = 16.sp,
+                            color = textColor
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Logs de détection d'activité et trajets",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 12.sp,
+                            color = textSecondaryColor
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        try {
+                            CoroutineScope(Dispatchers.Main).launch {
+                                val logFile = LogcatCapture.captureAutoTrackingLogs(context)
+
+                                if (logFile == null || !logFile.exists() || logFile.length() == 0L) {
+                                    Toast.makeText(context, "No auto-tracking logs found", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    logFile
+                                )
+
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    putExtra(Intent.EXTRA_SUBJECT, "Motium Auto-Tracking Logs")
+                                    putExtra(Intent.EXTRA_TEXT, "Logs auto-tracking - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+
+                                context.startActivity(Intent.createChooser(shareIntent, "Export Auto-Tracking"))
+
+                                MotiumApplication.logger.i("Auto-tracking logs exported successfully", "Settings")
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Failed to export auto-tracking logs: ${e.message}", "Settings", e)
+                            Toast.makeText(context, "Failed to export: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF9800),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        "🚗 Export Auto-Tracking",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+
+                // Spacer between buttons
+                Spacer(modifier = Modifier.height(16.dp))
+
                 // Activity Recognition Reset Section
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -3283,8 +3634,163 @@ fun DeveloperOptionsSection(
                         fontSize = 16.sp
                     )
                 }
+
+                // Spacer between buttons
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Trip Simulation Section
+                TripSimulationSection(
+                    textColor = textColor,
+                    textSecondaryColor = textSecondaryColor
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun TripSimulationSection(
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    val context = LocalContext.current
+    val tripSimulator = remember { TripSimulator.getInstance(context) }
+    var isSimulating by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf("Prêt à simuler") }
+    var showResultDialog by remember { mutableStateOf(false) }
+    var resultSuccess by remember { mutableStateOf(false) }
+    var resultMessage by remember { mutableStateOf("") }
+
+    // Setup callbacks
+    LaunchedEffect(tripSimulator) {
+        tripSimulator.onStatusUpdate = { status ->
+            statusMessage = status
+        }
+        tripSimulator.onSimulationComplete = { success, message ->
+            isSimulating = false
+            resultSuccess = success
+            resultMessage = message ?: ""
+            showResultDialog = true
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFFE8F5E9)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "🧪",
+                    fontSize = 24.sp
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Simuler un trajet",
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    fontSize = 16.sp,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Crée un trajet de test avec route aléatoire",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 12.sp,
+                    color = textSecondaryColor
+                )
+            }
+        }
+
+        // Status message
+        if (isSimulating) {
+            Text(
+                text = statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 12.sp,
+                color = Color(0xFF4CAF50),
+                modifier = Modifier.padding(start = 64.dp)
+            )
+        }
+
+        Button(
+            onClick = {
+                if (!isSimulating) {
+                    isSimulating = true
+                    statusMessage = "Démarrage..."
+                    tripSimulator.startSimulation()
+                } else {
+                    tripSimulator.stopSimulation()
+                    isSimulating = false
+                    statusMessage = "Annulé"
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isSimulating) Color(0xFFEF4444) else Color(0xFF4CAF50),
+                contentColor = Color.White
+            ),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            if (isSimulating) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Annuler la simulation",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            } else {
+                Text(
+                    "🚗 Simuler un trajet",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+        }
+    }
+
+    // Result Dialog
+    if (showResultDialog) {
+        AlertDialog(
+            onDismissRequest = { showResultDialog = false },
+            title = {
+                Text(
+                    if (resultSuccess) "✅ Trajet créé !" else "❌ Erreur",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    if (resultSuccess) {
+                        "Le trajet simulé a été créé avec succès.\n\n$resultMessage\n\nRetournez à l'accueil pour le voir."
+                    } else {
+                        "La simulation a échoué:\n$resultMessage"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showResultDialog = false }) {
+                    Text("OK")
+                }
+            },
+            containerColor = if (resultSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+        )
     }
 }
 

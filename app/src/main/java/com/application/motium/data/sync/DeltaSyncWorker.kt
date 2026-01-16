@@ -6,6 +6,7 @@ import androidx.work.WorkerParameters
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
+import com.application.motium.data.local.entities.ConsentEntity
 import com.application.motium.data.local.entities.LicenseEntity
 import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.ProAccountEntity
@@ -14,16 +15,17 @@ import com.application.motium.data.local.entities.SyncMetadataEntity
 import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.local.entities.toDataModel
 import com.application.motium.data.local.entities.toDomainModel
-import com.application.motium.data.local.entities.toEntity as licenseToEntity
-import com.application.motium.data.local.entities.toEntity as proAccountToEntity
-import com.application.motium.data.local.entities.toEntity as stripeSubToEntity
-import com.application.motium.data.local.entities.toEntity as vehicleToEntity
+import com.application.motium.data.local.entities.toEntity
 import com.application.motium.data.supabase.LicenseDto
 import com.application.motium.data.supabase.LicenseRemoteDataSource as SupabaseLicenseRepository
 import com.application.motium.data.supabase.ProAccountRemoteDataSource as SupabaseProAccountRepository
 import com.application.motium.data.supabase.TripRemoteDataSource
 import com.application.motium.data.supabase.VehicleRemoteDataSource
+import com.application.motium.data.supabase.ChangesRemoteDataSource
+import com.application.motium.data.supabase.ChangeEntityMapper
 import com.application.motium.data.CompanyLinkRepository
+import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.domain.model.TripType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -63,14 +65,20 @@ class DeltaSyncWorker(
     private val stripeSubscriptionDao = database.stripeSubscriptionDao()
     private val pendingFileUploadDao = database.pendingFileUploadDao()
     private val expenseDao = database.expenseDao()
+    private val consentDao = database.consentDao()
+    private val workScheduleDao = database.workScheduleDao()
 
     private val localUserRepository = LocalUserRepository.getInstance(applicationContext)
     private val tripRemoteDataSource = TripRemoteDataSource.getInstance(applicationContext)
     private val vehicleRemoteDataSource = VehicleRemoteDataSource.getInstance(applicationContext)
+    private val changesRemoteDataSource = ChangesRemoteDataSource.getInstance(applicationContext)
     private val supabaseLicenseRepository = SupabaseLicenseRepository.getInstance(applicationContext)
     private val supabaseProAccountRepository = SupabaseProAccountRepository.getInstance(applicationContext)
     private val companyLinkRepository = CompanyLinkRepository.getInstance(applicationContext)
     private val storageService = com.application.motium.service.SupabaseStorageService.getInstance(applicationContext)
+    private val supabaseGdprRepository = com.application.motium.data.supabase.SupabaseGdprRepository.getInstance(applicationContext)
+    private val authRepository = SupabaseAuthRepository.getInstance(applicationContext)
+    private val secureSessionStorage = SecureSessionStorage(applicationContext)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
@@ -78,6 +86,13 @@ class DeltaSyncWorker(
             if (user == null) {
                 MotiumApplication.logger.w("No user logged in, skipping sync", TAG)
                 return@withContext Result.success()
+            }
+
+            // FIX: Validate and refresh session BEFORE syncing to avoid RLS errors with anon key
+            // Bug: When session refresh fails, Supabase falls back to anon key which causes RLS violations
+            if (!ensureValidSession()) {
+                MotiumApplication.logger.w("⚠️ Session invalid or refresh failed - skipping sync to prevent data loss", TAG)
+                return@withContext Result.retry()
             }
 
             MotiumApplication.logger.i("Starting delta sync for user: ${user.id}", TAG)
@@ -118,6 +133,51 @@ class DeltaSyncWorker(
         syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_LICENSE)
         syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_PRO_ACCOUNT)
         syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_STRIPE_SUBSCRIPTION)
+        syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_USER)
+        syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_CONSENT)
+        syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_WORK_SCHEDULE)
+        syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS)
+        syncMetadataDao.initializeIfNotExists(SyncMetadataEntity.TYPE_COMPANY_LINK)
+    }
+
+    // ==================== SESSION VALIDATION ====================
+
+    /**
+     * Ensure we have a valid session with a user JWT before syncing.
+     * This prevents the bug where Supabase falls back to anon key when session is expired,
+     * causing RLS violations and trips not being uploaded to the server.
+     *
+     * @return true if session is valid and we can proceed with sync
+     */
+    private suspend fun ensureValidSession(): Boolean {
+        return try {
+            // Step 1: Check if we have a refresh token
+            val refreshToken = secureSessionStorage.getRefreshToken()
+            if (refreshToken == null) {
+                MotiumApplication.logger.w("⚠️ No refresh token available - cannot validate session", TAG)
+                return false
+            }
+
+            // Step 2: Try to refresh the session to get a fresh access token
+            // refreshSessionForSync() already validates that the session has a valid user
+            val refreshResult = authRepository.refreshSessionForSync()
+            if (!refreshResult) {
+                MotiumApplication.logger.w("⚠️ Session refresh failed - skipping sync", TAG)
+                return false
+            }
+
+            // Step 3: Double-check we have a valid session in secure storage
+            if (!secureSessionStorage.hasValidSession()) {
+                MotiumApplication.logger.w("⚠️ No valid session in storage after refresh - skipping sync", TAG)
+                return false
+            }
+
+            MotiumApplication.logger.i("✅ Session validated - proceeding with sync", TAG)
+            true
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Session validation failed: ${e.message}", TAG, e)
+            false
+        }
     }
 
     // ==================== FILE UPLOAD PHASE ====================
@@ -279,6 +339,8 @@ class DeltaSyncWorker(
             PendingOperationEntity.TYPE_LICENSE -> processLicenseOperation(operation)
             PendingOperationEntity.TYPE_PRO_ACCOUNT -> processProAccountOperation(operation)
             PendingOperationEntity.TYPE_COMPANY_LINK -> processCompanyLinkOperation(operation, userId)
+            PendingOperationEntity.TYPE_USER -> processUserOperation(operation, userId)
+            PendingOperationEntity.TYPE_CONSENT -> processConsentOperation(operation, userId)
             else -> {
                 MotiumApplication.logger.w("Unknown entity type: ${operation.entityType}", TAG)
                 true // Remove unknown operations
@@ -521,212 +583,792 @@ class DeltaSyncWorker(
         }
     }
 
-    // ==================== DOWNLOAD PHASE ====================
-
-    private suspend fun downloadServerChanges(userId: String): Boolean {
-        var success = true
-
-        // Download trips delta
-        try {
-            success = downloadTripsDelta(userId) && success
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Failed to download trips: ${e.message}", TAG, e)
-            success = false
+    /**
+     * Process user profile operations (UPDATE only - user is created during registration).
+     * Syncs user preferences (favoriteColors, considerFullDistance, phoneNumber, address) to Supabase.
+     */
+    private suspend fun processUserOperation(operation: PendingOperationEntity, userId: String): Boolean {
+        // SECURITY: Validate operation belongs to current authenticated user
+        // This prevents RLS violations when stale operations exist after account switch
+        if (operation.entityId != userId) {
+            MotiumApplication.logger.w(
+                "Skipping stale user operation: entityId=${operation.entityId} != userId=$userId",
+                TAG
+            )
+            return true // Delete stale operation
         }
 
-        // Download vehicles delta
-        try {
-            success = downloadVehiclesDelta(userId) && success
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Failed to download vehicles: ${e.message}", TAG, e)
-            success = false
-        }
+        return when (operation.action) {
+            PendingOperationEntity.ACTION_UPDATE -> {
+                val userEntity = database.userDao().getUserById(operation.entityId)
+                if (userEntity == null) {
+                    MotiumApplication.logger.d("User ${operation.entityId} not found locally, removing operation", TAG)
+                    return true
+                }
 
-        // Download Pro account (for Pro users)
-        try {
-            success = downloadProAccount(userId) && success
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Failed to download pro account: ${e.message}", TAG, e)
-            // Don't fail sync for pro account - user might not be Pro
-        }
+                try {
+                    val domainUser = userEntity.toDomainModel()
 
-        // Download licenses (for Pro users with pro_account)
-        try {
-            success = downloadLicenses(userId) && success
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Failed to download licenses: ${e.message}", TAG, e)
-            // Don't fail sync for licenses - user might not be Pro
-        }
+                    // Upload user profile to Supabase using SupabaseAuthRepository
+                    val authRepo = com.application.motium.data.supabase.SupabaseAuthRepository.getInstance(applicationContext)
+                    val result = authRepo.updateUserProfile(domainUser)
 
-        return success
+                    if (result is com.application.motium.domain.model.AuthResult.Success) {
+                        // Mark as synced in local DB
+                        database.userDao().updateSyncStatus(
+                            userId = operation.entityId,
+                            syncStatus = SyncStatus.SYNCED.name,
+                            serverUpdatedAt = System.currentTimeMillis()
+                        )
+                        MotiumApplication.logger.i(
+                            "✅ Synced user preferences to Supabase for user: ${domainUser.email}",
+                            TAG
+                        )
+                        true
+                    } else {
+                        val error = (result as? com.application.motium.domain.model.AuthResult.Error)?.message
+                        MotiumApplication.logger.e(
+                            "Failed to sync user profile to Supabase: $error",
+                            TAG
+                        )
+                        false
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e(
+                        "Failed to sync user profile: ${e.message}",
+                        TAG,
+                        e
+                    )
+                    false
+                }
+            }
+            else -> {
+                MotiumApplication.logger.w("Unknown user operation: ${operation.action}", TAG)
+                true // Remove unknown operations
+            }
+        }
     }
 
-    private suspend fun downloadTripsDelta(userId: String): Boolean {
-        val entityType = SyncMetadataEntity.TYPE_TRIP
-        val lastSync = syncMetadataDao.getLastSyncTimestamp(entityType) ?: 0L
+    /**
+     * Process consent operations (UPDATE only).
+     * Syncs user consent to Supabase user_consents table.
+     */
+    private suspend fun processConsentOperation(operation: PendingOperationEntity, userId: String): Boolean {
+        return when (operation.action) {
+            PendingOperationEntity.ACTION_UPDATE -> {
+                // Parse entityId: "userId:consentType"
+                val parts = operation.entityId.split(":")
+                if (parts.size != 2) {
+                    MotiumApplication.logger.w("Invalid consent entityId: ${operation.entityId}", TAG)
+                    return true // Remove invalid operation
+                }
 
-        MotiumApplication.logger.i("Downloading trips delta since: $lastSync", TAG)
+                val consentUserId = parts[0]
+                val consentType = parts[1]
 
-        // Mark sync in progress
-        syncMetadataDao.setSyncInProgress(entityType, true)
+                val consent = consentDao.getConsentByTypeOnce(consentUserId, consentType)
+                if (consent == null) {
+                    MotiumApplication.logger.d("Consent $consentType not found locally, removing operation", TAG)
+                    return true
+                }
+
+                try {
+                    // Convert to domain ConsentType
+                    val type = com.application.motium.domain.model.ConsentType.valueOf(consentType.uppercase())
+                    val version = consent.version.toString()
+
+                    // Update via Supabase repository
+                    val result = supabaseGdprRepository.updateConsent(type, consent.granted, version)
+
+                    if (result.isSuccess) {
+                        // Mark as synced
+                        consentDao.markAsSynced(consent.id, System.currentTimeMillis())
+                        MotiumApplication.logger.i(
+                            "✅ Synced consent $consentType: granted=${consent.granted}",
+                            TAG
+                        )
+                        true
+                    } else {
+                        MotiumApplication.logger.e(
+                            "Failed to sync consent to Supabase: ${result.exceptionOrNull()?.message}",
+                            TAG
+                        )
+                        false
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e(
+                        "Failed to sync consent: ${e.message}",
+                        TAG,
+                        e
+                    )
+                    false
+                }
+            }
+            else -> {
+                MotiumApplication.logger.w("Unknown consent operation: ${operation.action}", TAG)
+                true // Remove unknown operations
+            }
+        }
+    }
+
+    // ==================== DOWNLOAD PHASE ====================
+
+    /**
+     * Download all changes from server using single RPC call.
+     * Replaces 8+ individual API calls with a single get_changes() RPC.
+     *
+     * Performance improvement:
+     * - Before: 8+ HTTP requests, downloading ALL entities every sync
+     * - After: 1 HTTP request, downloading only changes since lastSync
+     */
+    private suspend fun downloadServerChanges(userId: String): Boolean {
+        // Get minimum lastSyncTimestamp across all entity types
+        val lastSync = getMinimumLastSyncTimestamp()
+
+        MotiumApplication.logger.i(
+            "Downloading all changes via RPC since: $lastSync (${java.util.Date(lastSync)})",
+            TAG
+        )
+
+        // Mark all entity types as sync in progress
+        markAllSyncInProgress(true)
 
         try {
-            // Fetch all trips from server (future: add delta query with updated_at filter)
-            val result = tripRemoteDataSource.getAllTrips(userId)
+            // SINGLE RPC CALL - replaces 8+ individual getAllX() calls
+            val result = changesRemoteDataSource.getChanges(lastSync)
 
-            if (result.isSuccess) {
-                val serverTrips = result.getOrNull() ?: emptyList()
-                MotiumApplication.logger.i("Fetched ${serverTrips.size} trips from server", TAG)
+            if (result.isFailure) {
+                val error = result.exceptionOrNull()?.message ?: "Unknown error"
+                MotiumApplication.logger.e("Failed to fetch changes via RPC: $error", TAG)
+                setAllSyncErrors(error)
+                return false
+            }
 
-                var syncedCount = 0
+            val changes = result.getOrNull()!!
 
-                serverTrips.forEach { serverTrip ->
-                    val localTrip = tripDao.getTripById(serverTrip.id)
+            MotiumApplication.logger.i(
+                "RPC returned ${changes.totalChanges} total changes",
+                TAG
+            )
 
-                    if (localTrip == null) {
-                        // New trip from server - insert
-                        val entity = serverTrip.toDataTrip().toEntity(userId).copy(
-                            syncStatus = SyncStatus.SYNCED.name,
-                            serverUpdatedAt = serverTrip.updatedAt.toEpochMilliseconds(),
-                            needsSync = false
-                        )
-                        tripDao.insertTrip(entity)
+            var success = true
+
+            // Process each entity type
+            success = processTripsChanges(changes.trips, userId) && success
+            success = processLinkedTripsChanges(changes.linkedTrips, userId) && success
+            success = processVehiclesChanges(changes.vehicles, userId) && success
+            success = processExpensesChanges(changes.expenses, userId) && success
+            success = processUserChanges(changes.users) && success
+            success = processProAccountChanges(changes.proAccounts, userId) && success
+            success = processLicenseChanges(changes.licenses) && success
+            success = processProLicenseChanges(changes.proLicenses) && success
+            success = processCompanyLinkChanges(changes.companyLinks, userId) && success
+            success = processConsentChanges(changes.consents, userId) && success
+            success = processWorkScheduleChanges(changes.workSchedules, userId) && success
+            success = processAutoTrackingSettingsChanges(changes.autoTrackingSettings, userId) && success
+
+            // Update sync metadata with max timestamp
+            if (success && changes.totalChanges > 0) {
+                updateAllLastSyncTimestamps(changes.maxTimestamp)
+            } else if (success) {
+                // No changes but successful - update timestamps anyway
+                updateAllLastSyncTimestamps(System.currentTimeMillis())
+            }
+
+            return success
+
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to download changes: ${e.message}", TAG, e)
+            setAllSyncErrors(e.message)
+            return false
+        } finally {
+            markAllSyncInProgress(false)
+        }
+    }
+
+    private suspend fun getMinimumLastSyncTimestamp(): Long {
+        val types = listOf(
+            SyncMetadataEntity.TYPE_TRIP,
+            SyncMetadataEntity.TYPE_VEHICLE,
+            SyncMetadataEntity.TYPE_EXPENSE,
+            SyncMetadataEntity.TYPE_USER,
+            SyncMetadataEntity.TYPE_LICENSE,
+            SyncMetadataEntity.TYPE_PRO_ACCOUNT,
+            SyncMetadataEntity.TYPE_CONSENT,
+            SyncMetadataEntity.TYPE_WORK_SCHEDULE,
+            SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS,
+            SyncMetadataEntity.TYPE_COMPANY_LINK
+        )
+
+        return types.mapNotNull { syncMetadataDao.getLastSyncTimestamp(it) }
+            .minOrNull() ?: 0L
+    }
+
+    private suspend fun markAllSyncInProgress(inProgress: Boolean) {
+        listOf(
+            SyncMetadataEntity.TYPE_TRIP,
+            SyncMetadataEntity.TYPE_VEHICLE,
+            SyncMetadataEntity.TYPE_EXPENSE,
+            SyncMetadataEntity.TYPE_USER,
+            SyncMetadataEntity.TYPE_LICENSE,
+            SyncMetadataEntity.TYPE_PRO_ACCOUNT,
+            SyncMetadataEntity.TYPE_CONSENT,
+            SyncMetadataEntity.TYPE_WORK_SCHEDULE,
+            SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS,
+            SyncMetadataEntity.TYPE_COMPANY_LINK
+        ).forEach { type ->
+            syncMetadataDao.setSyncInProgress(type, inProgress)
+        }
+    }
+
+    private suspend fun setAllSyncErrors(error: String?) {
+        listOf(
+            SyncMetadataEntity.TYPE_TRIP,
+            SyncMetadataEntity.TYPE_VEHICLE,
+            SyncMetadataEntity.TYPE_EXPENSE,
+            SyncMetadataEntity.TYPE_USER,
+            SyncMetadataEntity.TYPE_LICENSE,
+            SyncMetadataEntity.TYPE_PRO_ACCOUNT,
+            SyncMetadataEntity.TYPE_CONSENT,
+            SyncMetadataEntity.TYPE_WORK_SCHEDULE,
+            SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS,
+            SyncMetadataEntity.TYPE_COMPANY_LINK
+        ).forEach { type ->
+            syncMetadataDao.setSyncError(type, error)
+        }
+    }
+
+    private suspend fun updateAllLastSyncTimestamps(timestamp: Long) {
+        listOf(
+            SyncMetadataEntity.TYPE_TRIP,
+            SyncMetadataEntity.TYPE_VEHICLE,
+            SyncMetadataEntity.TYPE_EXPENSE,
+            SyncMetadataEntity.TYPE_USER,
+            SyncMetadataEntity.TYPE_LICENSE,
+            SyncMetadataEntity.TYPE_PRO_ACCOUNT,
+            SyncMetadataEntity.TYPE_CONSENT,
+            SyncMetadataEntity.TYPE_WORK_SCHEDULE,
+            SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS,
+            SyncMetadataEntity.TYPE_COMPANY_LINK
+        ).forEach { type ->
+            syncMetadataDao.updateLastSyncTimestamp(type, timestamp, 0)
+        }
+    }
+
+    // ==================== PROCESS CHANGES BY ENTITY TYPE ====================
+
+    private suspend fun processTripsChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        tripDao.deleteTripById(change.entityId)
                         syncedCount++
-                    } else if (localTrip.syncStatus == SyncStatus.SYNCED.name) {
-                        // No local changes - update from server if newer
-                        val serverUpdatedAt = serverTrip.updatedAt.toEpochMilliseconds()
-                        val localUpdatedAt = localTrip.serverUpdatedAt ?: localTrip.localUpdatedAt
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToTripEntity(change.data, userId)
+                        if (entity != null) {
+                            val localTrip = tripDao.getTripById(entity.id)
 
-                        if (serverUpdatedAt > localUpdatedAt) {
-                            val entity = serverTrip.toDataTrip().toEntity(userId).copy(
-                                syncStatus = SyncStatus.SYNCED.name,
-                                serverUpdatedAt = serverUpdatedAt,
-                                needsSync = false,
-                                // Preserve local cache
-                                matchedRouteCoordinates = localTrip.matchedRouteCoordinates
-                            )
+                            if (localTrip == null) {
+                                // New trip from server
+                                tripDao.insertTrip(entity)
+                                syncedCount++
+                            } else if (localTrip.syncStatus == SyncStatus.SYNCED.name) {
+                                // No local changes - update from server
+                                tripDao.insertTrip(entity.copy(
+                                    matchedRouteCoordinates = localTrip.matchedRouteCoordinates
+                                ))
+                                syncedCount++
+                            } else {
+                                // Conflict - use last-write-wins
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localTrip.localUpdatedAt) {
+                                    // Server wins
+                                    tripDao.insertTrip(entity.copy(
+                                        matchedRouteCoordinates = localTrip.matchedRouteCoordinates
+                                    ))
+                                    syncedCount++
+                                }
+                                // else: Local wins, will be uploaded in next sync
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing trip change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount trip changes", TAG)
+        return true
+    }
+
+    private suspend fun processLinkedTripsChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        // LINKED_TRIP are read-only trips from collaborators (Pro feature)
+        // They are stored in the same trips table but belong to other users
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        tripDao.deleteTripById(change.entityId)
+                        syncedCount++
+                    }
+                    "UPSERT" -> {
+                        // For linked trips, use the user_id from the data, not current userId
+                        val tripUserId = change.data["user_id"]?.toString()?.trim('"') ?: return@forEach
+                        val entity = ChangeEntityMapper.mapToTripEntity(change.data, tripUserId)
+                        if (entity != null) {
+                            // Always overwrite - these are read-only trips from collaborators
                             tripDao.insertTrip(entity)
                             syncedCount++
                         }
-                    } else {
-                        // Local has pending changes - resolve conflict
-                        resolveConflict(localTrip, serverTrip, userId)
                     }
                 }
-
-                // Update sync metadata
-                syncMetadataDao.updateLastSyncTimestamp(entityType, System.currentTimeMillis(), syncedCount)
-                MotiumApplication.logger.i("Synced $syncedCount trips from server", TAG)
-                return true
-            } else {
-                val error = result.exceptionOrNull()?.message ?: "Unknown error"
-                syncMetadataDao.setSyncError(entityType, error)
-                return false
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing linked trip change: ${e.message}", TAG, e)
             }
-        } catch (e: Exception) {
-            syncMetadataDao.setSyncError(entityType, e.message)
-            throw e
         }
+
+        MotiumApplication.logger.i("Processed $syncedCount linked trip changes", TAG)
+        return true
     }
 
-    private suspend fun resolveConflict(
-        local: com.application.motium.data.local.entities.TripEntity,
-        server: com.application.motium.domain.model.Trip,
+    private suspend fun processVehiclesChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
         userId: String
-    ) {
-        // Last-write-wins based on timestamps
-        val serverTimestamp = server.updatedAt.toEpochMilliseconds()
+    ): Boolean {
+        if (changes.isEmpty()) return true
 
-        if (serverTimestamp > local.localUpdatedAt) {
-            // Server wins - use server version
-            MotiumApplication.logger.i(
-                "Conflict resolved: Server wins for trip ${local.id}",
-                TAG
-            )
-            val entity = server.toDataTrip().toEntity(userId).copy(
-                syncStatus = SyncStatus.SYNCED.name,
-                serverUpdatedAt = serverTimestamp,
-                needsSync = false,
-                matchedRouteCoordinates = local.matchedRouteCoordinates
-            )
-            tripDao.insertTrip(entity)
-        } else {
-            // Local wins - keep local, re-queue for upload
-            MotiumApplication.logger.i(
-                "Conflict resolved: Local wins for trip ${local.id}, re-queuing for upload",
-                TAG
-            )
-            pendingOpDao.insert(
-                PendingOperationEntity(
-                    id = java.util.UUID.randomUUID().toString(),
-                    entityType = PendingOperationEntity.TYPE_TRIP,
-                    entityId = local.id,
-                    action = PendingOperationEntity.ACTION_UPDATE,
-                    payload = null,
-                    createdAt = System.currentTimeMillis(),
-                    priority = 1
-                )
-            )
-        }
-    }
+        var syncedCount = 0
 
-    private suspend fun downloadVehiclesDelta(userId: String): Boolean {
-        val entityType = SyncMetadataEntity.TYPE_VEHICLE
-        val lastSync = syncMetadataDao.getLastSyncTimestamp(entityType) ?: 0L
-
-        MotiumApplication.logger.i("Downloading vehicles delta since: $lastSync", TAG)
-
-        syncMetadataDao.setSyncInProgress(entityType, true)
-
-        try {
-            // getAllVehiclesForUser returns List<Vehicle> directly, throws on error
-            val serverVehicles = vehicleRemoteDataSource.getAllVehiclesForUser(userId)
-            MotiumApplication.logger.i("Fetched ${serverVehicles.size} vehicles from server", TAG)
-
-            var syncedCount = 0
-
-            serverVehicles.forEach { serverVehicle ->
-                val localVehicle = vehicleDao.getVehicleById(serverVehicle.id)
-
-                if (localVehicle == null) {
-                    // New vehicle from server
-                    val entity = serverVehicle.vehicleToEntity(
-                        lastSyncedAt = System.currentTimeMillis(),
-                        needsSync = false
-                    ).copy(
-                        syncStatus = SyncStatus.SYNCED.name,
-                        serverUpdatedAt = serverVehicle.updatedAt.toEpochMilliseconds()
-                    )
-                    vehicleDao.insertVehicle(entity)
-                    syncedCount++
-                } else if (localVehicle.syncStatus == SyncStatus.SYNCED.name) {
-                    // Update from server if newer
-                    val serverUpdatedAt = serverVehicle.updatedAt.toEpochMilliseconds()
-                    val localUpdatedAt = localVehicle.serverUpdatedAt ?: localVehicle.localUpdatedAt
-
-                    if (serverUpdatedAt > localUpdatedAt) {
-                        val entity = serverVehicle.vehicleToEntity(
-                            lastSyncedAt = System.currentTimeMillis(),
-                            needsSync = false
-                        ).copy(
-                            syncStatus = SyncStatus.SYNCED.name,
-                            serverUpdatedAt = serverUpdatedAt
-                        )
-                        vehicleDao.insertVehicle(entity)
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        vehicleDao.deleteVehicleById(change.entityId)
                         syncedCount++
                     }
-                }
-                // If local has pending changes, don't overwrite
-            }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToVehicleEntity(change.data, userId)
+                        if (entity != null) {
+                            val localVehicle = vehicleDao.getVehicleById(entity.id)
 
-            syncMetadataDao.updateLastSyncTimestamp(entityType, System.currentTimeMillis(), syncedCount)
-            MotiumApplication.logger.i("Synced $syncedCount vehicles from server", TAG)
-            return true
-        } catch (e: Exception) {
-            syncMetadataDao.setSyncError(entityType, e.message)
-            throw e
+                            if (localVehicle == null || localVehicle.syncStatus == SyncStatus.SYNCED.name) {
+                                vehicleDao.insertVehicle(entity)
+                                syncedCount++
+                            } else {
+                                // Conflict - last-write-wins
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localVehicle.localUpdatedAt) {
+                                    vehicleDao.insertVehicle(entity)
+                                    syncedCount++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing vehicle change: ${e.message}", TAG, e)
+            }
         }
+
+        MotiumApplication.logger.i("Processed $syncedCount vehicle changes", TAG)
+        return true
     }
+
+    private suspend fun processExpensesChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        expenseDao.deleteExpenseById(change.entityId)
+                        syncedCount++
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToExpenseEntity(change.data, userId)
+                        if (entity != null) {
+                            val localExpense = expenseDao.getExpenseById(entity.id)
+
+                            if (localExpense == null || localExpense.syncStatus == SyncStatus.SYNCED.name) {
+                                expenseDao.insertExpense(entity)
+                                syncedCount++
+                            } else {
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localExpense.localUpdatedAt) {
+                                    expenseDao.insertExpense(entity)
+                                    syncedCount++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing expense change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount expense changes", TAG)
+        return true
+    }
+
+    private suspend fun processUserChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                if (change.action == "UPSERT") {
+                    val entity = ChangeEntityMapper.mapToUserEntity(change.data)
+                    if (entity != null) {
+                        val localUser = database.userDao().getUserById(entity.id)
+
+                        if (localUser == null) {
+                            database.userDao().insertUser(entity)
+                            syncedCount++
+                        } else if (localUser.syncStatus == SyncStatus.SYNCED.name) {
+                            // Preserve local connection status
+                            database.userDao().updateUser(entity.copy(
+                                isLocallyConnected = localUser.isLocallyConnected
+                            ))
+                            syncedCount++
+                        } else {
+                            val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                            if (serverTimestamp > localUser.localUpdatedAt) {
+                                database.userDao().updateUser(entity.copy(
+                                    isLocallyConnected = localUser.isLocallyConnected
+                                ))
+                                syncedCount++
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing user change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount user changes", TAG)
+        return true
+    }
+
+    private suspend fun processProAccountChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                if (change.action == "UPSERT") {
+                    val entity = ChangeEntityMapper.mapToProAccountEntity(change.data)
+                    if (entity != null) {
+                        val localProAccount = proAccountDao.getByIdOnce(entity.id)
+
+                        if (localProAccount == null || localProAccount.syncStatus == SyncStatus.SYNCED.name) {
+                            proAccountDao.upsert(entity)
+                            syncedCount++
+                        } else {
+                            val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                            if (serverTimestamp > localProAccount.localUpdatedAt) {
+                                proAccountDao.upsert(entity)
+                                syncedCount++
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing pro account change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount pro account changes", TAG)
+        return true
+    }
+
+    private suspend fun processLicenseChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        licenseDao.deleteById(change.entityId)
+                        syncedCount++
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToLicenseEntity(change.data)
+                        if (entity != null) {
+                            val localLicense = licenseDao.getByIdOnce(entity.id)
+
+                            if (localLicense == null || localLicense.syncStatus == SyncStatus.SYNCED.name) {
+                                licenseDao.upsert(entity)
+                                syncedCount++
+                            } else {
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localLicense.localUpdatedAt) {
+                                    licenseDao.upsert(entity)
+                                    syncedCount++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing license change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount license changes", TAG)
+        return true
+    }
+
+    private suspend fun processProLicenseChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>
+    ): Boolean {
+        // PRO_LICENSE are licenses owned by the user's pro account
+        // Same processing as LICENSE
+        return processLicenseChanges(changes)
+    }
+
+    private suspend fun processCompanyLinkChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+        val companyLinkDao = database.companyLinkDao()
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        companyLinkDao.deleteCompanyLinkById(change.entityId)
+                        syncedCount++
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToCompanyLinkEntity(change.data, userId)
+                        if (entity != null) {
+                            val localLink = companyLinkDao.getCompanyLinkById(entity.id)
+
+                            if (localLink == null || localLink.syncStatus == SyncStatus.SYNCED.name) {
+                                companyLinkDao.insertCompanyLink(entity)
+                                syncedCount++
+                            } else {
+                                // Conflict - last-write-wins
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localLink.localUpdatedAt) {
+                                    companyLinkDao.insertCompanyLink(entity)
+                                    syncedCount++
+                                }
+                            }
+                            // If local has pending changes and is newer, don't overwrite
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing company link change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount company link changes", TAG)
+        return true
+    }
+
+    private suspend fun processConsentChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        // Consent revoked - update local
+                        val consentType = change.data["consent_type"]?.toString()?.trim('"') ?: return@forEach
+                        val localConsent = consentDao.getConsentByTypeOnce(userId, consentType)
+                        if (localConsent != null) {
+                            consentDao.upsert(localConsent.copy(
+                                granted = false,
+                                revokedAt = System.currentTimeMillis(),
+                                syncStatus = SyncStatus.SYNCED.name
+                            ))
+                            syncedCount++
+                        }
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToConsentEntity(change.data, userId)
+                        if (entity != null) {
+                            val localConsent = consentDao.getConsentByTypeOnce(userId, entity.consentType)
+
+                            if (localConsent == null) {
+                                consentDao.upsert(entity)
+                                syncedCount++
+                            } else if (localConsent.syncStatus == SyncStatus.SYNCED.name) {
+                                // Update from server if different
+                                if (localConsent.granted != entity.granted) {
+                                    consentDao.upsert(entity.copy(id = localConsent.id))
+                                    syncedCount++
+                                }
+                            }
+                            // If local has pending changes, don't overwrite
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing consent change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount consent changes", TAG)
+        return true
+    }
+
+    private suspend fun processWorkScheduleChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        workScheduleDao.deleteWorkScheduleById(change.entityId)
+                        syncedCount++
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToWorkScheduleEntity(change.data, userId)
+                        if (entity != null) {
+                            val localSchedule = workScheduleDao.getWorkScheduleById(entity.id)
+
+                            if (localSchedule == null || localSchedule.syncStatus == SyncStatus.SYNCED.name) {
+                                workScheduleDao.insertWorkSchedule(entity)
+                                syncedCount++
+                            } else {
+                                // Conflict - last-write-wins
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localSchedule.localUpdatedAt) {
+                                    workScheduleDao.insertWorkSchedule(entity)
+                                    syncedCount++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing work schedule change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount work schedule changes", TAG)
+        return true
+    }
+
+    private suspend fun processAutoTrackingSettingsChanges(
+        changes: List<ChangesRemoteDataSource.ChangeRecord>,
+        userId: String
+    ): Boolean {
+        if (changes.isEmpty()) return true
+
+        var syncedCount = 0
+
+        changes.forEach { change ->
+            try {
+                when (change.action) {
+                    "DELETE" -> {
+                        workScheduleDao.deleteAutoTrackingSettingsForUser(userId)
+                        syncedCount++
+                    }
+                    "UPSERT" -> {
+                        val entity = ChangeEntityMapper.mapToAutoTrackingSettingsEntity(change.data, userId)
+                        if (entity != null) {
+                            val localSettings = workScheduleDao.getAutoTrackingSettings(userId)
+
+                            if (localSettings == null || localSettings.syncStatus == SyncStatus.SYNCED.name) {
+                                workScheduleDao.insertAutoTrackingSettings(entity)
+                                syncedCount++
+                            } else {
+                                // Conflict - last-write-wins
+                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
+                                if (serverTimestamp > localSettings.localUpdatedAt) {
+                                    workScheduleDao.insertAutoTrackingSettings(entity)
+                                    syncedCount++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // Always re-throw cancellation
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error processing auto tracking settings change: ${e.message}", TAG, e)
+            }
+        }
+
+        MotiumApplication.logger.i("Processed $syncedCount auto tracking settings changes", TAG)
+        return true
+    }
+
+    // ==================== LEGACY METHODS (kept for fallback) ====================
 
     private suspend fun downloadProAccount(userId: String): Boolean {
         val entityType = SyncMetadataEntity.TYPE_PRO_ACCOUNT
@@ -820,6 +1462,160 @@ class DeltaSyncWorker(
         } catch (e: Exception) {
             MotiumApplication.logger.e("Failed to download licenses: ${e.message}", TAG, e)
             syncMetadataDao.setSyncError(entityType, e.message)
+            return false
+        }
+    }
+
+    /**
+     * Download user profile from Supabase and update local preferences.
+     * Implements conflict resolution: server wins if no pending local changes.
+     */
+    private suspend fun downloadUserProfile(userId: String): Boolean {
+        try {
+            val authRepo = com.application.motium.data.supabase.SupabaseAuthRepository.getInstance(applicationContext)
+            val result = authRepo.getUserProfile(userId)
+
+            if (result is com.application.motium.domain.model.AuthResult.Success) {
+                val serverUser = result.data
+                val localUser = database.userDao().getUserById(userId)
+
+                if (localUser == null) {
+                    // Should not happen - user should exist locally
+                    MotiumApplication.logger.w("User $userId not found locally during profile sync", TAG)
+                    return false
+                }
+
+                // Only update if local user has no pending changes (SYNCED status)
+                if (localUser.syncStatus == SyncStatus.SYNCED.name) {
+                    // Check if server has newer data
+                    val serverUpdatedAt = serverUser.updatedAt.toEpochMilliseconds()
+                    val localUpdatedAt = localUser.serverUpdatedAt ?: localUser.localUpdatedAt
+
+                    if (serverUpdatedAt > localUpdatedAt) {
+                        // Server has newer data - update local
+                        val updatedEntity = serverUser.toEntity(
+                            lastSyncedAt = System.currentTimeMillis(),
+                            isLocallyConnected = localUser.isLocallyConnected
+                        ).copy(
+                            syncStatus = SyncStatus.SYNCED.name,
+                            serverUpdatedAt = serverUpdatedAt
+                        )
+                        database.userDao().updateUser(updatedEntity)
+
+                        MotiumApplication.logger.i(
+                            "✅ Updated local user preferences from server (favoriteColors, considerFullDistance, etc.)",
+                            TAG
+                        )
+                    } else {
+                        MotiumApplication.logger.d(
+                            "Local user preferences are up-to-date (localUpdatedAt: $localUpdatedAt >= serverUpdatedAt: $serverUpdatedAt)",
+                            TAG
+                        )
+                    }
+                } else {
+                    // Local has pending changes - conflict resolution: local wins, will be uploaded later
+                    MotiumApplication.logger.i(
+                        "Skipping user profile download - local has pending changes (syncStatus: ${localUser.syncStatus})",
+                        TAG
+                    )
+                }
+
+                return true
+            } else {
+                val error = (result as? com.application.motium.domain.model.AuthResult.Error)?.message
+                MotiumApplication.logger.e("Failed to fetch user profile from server: $error", TAG)
+                return false
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to download user profile: ${e.message}", TAG, e)
+            return false
+        }
+    }
+
+    /**
+     * Download user consents from Supabase and update local database.
+     * Implements conflict resolution: server wins if no pending local changes.
+     */
+    private suspend fun downloadConsents(userId: String): Boolean {
+        val entityType = SyncMetadataEntity.TYPE_CONSENT
+
+        try {
+            // Fetch consents from Supabase
+            val result = supabaseGdprRepository.getConsents()
+            if (result.isFailure) {
+                val error = result.exceptionOrNull()?.message ?: "Unknown error"
+                syncMetadataDao.setSyncError(entityType, error)
+                MotiumApplication.logger.e("Failed to fetch consents from server: $error", TAG)
+                return false
+            }
+
+            val serverConsents = result.getOrNull() ?: emptyList()
+            MotiumApplication.logger.i("Fetched ${serverConsents.size} consents from server", TAG)
+
+            var syncedCount = 0
+
+            serverConsents.forEach { serverConsent ->
+                val consentType = serverConsent.type.name.lowercase()
+                val localConsent = consentDao.getConsentByTypeOnce(userId, consentType)
+
+                if (localConsent == null) {
+                    // New consent from server - insert
+                    val entity = ConsentEntity(
+                        id = java.util.UUID.randomUUID().toString(),
+                        userId = userId,
+                        consentType = consentType,
+                        granted = serverConsent.granted,
+                        version = serverConsent.version.toIntOrNull() ?: 1,
+                        grantedAt = serverConsent.grantedAt?.toEpochMilliseconds(),
+                        revokedAt = serverConsent.revokedAt?.toEpochMilliseconds(),
+                        createdAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                        syncStatus = SyncStatus.SYNCED.name,
+                        localUpdatedAt = System.currentTimeMillis(),
+                        serverUpdatedAt = System.currentTimeMillis()
+                    )
+                    consentDao.upsert(entity)
+                    syncedCount++
+                } else if (localConsent.syncStatus == SyncStatus.SYNCED.name) {
+                    // No local pending changes - update from server if needed
+                    val serverUpdatedAt = serverConsent.grantedAt?.toEpochMilliseconds()
+                        ?: serverConsent.revokedAt?.toEpochMilliseconds()
+                        ?: System.currentTimeMillis()
+
+                    // Only update if server has different value
+                    if (localConsent.granted != serverConsent.granted) {
+                        val entity = localConsent.copy(
+                            granted = serverConsent.granted,
+                            version = serverConsent.version.toIntOrNull() ?: localConsent.version,
+                            grantedAt = serverConsent.grantedAt?.toEpochMilliseconds(),
+                            revokedAt = serverConsent.revokedAt?.toEpochMilliseconds(),
+                            updatedAt = System.currentTimeMillis(),
+                            syncStatus = SyncStatus.SYNCED.name,
+                            serverUpdatedAt = serverUpdatedAt
+                        )
+                        consentDao.upsert(entity)
+                        syncedCount++
+                        MotiumApplication.logger.i(
+                            "Updated consent $consentType from server: granted=${serverConsent.granted}",
+                            TAG
+                        )
+                    }
+                } else {
+                    // Local has pending changes - skip update, will be uploaded later
+                    MotiumApplication.logger.d(
+                        "Skipping consent $consentType - local has pending changes (syncStatus: ${localConsent.syncStatus})",
+                        TAG
+                    )
+                }
+            }
+
+            // Update sync metadata
+            syncMetadataDao.updateLastSyncTimestamp(entityType, System.currentTimeMillis(), syncedCount)
+            MotiumApplication.logger.i("Synced $syncedCount consents from server", TAG)
+            return true
+        } catch (e: Exception) {
+            syncMetadataDao.setSyncError(entityType, e.message)
+            MotiumApplication.logger.e("Failed to download consents: ${e.message}", TAG, e)
             return false
         }
     }
@@ -925,8 +1721,8 @@ private fun com.application.motium.domain.model.Trip.toDataTrip(): com.applicati
         isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt.toEpochMilliseconds(),
         updatedAt = updatedAt.toEpochMilliseconds(),
-        lastSyncedAt = System.currentTimeMillis(),
-        needsSync = false
+        userId = userId,
+        matchedRouteCoordinates = null
     )
 }
 
@@ -951,8 +1747,10 @@ private fun com.application.motium.data.Trip.toEntity(userId: String): com.appli
         isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt,
         updatedAt = updatedAt,
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync,
-        matchedRouteCoordinates = matchedRouteCoordinates
+        matchedRouteCoordinates = matchedRouteCoordinates,
+        syncStatus = SyncStatus.SYNCED.name,
+        localUpdatedAt = System.currentTimeMillis(),
+        serverUpdatedAt = updatedAt,
+        version = 1
     )
 }

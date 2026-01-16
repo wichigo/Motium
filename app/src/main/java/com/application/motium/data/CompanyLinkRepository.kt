@@ -2,11 +2,14 @@ package com.application.motium.data
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.local.dao.CompanyLinkDao
 import com.application.motium.data.local.entities.PendingOperationEntity
+import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.SupabaseClient
 import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.CompanyLink
@@ -41,12 +44,16 @@ class CompanyLinkRepository private constructor(private val context: Context) {
     private val companyLinkDao: CompanyLinkDao = database.companyLinkDao()
     private val pendingOperationDao = database.pendingOperationDao()
 
+    // Remote data sources for Edge Function calls
+    private val linkedAccountRemoteDataSource by lazy { LinkedAccountRemoteDataSource.getInstance(context) }
+    private val localUserRepository by lazy { LocalUserRepository.getInstance(context) }
+
     // ==================== DTOs for Supabase ====================
 
     @Serializable
     data class CompanyLinkDto(
         val id: String? = null,
-        val user_id: String,
+        val user_id: String? = null,  // Nullable: null until user accepts invitation
         val linked_pro_account_id: String,
         val company_name: String,
         val department: String? = null,
@@ -98,6 +105,13 @@ class CompanyLinkRepository private constructor(private val context: Context) {
         val userId: String
     )
 
+    @Serializable
+    data class UnlinkConfirmationPayload(
+        val linkId: String,
+        val initiatedBy: String,
+        val initiatorEmail: String
+    )
+
     // ==================== Singleton ====================
 
     companion object {
@@ -131,7 +145,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
 
             // Cache locally
             if (links.isNotEmpty()) {
-                val entities = links.map { it.toEntity(lastSyncedAt = java.lang.System.currentTimeMillis(), needsSync = false) }
+                val entities = links.map { it.toEntity(syncStatus = SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
                 companyLinkDao.insertCompanyLinks(entities)
                 MotiumApplication.logger.i("Cached ${links.size} company links in Room", "CompanyLinkRepository")
             }
@@ -227,7 +241,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             )
 
             // Save to local cache
-            val entity = companyLink.toEntity(lastSyncedAt = java.lang.System.currentTimeMillis(), needsSync = false)
+            val entity = companyLink.toEntity(syncStatus = SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
             companyLinkDao.insertCompanyLink(entity)
 
             MotiumApplication.logger.i("Successfully activated link with company: $companyName", "CompanyLinkRepository")
@@ -303,7 +317,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                     )
 
                     // Save to local cache
-                    val entity = companyLink.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                    val entity = companyLink.toEntity(syncStatus = SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
                     companyLinkDao.insertCompanyLink(entity)
 
                     // Remove pending operation since activation succeeded
@@ -325,7 +339,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                 val pendingLink = createPendingCompanyLink(userId, token)
 
                 // Save pending link to cache
-                val entity = pendingLink.toEntity(lastSyncedAt = null, needsSync = true)
+                val entity = pendingLink.toEntity(syncStatus = SyncStatus.PENDING_UPLOAD.name)
                 companyLinkDao.insertCompanyLink(entity)
 
                 return@withContext Result.success(pendingLink)
@@ -410,37 +424,154 @@ class CompanyLinkRepository private constructor(private val context: Context) {
 
     /**
      * Request to unlink from a company.
-     * Sets status to INACTIVE and records unlink timestamp.
+     * This initiates the confirmation flow via Edge Function.
+     * The actual unlink happens only after email confirmation.
+     *
+     * Flow:
+     * 1. User calls requestUnlink() -> sends confirmation email
+     * 2. User clicks link in email -> calls confirm-unlink Edge Function
+     * 3. Edge Function updates status to UNLINKED
+     *
+     * For offline-first support:
+     * - If online: calls Edge Function immediately
+     * - If offline: queues pending operation for later sync
+     *
+     * @param linkId The company_link ID to unlink
+     * @param initiatorEmail Optional email override (uses current user's email if not provided)
+     * @return Result with success if confirmation email was sent (or queued)
      */
-    suspend fun requestUnlink(linkId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun requestUnlink(linkId: String, initiatorEmail: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+            // Get current user's email if not provided
+            val email = initiatorEmail ?: localUserRepository.getLoggedInUser()?.email
+            if (email.isNullOrBlank()) {
+                MotiumApplication.logger.e("Cannot request unlink: user email not available", "CompanyLinkRepository")
+                return@withContext Result.failure(Exception("User email not available"))
+            }
 
-            // Update locally first
+            MotiumApplication.logger.i("Requesting unlink confirmation for link: $linkId", "CompanyLinkRepository")
+
+            // 1. Create pending operation first (offline-first)
+            val operationId = UUID.randomUUID().toString()
+            val payload = Json.encodeToString(UnlinkConfirmationPayload(
+                linkId = linkId,
+                initiatedBy = "employee",
+                initiatorEmail = email
+            ))
+
+            val pendingOp = PendingOperationEntity(
+                id = operationId,
+                entityType = PendingOperationEntity.TYPE_COMPANY_LINK,
+                entityId = linkId,
+                action = "REQUEST_UNLINK", // Custom action for unlink confirmation request
+                payload = payload,
+                createdAt = System.currentTimeMillis(),
+                priority = 1 // High priority
+            )
+
+            pendingOperationDao.insert(pendingOp)
+            MotiumApplication.logger.d("Created pending unlink operation: $operationId", "CompanyLinkRepository")
+
+            // 2. Mark link as PENDING_UNLINK locally (optimistic update for UI feedback)
+            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
             companyLinkDao.updateStatus(
                 linkId = linkId,
-                status = LinkStatus.INACTIVE.name,
-                unlinkedAt = now.toString(),
+                status = "PENDING_UNLINK",
+                unlinkedAt = null, // Not yet unlinked
                 updatedAt = now.toString()
             )
 
-            // Try to sync to Supabase
+            // 3. Try to send confirmation request immediately
             try {
-                postgres.rpc(
-                    "unlink_company",
-                    UnlinkRequest(p_link_id = linkId)
+                val result = linkedAccountRemoteDataSource.requestUnlinkConfirmation(
+                    linkId = linkId,
+                    initiatedBy = "employee",
+                    initiatorEmail = email
                 )
-                companyLinkDao.markCompanyLinkAsSynced(linkId, java.lang.System.currentTimeMillis())
-                MotiumApplication.logger.i("Company unlinked and synced: $linkId", "CompanyLinkRepository")
-            } catch (e: Exception) {
-                MotiumApplication.logger.w("Unlink saved locally, will sync later: ${e.message}", "CompanyLinkRepository")
-            }
 
-            Result.success(Unit)
+                if (result.isSuccess) {
+                    // Request sent successfully - remove pending operation
+                    pendingOperationDao.deleteById(operationId)
+                    MotiumApplication.logger.i(
+                        "Unlink confirmation email sent for link $linkId",
+                        "CompanyLinkRepository"
+                    )
+                    return@withContext Result.success(Unit)
+                } else {
+                    // Edge Function returned error - keep pending operation for retry
+                    val error = result.exceptionOrNull()?.message ?: "Unknown error"
+                    MotiumApplication.logger.w(
+                        "Unlink confirmation request failed ($error), will retry in background",
+                        "CompanyLinkRepository"
+                    )
+                    // Still return success - operation is queued
+                    return@withContext Result.success(Unit)
+                }
+            } catch (e: Exception) {
+                // Network error - keep pending operation for retry
+                MotiumApplication.logger.w(
+                    "Unlink confirmation request failed (${e.message}), queued for background sync",
+                    "CompanyLinkRepository"
+                )
+                // Return success - operation is queued and will be retried
+                return@withContext Result.success(Unit)
+            }
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error unlinking company: ${e.message}", "CompanyLinkRepository", e)
+            MotiumApplication.logger.e("Error requesting unlink: ${e.message}", "CompanyLinkRepository", e)
             Result.failure(e)
         }
+    }
+
+    /**
+     * Process pending unlink confirmation requests.
+     * Called by background sync workers.
+     */
+    suspend fun processPendingUnlinkRequests(): Int = withContext(Dispatchers.IO) {
+        var processedCount = 0
+        try {
+            val pendingOps = pendingOperationDao.getByEntityTypeAndAction(
+                entityType = PendingOperationEntity.TYPE_COMPANY_LINK,
+                action = "REQUEST_UNLINK"
+            )
+
+            for (op in pendingOps) {
+                try {
+                    val payloadStr = op.payload ?: continue
+                    val payload = Json.decodeFromString<UnlinkConfirmationPayload>(payloadStr)
+
+                    val result = linkedAccountRemoteDataSource.requestUnlinkConfirmation(
+                        linkId = payload.linkId,
+                        initiatedBy = payload.initiatedBy,
+                        initiatorEmail = payload.initiatorEmail
+                    )
+
+                    if (result.isSuccess) {
+                        pendingOperationDao.deleteById(op.id)
+                        processedCount++
+                        MotiumApplication.logger.i(
+                            "Processed pending unlink request for link ${payload.linkId}",
+                            "CompanyLinkRepository"
+                        )
+                    } else {
+                        // Update retry count
+                        pendingOperationDao.incrementRetryCount(op.id, System.currentTimeMillis())
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w(
+                        "Failed to process pending unlink ${op.id}: ${e.message}",
+                        "CompanyLinkRepository"
+                    )
+                    pendingOperationDao.incrementRetryCount(op.id, System.currentTimeMillis())
+                }
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Error processing pending unlink requests: ${e.message}",
+                "CompanyLinkRepository",
+                e
+            )
+        }
+        return@withContext processedCount
     }
 
     // ==================== Sync Operations ====================
@@ -500,7 +631,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             val linksToSave = remoteLinks.filter { it.id !in localNeedsSyncIds }
 
             // Save remote links to local cache
-            val entities = linksToSave.map { it.toEntity(lastSyncedAt = java.lang.System.currentTimeMillis(), needsSync = false) }
+            val entities = linksToSave.map { it.toEntity(syncStatus = SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
             companyLinkDao.insertCompanyLinks(entities)
 
             MotiumApplication.logger.i("Synced ${linksToSave.size} company links from Supabase", "CompanyLinkRepository")

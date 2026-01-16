@@ -64,6 +64,9 @@ class ActivityRecognitionService : Service() {
         private const val REREGISTER_INTERVAL_SAMSUNG_MS = 30 * 60 * 1000L  // 30 min Samsung
         private const val REREGISTER_INTERVAL_DEFAULT_MS = 60 * 60 * 1000L  // 60 min autres
 
+        // Debounce: ignorer même type d'activité si reçu dans cet intervalle
+        private const val DEBOUNCE_SAME_ACTIVITY_MS = 15_000L  // 15 secondes
+
         // Référence à l'instance du service
         @Volatile
         private var instance: ActivityRecognitionService? = null
@@ -120,6 +123,11 @@ class ActivityRecognitionService : Service() {
         }
 
         fun stopService(context: Context) {
+            // Annuler l'alarme keep-alive UNIQUEMENT quand l'utilisateur désactive explicitement
+            // l'auto-tracking. Ne PAS faire ça dans onDestroy() car Android pourrait tuer
+            // le service et on veut que l'alarme le redémarre.
+            DozeModeFix.cancelActivityRecognitionKeepAlive(context)
+            MotiumApplication.logger.i("🛑 Stopping ActivityRecognitionService (user request)", TAG)
             context.stopService(Intent(context, ActivityRecognitionService::class.java))
         }
 
@@ -224,6 +232,14 @@ class ActivityRecognitionService : Service() {
     // Double registration: ré-enregistrement périodique
     private var reregisterJob: Job? = null
 
+    // Cooldown pour éviter les re-registrations en boucle
+    private var lastReregistrationTimestamp: Long = 0L
+    private val REREGISTER_COOLDOWN_MS = 30_000L // 30 secondes minimum entre re-registrations
+
+    // Debouncing: éviter le traitement des événements identiques répétés
+    private var lastProcessedActivityType: Int = -1
+    private var lastProcessedTimestamp: Long = 0L
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -251,8 +267,8 @@ class ActivityRecognitionService : Service() {
         // Si l'intent contient une transition d'activité (via PendingIntent.getForegroundService)
         if (action == ACTION_ACTIVITY_TRANSITION) {
             handleActivityTransitionIntent(intent)
-            // Double registration: ré-enregistrer après chaque transition reçue
-            scheduleReregistrationAfterTransition()
+            // NOTE: Re-registration post-transition supprimée - causait une boucle infinie
+            // La registration périodique (30-60min) via schedulePeriodicReregistration() suffit
             return START_STICKY
         }
 
@@ -403,17 +419,49 @@ class ActivityRecognitionService : Service() {
             return
         }
 
+        // ==================== FILTRAGE EN AMONT DES ÉVÉNEMENTS OBSOLÈTES ====================
+        // Filtrer les événements trop vieux AVANT le traitement pour éviter le flood de logs
+        val currentTimeMs = SystemClock.elapsedRealtime()
+        val (validEvents, obsoleteEvents) = result.transitionEvents.partition { event ->
+            val eventTimestampMs = event.elapsedRealTimeNanos / 1_000_000
+            val eventAgeMs = currentTimeMs - eventTimestampMs
+            eventAgeMs <= MAX_EVENT_AGE_MS
+        }
+
+        // Logger les événements obsolètes de façon groupée (évite le spam de logs)
+        if (obsoleteEvents.isNotEmpty()) {
+            MotiumApplication.logger.w(
+                "⏰ ${obsoleteEvents.size} obsolete event(s) filtered (age > ${MAX_EVENT_AGE_MS / 1000}s)",
+                TAG
+            )
+            // Logger pour les diagnostics (compteur incrémenté)
+            obsoleteEvents.forEach { event ->
+                val activityName = getActivityName(event.activityType)
+                val transitionType = if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) "ENTER" else "EXIT"
+                val eventAgeMs = currentTimeMs - (event.elapsedRealTimeNanos / 1_000_000)
+                AutoTrackingDiagnostics.logFailedTransition(
+                    this,
+                    "Obsolete: $activityName $transitionType (${eventAgeMs / 1000}s old)"
+                )
+            }
+        }
+
+        if (validEvents.isEmpty()) {
+            MotiumApplication.logger.d("All ${result.transitionEvents.size} events filtered as obsolete", TAG)
+            return
+        }
+
         MotiumApplication.logger.i(
-            "📱 Received ${result.transitionEvents.size} activity transition(s)",
+            "📱 Processing ${validEvents.size}/${result.transitionEvents.size} valid activity transition(s)",
             TAG
         )
 
         // Sauvegarder le timestamp de la dernière transition reçue
         saveLastTransitionTime()
 
-        // Traiter chaque événement de transition
+        // Traiter chaque événement VALIDE de transition
         val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        result.transitionEvents.forEach { event ->
+        validEvents.forEach { event ->
             val activityName = getActivityName(event.activityType)
             val transitionType = if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) {
                 "ENTER"
@@ -421,23 +469,8 @@ class ActivityRecognitionService : Service() {
                 "EXIT"
             }
             val timestamp = dateFormat.format(Date(event.elapsedRealTimeNanos / 1_000_000))
-
-            // Valider l'âge de l'événement (éviter les replays de cache)
             val eventTimestampMs = event.elapsedRealTimeNanos / 1_000_000
-            val currentTimeMs = SystemClock.elapsedRealtime()
             val eventAgeMs = currentTimeMs - eventTimestampMs
-
-            if (eventAgeMs > MAX_EVENT_AGE_MS) {
-                MotiumApplication.logger.w(
-                    "⏰ OBSOLETE EVENT IGNORED (age: ${eventAgeMs / 1000}s): $activityName $transitionType",
-                    TAG
-                )
-                AutoTrackingDiagnostics.logFailedTransition(
-                    this,
-                    "Obsolete: $activityName $transitionType (${eventAgeMs / 1000}s old)"
-                )
-                return@forEach
-            }
 
             MotiumApplication.logger.i(
                 "🎯 Transition: $activityName $transitionType at $timestamp (age: ${eventAgeMs / 1000}s)",
@@ -532,6 +565,36 @@ class ActivityRecognitionService : Service() {
             .apply()
     }
 
+    /**
+     * Vérifie si un événement d'activité doit être traité (debouncing).
+     * Ignore les événements du même type reçus dans les 15 dernières secondes.
+     *
+     * @return true si l'événement doit être traité, false s'il est un doublon à ignorer
+     */
+    private fun shouldProcessEvent(activityType: Int, transitionType: Int): Boolean {
+        // Toujours traiter les EXIT (changements d'état importants)
+        if (transitionType == ActivityTransition.ACTIVITY_TRANSITION_EXIT) {
+            return true
+        }
+
+        val now = SystemClock.elapsedRealtime()
+
+        // Debounce: ignorer si même type d'activité ENTER reçu récemment
+        if (activityType == lastProcessedActivityType &&
+            now - lastProcessedTimestamp < DEBOUNCE_SAME_ACTIVITY_MS) {
+            MotiumApplication.logger.d(
+                "⏱️ Debounced: ${getActivityName(activityType)} ENTER (${(now - lastProcessedTimestamp) / 1000}s since last)",
+                TAG
+            )
+            return false
+        }
+
+        // Mettre à jour le dernier événement traité
+        lastProcessedActivityType = activityType
+        lastProcessedTimestamp = now
+        return true
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         MotiumApplication.logger.i("🛑 ActivityRecognitionService destroyed", TAG)
@@ -539,8 +602,13 @@ class ActivityRecognitionService : Service() {
         isActivityRecognitionActive = false
         instance = null
 
-        // Cancel Doze mode keep-alive alarm
-        DozeModeFix.cancelActivityRecognitionKeepAlive(this)
+        // NOTE: On ne cancel PAS l'alarme keep-alive ici!
+        // Si Android tue le service, l'alarme doit rester active pour le redémarrer.
+        // L'alarme est annulée uniquement quand l'utilisateur désactive explicitement
+        // l'auto-tracking via stopService() qui appelle cancelActivityRecognitionKeepAlive().
+
+        // ⚠️ ANCIEN CODE BUGUÉ (supprimé):
+        // DozeModeFix.cancelActivityRecognitionKeepAlive(this)
 
         // Cancel periodic reregistration
         reregisterJob?.cancel()
@@ -557,6 +625,39 @@ class ActivityRecognitionService : Service() {
 
         // Cancel all coroutines
         serviceScope.cancel()
+    }
+
+    /**
+     * Appelé quand l'utilisateur swipe l'app dans le gestionnaire de tâches.
+     * SAMSUNG FIX: Redémarrer le service pour maintenir l'auto-tracking actif.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        MotiumApplication.logger.w("📱 App task removed (user swipe) - rescheduling service", TAG)
+
+        // Replanifier une alarme rapide pour redémarrer le service
+        // (plus court que le keep-alive normal car l'utilisateur a swipé récemment)
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val serviceIntent = Intent(this, ActivityRecognitionService::class.java)
+        val pendingIntent = PendingIntent.getForegroundService(
+            this,
+            1001, // Request code différent du keep-alive normal
+            serviceIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Redémarrer dans 5 secondes
+        val triggerTime = System.currentTimeMillis() + 5000
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && alarmManager.canScheduleExactAlarms()) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+        }
+
+        AutoTrackingDiagnostics.logServiceRestart(this, "Task removed (user swipe)")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -852,24 +953,32 @@ class ActivityRecognitionService : Service() {
         }
     }
 
-    /**
-     * Planifie un ré-enregistrement 5 secondes après réception d'une transition.
-     * Permet de "rafraîchir" l'enregistrement après chaque événement reçu.
-     */
-    private fun scheduleReregistrationAfterTransition() {
-        serviceScope.launch {
-            delay(5000) // Attendre 5 secondes
-            MotiumApplication.logger.d("🔄 Post-transition reregistration", TAG)
-            reregisterActivityTransitions()
-        }
-    }
+    // NOTE: scheduleReregistrationAfterTransition() a été supprimée.
+    // Elle causait une boucle infinie: chaque événement déclenchait une re-registration
+    // qui re-délivrait les événements en queue, créant un flood qui bloquait le GPS.
+    // La registration périodique (30-60min) via schedulePeriodicReregistration() suffit.
 
     /**
      * Ré-enregistre les transitions d'activité (remove + add).
      * Note: internal pour permettre l'appel depuis le companion object (HealthWorker)
+     *
+     * Protection anti-boucle: cooldown de 30 secondes minimum entre re-registrations
+     * pour éviter le flood qui bloquait le GPS.
      */
     @SuppressLint("MissingPermission")
     internal fun reregisterActivityTransitions() {
+        // Protection anti-boucle: cooldown de 30 secondes
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastReregistrationTimestamp < REREGISTER_COOLDOWN_MS) {
+            val remainingSeconds = (REREGISTER_COOLDOWN_MS - (now - lastReregistrationTimestamp)) / 1000
+            MotiumApplication.logger.d(
+                "⏱️ Reregistration skipped: cooldown active (${remainingSeconds}s remaining)",
+                TAG
+            )
+            return
+        }
+        lastReregistrationTimestamp = now
+
         val pi = transitionPendingIntent
         val request = activityTransitionRequest
 

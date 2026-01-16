@@ -17,11 +17,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -29,8 +34,10 @@ import androidx.lifecycle.lifecycleScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
+import com.application.motium.presentation.components.BackgroundLocationPermissionDialog
 import com.application.motium.presentation.components.MotiumBottomNavigation
 import com.application.motium.presentation.components.ProBottomNavigation
+import com.application.motium.presentation.components.openAppSettings
 import com.application.motium.presentation.navigation.MotiumNavHost
 import com.application.motium.presentation.theme.MotiumTheme
 import com.application.motium.utils.DeepLinkHandler
@@ -39,7 +46,9 @@ import com.application.motium.utils.PermissionManager
 import com.application.motium.utils.ThemeManager
 import com.application.motium.service.SupabaseConnectionService
 import com.application.motium.service.DozeModeFix
+import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.data.TripRepository
+import com.application.motium.data.local.LocalUserRepository
 import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
@@ -89,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MotiumApp()
+                    MotiumApp(googleSignInHelper = googleSignInHelper)
                 }
             }
         }
@@ -110,9 +119,26 @@ class MainActivity : ComponentActivity() {
                     MotiumApplication.logger.i("🔗 User authenticated - starting connection service", "MainActivity")
                     SupabaseConnectionService.startService(this@MainActivity)
 
-                    // CRITICAL: Si l'auto-tracking est activé, demander l'exemption d'optimisation de batterie
                     val tripRepository = TripRepository.getInstance(this@MainActivity)
+                    val localUserRepository = LocalUserRepository.getInstance(this@MainActivity)
+
+                    // CRITICAL: Sync auto-tracking cache from Room BEFORE checking isAutoTrackingEnabled()
+                    // This fixes the issue where settings saved in Room are not reflected in SharedPreferences
+                    // cache on app startup, causing auto-tracking to not start even when mode is ALWAYS
+                    val userId = localUserRepository.getLoggedInUser()?.id
+                    if (userId != null) {
+                        tripRepository.syncAutoTrackingCacheFromRoom(userId)
+                    }
+
+                    // NOW check the synced cache value
                     if (tripRepository.isAutoTrackingEnabled()) {
+                        // Start ActivityRecognitionService to show notification
+                        MotiumApplication.logger.i(
+                            "🚀 Auto-tracking enabled - starting ActivityRecognitionService",
+                            "MainActivity"
+                        )
+                        ActivityRecognitionService.startService(this@MainActivity)
+
                         if (!DozeModeFix.isIgnoringBatteryOptimizations(this@MainActivity)) {
                             MotiumApplication.logger.i(
                                 "⚠️ Auto-tracking enabled but app not exempted from battery optimization - requesting exemption",
@@ -148,14 +174,14 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Process deep link from intent.
-     * Extracts token for company link invitations and stores it for later processing.
+     * Extracts token for company link invitations or password reset and stores it for later processing.
      */
     private fun handleDeepLink(intent: Intent?) {
         if (intent == null) return
 
-        val handled = DeepLinkHandler.handleIntent(intent)
-        if (handled) {
-            MotiumApplication.logger.i("Deep link processed successfully", "MainActivity")
+        val deepLinkType = DeepLinkHandler.handleIntent(intent)
+        if (deepLinkType != null) {
+            MotiumApplication.logger.i("Deep link processed: $deepLinkType", "MainActivity")
         }
     }
 
@@ -184,7 +210,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // Routes that should NOT show bottom navigation
-private val noNavigationRoutes = setOf("splash", "login", "register", "log_viewer", "trial_expired", "upgrade")
+private val noNavigationRoutes = setOf("splash", "login", "register", "log_viewer", "trial_expired", "subscription_expired", "upgrade", "pro_trial_expired")
 
 // Routes that use Pro navigation (enterprise users)
 private val proRoutes = setOf(
@@ -231,7 +257,7 @@ private fun getNavRouteForHighlight(currentRoute: String?): String {
 }
 
 @Composable
-fun MotiumApp() {
+fun MotiumApp(googleSignInHelper: GoogleSignInHelper) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val themeManager = remember { ThemeManager.getInstance(context) }
@@ -240,8 +266,36 @@ fun MotiumApp() {
     val authViewModel: AuthViewModel = viewModel {
         AuthViewModel(
             context = context,
-            googleSignInHelper = GoogleSignInHelper(context)
+            googleSignInHelper = googleSignInHelper
         )
+    }
+
+    // Background location permission dialog state
+    var showBackgroundLocationDialog by remember { mutableStateOf(false) }
+    var hasCheckedBackgroundPermission by remember { mutableStateOf(false) }
+
+    // Check background location permission when app resumes
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // Only check if basic location permission is granted but background is not
+                val hasBasicLocation = PermissionManager.hasLocationPermission(context)
+                val hasBackgroundLocation = PermissionManager.hasBackgroundLocationPermission(context)
+
+                MotiumApplication.logger.i(
+                    "Permission check - Basic location: $hasBasicLocation, Background location: $hasBackgroundLocation",
+                    "PermissionCheck"
+                )
+
+                if (hasBasicLocation && !hasBackgroundLocation && !hasCheckedBackgroundPermission) {
+                    // Show dialog only once per session (user can dismiss it)
+                    showBackgroundLocationDialog = true
+                    hasCheckedBackgroundPermission = true
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
     }
 
     // Track current route
@@ -257,6 +311,17 @@ fun MotiumApp() {
 
     // Get the route for nav highlighting
     val navHighlightRoute = getNavRouteForHighlight(currentRoute)
+
+    // Background location permission dialog
+    if (showBackgroundLocationDialog) {
+        BackgroundLocationPermissionDialog(
+            onDismiss = { showBackgroundLocationDialog = false },
+            onOpenSettings = {
+                showBackgroundLocationDialog = false
+                openAppSettings(context)
+            },
+        )
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         MotiumNavHost(
@@ -337,10 +402,4 @@ fun MotiumApp() {
     }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun MotiumAppPreview() {
-    MotiumTheme {
-        MotiumApp()
-    }
-}
+// Preview removed - requires GoogleSignInHelper which needs Activity initialization

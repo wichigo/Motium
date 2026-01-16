@@ -98,7 +98,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
 
             // Mettre en cache localement
             if (schedules.isNotEmpty()) {
-                val entities = schedules.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                val entities = schedules.map { it.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
                 workScheduleDao.insertWorkSchedules(entities)
                 MotiumApplication.logger.i("Cached ${schedules.size} work schedules in Room", "WorkScheduleRepository")
             }
@@ -180,7 +180,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
 
             // Mettre en cache
             if (schedules.isNotEmpty()) {
-                val entities = schedules.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                val entities = schedules.map { it.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
                 workScheduleDao.insertWorkSchedules(entities)
             }
 
@@ -204,7 +204,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             MotiumApplication.logger.i("Saving work schedule for day ${schedule.dayOfWeek}", "WorkScheduleRepository")
 
             // Sauvegarder localement d'abord (offline-first)
-            val entity = schedule.toEntity(lastSyncedAt = null, needsSync = true)
+            val entity = schedule.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             workScheduleDao.insertWorkSchedule(entity)
             MotiumApplication.logger.i("✅ Work schedule saved locally", "WorkScheduleRepository")
 
@@ -244,7 +244,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             MotiumApplication.logger.i("Updating work schedule ${schedule.id}", "WorkScheduleRepository")
 
             // Mettre à jour localement d'abord (offline-first)
-            val entity = schedule.toEntity(lastSyncedAt = null, needsSync = true)
+            val entity = schedule.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             workScheduleDao.updateWorkSchedule(entity)
             MotiumApplication.logger.i("✅ Work schedule updated locally", "WorkScheduleRepository")
 
@@ -338,7 +338,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             if (settings != null) {
                 MotiumApplication.logger.i("Auto-tracking mode: ${settings.trackingMode}", "WorkScheduleRepository")
                 // Mettre en cache
-                val entity = settings.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                val entity = settings.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
                 workScheduleDao.insertAutoTrackingSettings(entity)
                 MotiumApplication.logger.i("Cached auto-tracking settings in Room", "WorkScheduleRepository")
             } else {
@@ -364,7 +364,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             MotiumApplication.logger.i("Saving auto-tracking settings: ${settings.trackingMode} for user ${settings.userId}", "WorkScheduleRepository")
 
             // Sauvegarder localement d'abord (offline-first)
-            val entity = settings.toEntity(lastSyncedAt = null, needsSync = true)
+            val entity = settings.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             workScheduleDao.insertAutoTrackingSettings(entity)
             MotiumApplication.logger.i("✅ Auto-tracking settings saved locally", "WorkScheduleRepository")
 
@@ -646,7 +646,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             // Sync work schedules
             val schedules = fetchWorkSchedulesFromSupabase(userId)
             if (schedules.isNotEmpty()) {
-                val entities = schedules.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                val entities = schedules.map { it.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
                 workScheduleDao.insertWorkSchedules(entities)
                 MotiumApplication.logger.i("Synced ${schedules.size} work schedules from Supabase", "WorkScheduleRepository")
             }
@@ -661,7 +661,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                     }.decodeSingleOrNull<AutoTrackingSettingsDto>()
 
                 response?.toAutoTrackingSettings()?.let { settings ->
-                    val entity = settings.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false)
+                    val entity = settings.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
                     workScheduleDao.insertAutoTrackingSettings(entity)
                     MotiumApplication.logger.i("Synced auto-tracking settings from Supabase", "WorkScheduleRepository")
                 }

@@ -35,4 +35,10 @@ interface AuthRepository {
     // Mise à jour des credentials
     suspend fun updateEmail(newEmail: String): AuthResult<Unit>
     suspend fun updatePassword(newPassword: String): AuthResult<Unit>
+
+    /**
+     * Rafraîchit l'état d'authentification depuis Supabase.
+     * Utile après un paiement réussi pour mettre à jour le statut d'abonnement.
+     */
+    suspend fun refreshAuthState()
 }

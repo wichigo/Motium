@@ -2,6 +2,7 @@ package com.application.motium.utils
 
 import android.content.Context
 import com.application.motium.MotiumApplication
+import com.application.motium.service.AutoTrackingDiagnostics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -177,13 +178,109 @@ object LogcatCapture {
     }
 
     /**
+     * Capture les logs spécifiques à l'auto-tracking
+     * Inclut: ActivityReceiver, LocationService, TripStateMachine, etc.
+     * Ajoute également le rapport diagnostique AutoTrackingDiagnostics
+     * @param context Le contexte de l'application
+     * @param maxLines Nombre maximum de lignes à scanner
+     * @return Le fichier contenant les logs auto-tracking filtrés
+     */
+    suspend fun captureAutoTrackingLogs(context: Context, maxLines: Int = 10000): File? = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("🚗 Capture des logs auto-tracking", "LogcatCapture")
+
+            val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+            val logFile = File(context.getExternalFilesDir(null), "motium_autotracking_$timestamp.txt")
+
+            // Tags à filtrer pour l'auto-tracking
+            val autoTrackingTags = listOf(
+                "ActivityReceiver",
+                "LocationService",
+                "TripStateMachine",
+                "AutoTrackingDiag",
+                "TripTracker",
+                "TripValidator",
+                "InactivityDetection",
+                "BufferAutoConfirm",
+                "TripHealthCheck",
+                "StartPointPrecision",
+                "EndPointPrecision",
+                "OutlierFilter",
+                "DatabaseSave",
+                "AutoTracking"
+            )
+
+            // Capturer le logcat filtré par PID (même pattern que captureMotiumLogcat)
+            val pid = android.os.Process.myPid()
+            val command = arrayOf("logcat", "-d", "-t", maxLines.toString(), "--pid=$pid", "*:V")
+            val process = Runtime.getRuntime().run { this@run.exec(command) }
+            val bufferedReader = BufferedReader(InputStreamReader(process.inputStream))
+
+            logFile.bufferedWriter().use { writer ->
+                // En-tête
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.write("MOTIUM - LOGS AUTO-TRACKING")
+                writer.newLine()
+                writer.write("Exporté le: $timestamp")
+                writer.newLine()
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.newLine()
+
+                // Inclure le rapport diagnostique
+                writer.write(AutoTrackingDiagnostics.getFormattedReport(context))
+                writer.newLine()
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.write("LOGS DÉTAILLÉS")
+                writer.newLine()
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.newLine()
+
+                // Filtrer les lignes par tags auto-tracking
+                var line: String?
+                var matchCount = 0
+
+                while (bufferedReader.readLine().also { line = it } != null) {
+                    val currentLine = line ?: continue
+                    if (autoTrackingTags.any { tag -> currentLine.contains(tag) }) {
+                        writer.write(currentLine)
+                        writer.newLine()
+                        matchCount++
+                    }
+                }
+
+                // Footer
+                writer.newLine()
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.write("Total: $matchCount lignes auto-tracking")
+                writer.newLine()
+                writer.write("=".repeat(80))
+
+                MotiumApplication.logger.i("✅ Capture auto-tracking: $matchCount lignes", "LogcatCapture")
+            }
+
+            process.waitFor()
+
+            if (logFile.exists() && logFile.length() > 0) logFile else null
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Erreur capture auto-tracking: ${e.message}", "LogcatCapture", e)
+            null
+        }
+    }
+
+    /**
      * Efface les logs logcat du système
      * Utile pour obtenir des logs "propres" après avoir effacé l'historique
      */
     fun clearLogcat() {
         try {
             MotiumApplication.logger.i("🧹 Effacement des logs logcat", "LogcatCapture")
-            Runtime.getRuntime().exec("logcat -c")
+            Runtime.getRuntime().run { this@run.exec("logcat -c") }
             MotiumApplication.logger.i("✅ Logs logcat effacés", "LogcatCapture")
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Erreur lors de l'effacement des logs: ${e.message}", "LogcatCapture", e)

@@ -22,7 +22,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
 import com.application.motium.data.supabase.SupabaseAuthRepository
@@ -58,7 +57,7 @@ fun AccountDetailsScreen(
     val linkedAccountRemoteDataSource = remember { LinkedAccountRemoteDataSource.getInstance(context) }
     val tripRemoteDataSource = remember { TripRemoteDataSource.getInstance(context) }
     val vehicleRemoteDataSource = remember { VehicleRemoteDataSource.getInstance(context) }
-    val licenseRemoteDataSource = remember { LicenseRemoteDataSource.getInstance(context) }
+    val offlineFirstLicenseRepo = remember { com.application.motium.data.repository.OfflineFirstLicenseRepository.getInstance(context) }
     val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
 
@@ -125,36 +124,13 @@ fun AccountDetailsScreen(
                             // Keep default
                         }
 
-                        // Load license for this account - cache-first pattern
+                        // Load license for this account - offline-first pattern
                         proAccountId?.let { proId ->
                             try {
-                                // Try local cache first (instant response)
+                                // Offline-first: read from local DB (cache-first manager also uses Room)
                                 license = licenseCacheManager.getLicenseForAccount(proId, accountId).first()
                                 availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proId)
                                 availableLicensesCount = availableLicenses.size
-
-                                // If cache empty, try remote (with graceful fallback)
-                                if (license == null || availableLicenses.isEmpty()) {
-                                    try {
-                                        val licenseResult = licenseRemoteDataSource.getLicenseForAccount(proId, accountId)
-                                        license = licenseResult.getOrNull()
-
-                                        val availableResult = licenseRemoteDataSource.getAvailableLicenses(proId)
-                                        availableResult.fold(
-                                            onSuccess = { licenses ->
-                                                availableLicenses = licenses
-                                                availableLicensesCount = licenses.size
-                                            },
-                                            onFailure = { /* Keep cached values */ }
-                                        )
-                                    } catch (networkError: Exception) {
-                                        // Keep cached values - graceful degradation
-                                        com.application.motium.MotiumApplication.logger.w(
-                                            "Network error, using cached license data: ${networkError.message}",
-                                            "AccountDetailsScreen"
-                                        )
-                                    }
-                                }
                             } catch (e: Exception) {
                                 com.application.motium.MotiumApplication.logger.e(
                                     "Error loading license: ${e.message}",
@@ -176,36 +152,15 @@ fun AccountDetailsScreen(
         }
     }
 
-    // Helper function to reload license data - cache-first pattern
+    // Helper function to reload license data - offline-first pattern
     fun reloadLicenseData() {
         coroutineScope.launch(Dispatchers.IO) {
             proAccountId?.let { proId ->
                 try {
-                    // Try local cache first
+                    // Offline-first: read from local DB
                     license = licenseCacheManager.getLicenseForAccount(proId, accountId).first()
                     availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proId)
                     availableLicensesCount = availableLicenses.size
-
-                    // Try refreshing from remote (with graceful fallback)
-                    try {
-                        val licenseResult = licenseRemoteDataSource.getLicenseForAccount(proId, accountId)
-                        license = licenseResult.getOrNull()
-
-                        val availableResult = licenseRemoteDataSource.getAvailableLicenses(proId)
-                        availableResult.fold(
-                            onSuccess = { licenses ->
-                                availableLicenses = licenses
-                                availableLicensesCount = licenses.size
-                            },
-                            onFailure = { /* Keep cached values */ }
-                        )
-                    } catch (networkError: Exception) {
-                        // Keep cached values - graceful degradation
-                        com.application.motium.MotiumApplication.logger.w(
-                            "Network error on reload, keeping cached data: ${networkError.message}",
-                            "AccountDetailsScreen"
-                        )
-                    }
                 } catch (e: Exception) {
                     com.application.motium.MotiumApplication.logger.e(
                         "Error reloading license: ${e.message}",
@@ -336,16 +291,13 @@ fun AccountDetailsScreen(
                                     license?.let { lic ->
                                         proAccountId?.let { proId ->
                                             coroutineScope.launch(Dispatchers.IO) {
-                                                val result = licenseRemoteDataSource.cancelUnlinkRequest(lic.id, proId)
-                                                result.fold(
-                                                    onSuccess = {
-                                                        successMessage = "Demande de deliaison annulee"
-                                                        reloadLicenseData()
-                                                    },
-                                                    onFailure = { e ->
-                                                        error = e.message
-                                                    }
-                                                )
+                                                try {
+                                                    offlineFirstLicenseRepo.cancelUnlinkRequest(lic.id, proId)
+                                                    successMessage = "Demande de deliaison annulee"
+                                                    reloadLicenseData()
+                                                } catch (e: Exception) {
+                                                    error = e.message
+                                                }
                                             }
                                         }
                                     }
@@ -428,21 +380,18 @@ fun AccountDetailsScreen(
             onSelectLicense = { selectedLicense ->
                 proAccountId?.let { proId ->
                     coroutineScope.launch(Dispatchers.IO) {
-                        val result = licenseRemoteDataSource.assignLicenseToAccount(
-                            licenseId = selectedLicense.id,
-                            proAccountId = proId,
-                            linkedAccountId = accountId
-                        )
-                        result.fold(
-                            onSuccess = {
-                                showAssignLicenseDialog = false
-                                successMessage = "Licence assignee avec succes"
-                                reloadLicenseData()
-                            },
-                            onFailure = { e ->
-                                error = e.message
-                            }
-                        )
+                        try {
+                            offlineFirstLicenseRepo.assignLicenseToAccount(
+                                licenseId = selectedLicense.id,
+                                proAccountId = proId,
+                                linkedAccountId = accountId
+                            )
+                            showAssignLicenseDialog = false
+                            successMessage = "Licence assignee avec succes"
+                            reloadLicenseData()
+                        } catch (e: Exception) {
+                            error = e.message
+                        }
                     }
                 }
             }
@@ -459,19 +408,16 @@ fun AccountDetailsScreen(
                 proAccountId?.let { proId ->
                     isUnlinking = true
                     coroutineScope.launch(Dispatchers.IO) {
-                        val result = licenseRemoteDataSource.requestUnlink(license!!.id, proId)
-                        result.fold(
-                            onSuccess = {
-                                isUnlinking = false
-                                showUnlinkConfirmDialog = false
-                                successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
-                                reloadLicenseData()
-                            },
-                            onFailure = { e ->
-                                isUnlinking = false
-                                error = e.message
-                            }
-                        )
+                        try {
+                            offlineFirstLicenseRepo.requestUnlink(license!!.id, proId)
+                            isUnlinking = false
+                            showUnlinkConfirmDialog = false
+                            successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
+                            reloadLicenseData()
+                        } catch (e: Exception) {
+                            isUnlinking = false
+                            error = e.message
+                        }
                     }
                 }
             }
@@ -532,6 +478,7 @@ private fun ProfileSection(
             LinkStatus.INACTIVE -> "Compte inactif"
             LinkStatus.REVOKED -> "Accès révoqué"
             LinkStatus.PENDING_ACTIVATION -> "Activation en cours"
+            LinkStatus.PENDING_UNLINK -> "Déliaison en cours"
         }
         Text(
             text = invitationStatusText,

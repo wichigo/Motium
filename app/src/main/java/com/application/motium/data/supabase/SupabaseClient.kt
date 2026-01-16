@@ -46,9 +46,9 @@ object SupabaseClient {
             }
             install(Postgrest)
             install(Realtime) {
-                // Garder la connexion active avec des heartbeats réguliers et agressifs
+                // BATTERY OPTIMIZATION: Réduire les heartbeats pour économiser la batterie
                 // Le module Realtime gère automatiquement la reconnexion
-                heartbeatInterval = 15.seconds // Réduit à 15s pour détection rapide de déconnexion
+                heartbeatInterval = 60.seconds // 60s au lieu de 15s = 4x moins de wakeups
             }
             install(Storage)
 

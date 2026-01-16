@@ -69,20 +69,20 @@ interface VehicleDao {
     /**
      * Get vehicles that need to be synced to Supabase.
      */
-    @Query("SELECT * FROM vehicles WHERE userId = :userId AND needsSync = 1")
+    @Query("SELECT * FROM vehicles WHERE userId = :userId AND syncStatus != 'SYNCED'")
     suspend fun getVehiclesNeedingSync(userId: String): List<VehicleEntity>
 
     /**
      * Mark a vehicle as synced.
      */
-    @Query("UPDATE vehicles SET needsSync = 0, lastSyncedAt = :timestamp WHERE id = :vehicleId")
+    @Query("UPDATE vehicles SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE id = :vehicleId")
     suspend fun markVehicleAsSynced(vehicleId: String, timestamp: Long)
 
     /**
      * Mark a vehicle as needing sync.
      */
-    @Query("UPDATE vehicles SET needsSync = 1 WHERE id = :vehicleId")
-    suspend fun markVehicleAsNeedingSync(vehicleId: String)
+    @Query("UPDATE vehicles SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :vehicleId")
+    suspend fun markVehicleAsNeedingSync(vehicleId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
      * Unset all default vehicles for a user (before setting a new default).
@@ -109,8 +109,8 @@ interface VehicleDao {
     suspend fun deleteAllVehicles()
 
     /**
-     * Update vehicle mileage.
+     * Update vehicle mileage (personal, professional, and work-home).
      */
-    @Query("UPDATE vehicles SET totalMileagePerso = :perso, totalMileagePro = :pro WHERE id = :vehicleId")
-    suspend fun updateVehicleMileage(vehicleId: String, perso: Double, pro: Double)
+    @Query("UPDATE vehicles SET totalMileagePerso = :perso, totalMileagePro = :pro, totalMileageWorkHome = :workHome WHERE id = :vehicleId")
+    suspend fun updateVehicleMileage(vehicleId: String, perso: Double, pro: Double, workHome: Double)
 }

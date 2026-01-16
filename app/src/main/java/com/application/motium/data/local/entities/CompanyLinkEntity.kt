@@ -15,13 +15,14 @@ import kotlinx.datetime.Instant
     tableName = "company_links",
     indices = [
         Index(value = ["userId"]),
-        Index(value = ["linkedProAccountId"])
+        Index(value = ["linkedProAccountId"]),
+        Index(value = ["syncStatus"])
     ]
 )
 data class CompanyLinkEntity(
     @PrimaryKey
     val id: String,
-    val userId: String,
+    val userId: String?,                   // Nullable: null until user accepts invitation
     val linkedProAccountId: String,
     val companyName: String,
     val department: String?,               // Département/service dans l'entreprise
@@ -30,13 +31,20 @@ data class CompanyLinkEntity(
     val sharePersonalTrips: Boolean,
     val sharePersonalInfo: Boolean,
     val shareExpenses: Boolean,            // Partage des dépenses
+    val invitationToken: String?,          // Token d'invitation pour rejoindre l'entreprise
+    val invitationEmail: String?,          // Email de l'invité (avant création de compte)
+    val invitationExpiresAt: String?,      // Date d'expiration de l'invitation
     val linkedAt: String?,                 // Instant stored as ISO-8601 string, nullable
     val linkedActivatedAt: String?,        // Quand l'utilisateur a accepté l'invitation
     val unlinkedAt: String?,               // Instant stored as ISO-8601 string, nullable
     val createdAt: String,                 // Instant stored as ISO-8601 string
     val updatedAt: String,                 // Instant stored as ISO-8601 string
-    val lastSyncedAt: Long?,               // Timestamp of last sync with Supabase
-    val needsSync: Boolean                 // Flag indicating if link needs to be synced
+    // ==================== OFFLINE-FIRST SYNC FIELDS ====================
+    val syncStatus: String = SyncStatus.SYNCED.name, // SyncStatus enum as String
+    val localUpdatedAt: Long = System.currentTimeMillis(), // Local modification timestamp
+    val serverUpdatedAt: Long? = null,     // Server's updated_at (from Supabase)
+    val version: Int = 1,                  // Optimistic locking version
+    val deletedAt: Long? = null            // Soft delete timestamp (null = not deleted)
 )
 
 /**
@@ -54,6 +62,9 @@ fun CompanyLinkEntity.toDomainModel(): CompanyLink {
         sharePersonalTrips = sharePersonalTrips,
         sharePersonalInfo = sharePersonalInfo,
         shareExpenses = shareExpenses,
+        invitationToken = invitationToken,
+        invitationEmail = invitationEmail,
+        invitationExpiresAt = invitationExpiresAt?.let { Instant.parse(it) },
         linkedAt = linkedAt?.let { Instant.parse(it) },
         linkedActivatedAt = linkedActivatedAt?.let { Instant.parse(it) },
         unlinkedAt = unlinkedAt?.let { Instant.parse(it) },
@@ -65,7 +76,12 @@ fun CompanyLinkEntity.toDomainModel(): CompanyLink {
 /**
  * Extension function to convert domain CompanyLink to CompanyLinkEntity
  */
-fun CompanyLink.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean = false): CompanyLinkEntity {
+fun CompanyLink.toEntity(
+    syncStatus: String = SyncStatus.SYNCED.name,
+    localUpdatedAt: Long = System.currentTimeMillis(),
+    serverUpdatedAt: Long? = null,
+    version: Int = 1
+): CompanyLinkEntity {
     return CompanyLinkEntity(
         id = id,
         userId = userId,
@@ -77,12 +93,17 @@ fun CompanyLink.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean = false)
         sharePersonalTrips = sharePersonalTrips,
         sharePersonalInfo = sharePersonalInfo,
         shareExpenses = shareExpenses,
+        invitationToken = invitationToken,
+        invitationEmail = invitationEmail,
+        invitationExpiresAt = invitationExpiresAt?.toString(),
         linkedAt = linkedAt?.toString(),
         linkedActivatedAt = linkedActivatedAt?.toString(),
         unlinkedAt = unlinkedAt?.toString(),
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync
+        syncStatus = syncStatus,
+        localUpdatedAt = localUpdatedAt,
+        serverUpdatedAt = serverUpdatedAt,
+        version = version
     )
 }

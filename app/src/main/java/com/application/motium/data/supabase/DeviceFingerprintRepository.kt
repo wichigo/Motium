@@ -15,8 +15,15 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
+ * API-DIRECT: Anti-fraude - Vérification serveur obligatoire.
+ *
  * Repository for managing device fingerprints in Supabase.
  * Used to prevent trial abuse by tracking which devices have already registered.
+ *
+ * Not suitable for offline-first because:
+ * - Fingerprint verification must happen server-side
+ * - Local cache would defeat anti-fraud purpose
+ * - Device registration is a one-time server operation
  */
 class DeviceFingerprintRepository private constructor(private val context: Context) {
 

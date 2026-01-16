@@ -22,20 +22,4 @@ data class SharingPreferences(
     val shareExpenses: Boolean = false           // Par défaut: Pro ne voit PAS les dépenses
 )
 
-/**
- * Statut de la liaison entre un compte Pro et un compte individuel
- * NOTE: Ce statut est maintenant stocké directement sur User (link_status)
- * Cette enum est gardée pour la compatibilité et la clarté du code
- */
-@Serializable
-@Deprecated("Use LinkStatus from User.kt instead", ReplaceWith("LinkStatus"))
-enum class LinkedAccountStatus {
-    @SerialName("pending")
-    PENDING,     // Invitation envoyée, en attente d'acceptation
-
-    @SerialName("active")
-    ACTIVE,      // Liaison active, compte lié et fonctionnel
-
-    @SerialName("revoked")
-    REVOKED      // Liaison révoquée par le Pro ou l'utilisateur
-}
+// LinkedAccountStatus has been removed - use LinkStatus from User.kt instead

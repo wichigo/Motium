@@ -114,6 +114,9 @@ class LicenseCacheManager private constructor(
     /**
      * Refresh licenses from network in background (non-blocking).
      * Updates local Room DB if successful, logs error if fails (but doesn't block UI).
+     *
+     * IMPORTANT: Does NOT overwrite local changes that are pending sync (syncStatus != SYNCED).
+     * This prevents race conditions where background refresh overwrites user's recent actions.
      */
     suspend fun refreshLicensesInBackground(proAccountId: String) {
         backgroundScope.launch {
@@ -122,19 +125,37 @@ class LicenseCacheManager private constructor(
 
                 val result = licenseRemoteDataSource.getLicenses(proAccountId)
                 result.onSuccess { licenses ->
-                    // Update local Room DB
-                    val entities = licenses.map { license ->
-                        license.toEntity(
+                    var syncedCount = 0
+                    var skippedCount = 0
+
+                    // Update local Room DB - but ONLY if no local changes pending
+                    for (license in licenses) {
+                        val entity = license.toEntity(
                             syncStatus = SyncStatus.SYNCED.name,
                             localUpdatedAt = System.currentTimeMillis(),
                             serverUpdatedAt = System.currentTimeMillis(),
                             version = 1
                         )
+
+                        // Check if local version has pending changes
+                        val localLicense = licenseDao.getByIdOnce(license.id)
+
+                        if (localLicense == null || localLicense.syncStatus == SyncStatus.SYNCED.name) {
+                            // No local changes pending - safe to update from server
+                            licenseDao.upsert(entity)
+                            syncedCount++
+                        } else {
+                            // Local changes pending - skip server update to avoid overwriting
+                            MotiumApplication.logger.d(
+                                "Skipping server update for license ${license.id} - local changes pending (syncStatus=${localLicense.syncStatus})",
+                                TAG
+                            )
+                            skippedCount++
+                        }
                     }
-                    licenseDao.upsertAll(entities)
 
                     MotiumApplication.logger.i(
-                        "Background refresh successful: ${licenses.size} licenses updated in local DB",
+                        "Background refresh: $syncedCount licenses updated, $skippedCount skipped (pending local changes)",
                         TAG
                     )
 
@@ -192,24 +213,44 @@ class LicenseCacheManager private constructor(
     /**
      * Force immediate refresh (blocking) - use sparingly, only when needed.
      * Returns Result with updated licenses or error.
+     *
+     * IMPORTANT: Does NOT overwrite local changes that are pending sync (syncStatus != SYNCED).
      */
     suspend fun forceRefresh(proAccountId: String): Result<List<License>> {
         return try {
             val result = licenseRemoteDataSource.getLicenses(proAccountId)
 
             result.onSuccess { licenses ->
-                // Update local Room DB
-                val entities = licenses.map { license ->
-                    license.toEntity(
+                var syncedCount = 0
+                var skippedCount = 0
+
+                // Update local Room DB - but ONLY if no local changes pending
+                for (license in licenses) {
+                    val entity = license.toEntity(
                         syncStatus = SyncStatus.SYNCED.name,
                         localUpdatedAt = System.currentTimeMillis(),
                         serverUpdatedAt = System.currentTimeMillis(),
                         version = 1
                     )
-                }
-                licenseDao.upsertAll(entities)
 
-                MotiumApplication.logger.i("Force refresh: ${licenses.size} licenses synced", TAG)
+                    val localLicense = licenseDao.getByIdOnce(license.id)
+
+                    if (localLicense == null || localLicense.syncStatus == SyncStatus.SYNCED.name) {
+                        licenseDao.upsert(entity)
+                        syncedCount++
+                    } else {
+                        MotiumApplication.logger.d(
+                            "Force refresh: skipping license ${license.id} - local changes pending",
+                            TAG
+                        )
+                        skippedCount++
+                    }
+                }
+
+                MotiumApplication.logger.i(
+                    "Force refresh: $syncedCount licenses synced, $skippedCount skipped",
+                    TAG
+                )
             }
 
             result

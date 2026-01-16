@@ -4,17 +4,47 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
-import com.application.motium.data.supabase.LinkedAccountRepository
+import com.application.motium.data.repository.OfflineFirstLicenseRepository
+import com.application.motium.data.repository.OfflineFirstLinkedUserRepository
+import com.application.motium.data.repository.OfflineFirstProAccountRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
+import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
-import com.application.motium.data.supabase.ProAccountRepository
+import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LinkStatus
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+/**
+ * License status for display - based on whether a license is assigned
+ */
+enum class AccountLicenseStatus {
+    LICENSED,      // License assigned and active
+    UNLICENSED,    // No license assigned
+    PENDING_UNLINK // License with pending unlink request
+}
+
+/**
+ * Dialog/action state (non-reactive)
+ */
+data class LinkedAccountsDialogState(
+    val error: String? = null,
+    val successMessage: String? = null,
+    val showInviteDialog: Boolean = false,
+    val isInviting: Boolean = false,
+    val selectedDepartments: Set<String> = emptySet()
+)
 
 /**
  * UI State for Linked Accounts screen
@@ -22,6 +52,7 @@ import kotlinx.coroutines.launch
 data class LinkedAccountsUiState(
     val isLoading: Boolean = true,
     val linkedUsers: List<LinkedUserDto> = emptyList(),
+    val userLicenses: Map<String, License?> = emptyMap(), // userId -> License
     val availableDepartments: List<String> = emptyList(),
     val selectedDepartments: Set<String> = emptySet(),
     val error: String? = null,
@@ -42,71 +73,183 @@ data class LinkedAccountsUiState(
 
     val allDepartmentsSelected: Boolean
         get() = availableDepartments.isNotEmpty() && selectedDepartments.size == availableDepartments.size
+
+    /**
+     * Get the license status for a user based on license assignment
+     */
+    fun getLicenseStatus(userId: String): AccountLicenseStatus {
+        val license = userLicenses[userId]
+        return when {
+            license == null -> AccountLicenseStatus.UNLICENSED
+            license.isPendingUnlink -> AccountLicenseStatus.PENDING_UNLINK
+            else -> AccountLicenseStatus.LICENSED
+        }
+    }
 }
 
 /**
- * ViewModel for managing linked accounts (Pro feature)
+ * ViewModel for managing linked accounts (Pro feature) - Offline-first architecture.
+ * Uses OfflineFirstLicenseRepository for reactive license data, remote data sources for linked accounts.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class LinkedAccountsViewModel(
     private val context: Context,
-    private val linkedAccountRepository: LinkedAccountRepository = LinkedAccountRepository.getInstance(context),
-    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context),
-    private val proAccountRepository: ProAccountRepository = ProAccountRepository.getInstance(context)
+    // Offline-first repositories for reactive reads
+    private val offlineFirstLicenseRepo: OfflineFirstLicenseRepository = OfflineFirstLicenseRepository.getInstance(context),
+    private val offlineFirstProAccountRepo: OfflineFirstProAccountRepository = OfflineFirstProAccountRepository.getInstance(context),
+    private val offlineFirstLinkedUserRepo: OfflineFirstLinkedUserRepository = OfflineFirstLinkedUserRepository.getInstance(context),
+    // Remote data sources for write operations
+    private val linkedAccountRemoteDataSource: LinkedAccountRemoteDataSource = LinkedAccountRemoteDataSource.getInstance(context),
+    private val proAccountRemoteDataSource: ProAccountRemoteDataSource = ProAccountRemoteDataSource.getInstance(context),
+    private val licenseRemoteDataSource: LicenseRemoteDataSource = LicenseRemoteDataSource.getInstance(context),
+    private val authRepository: SupabaseAuthRepository = SupabaseAuthRepository.getInstance(context)
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(LinkedAccountsUiState())
-    val uiState: StateFlow<LinkedAccountsUiState> = _uiState.asStateFlow()
+    companion object {
+        private const val TAG = "LinkedAccountsVM"
+    }
+
+    // Pro account ID flow
+    private val _proAccountId = MutableStateFlow<String?>(null)
+
+    // Dialog/action state (non-reactive)
+    private val _dialogState = MutableStateFlow(LinkedAccountsDialogState())
+
+    // Loading state for initial data load
+    private val _isInitialLoading = MutableStateFlow(true)
+
+    // Reactive linked users flow from offline-first repository (cache-first)
+    private val linkedUsersFlow = _proAccountId.flatMapLatest { proAccountId ->
+        if (proAccountId != null) {
+            offlineFirstLinkedUserRepo.getLinkedUsers(proAccountId)
+        } else {
+            flowOf(emptyList())
+        }
+    }
+
+    // Reactive licenses flow from offline-first repository
+    private val licensesFlow = _proAccountId.flatMapLatest { proAccountId ->
+        if (proAccountId != null) {
+            offlineFirstLicenseRepo.getLicensesByProAccount(proAccountId)
+        } else {
+            flowOf(emptyList())
+        }
+    }
+
+    // Combined UI state
+    val uiState: StateFlow<LinkedAccountsUiState> = combine(
+        linkedUsersFlow,
+        licensesFlow,
+        _dialogState,
+        _proAccountId,
+        _isInitialLoading
+    ) { linkedUsers, licenses, dialogState, proAccountId, isInitialLoading ->
+        // Build userLicenses map from licenses
+        val userLicenses = licenses
+            .filter { it.isAssigned && it.linkedAccountId != null }
+            .associateBy({ it.linkedAccountId!! }, { it })
+
+        // Extract unique departments
+        val departments = linkedUsers
+            .map { it.department ?: "Sans département" }
+            .distinct()
+            .sorted()
+
+        // If no departments selected yet, select all
+        val selectedDepts = if (dialogState.selectedDepartments.isEmpty() && departments.isNotEmpty()) {
+            departments.toSet()
+        } else {
+            dialogState.selectedDepartments
+        }
+
+        LinkedAccountsUiState(
+            // Show loading only during initial load, not during background refresh
+            isLoading = proAccountId == null && isInitialLoading,
+            linkedUsers = linkedUsers,
+            userLicenses = userLicenses,
+            availableDepartments = departments,
+            selectedDepartments = selectedDepts,
+            error = dialogState.error,
+            successMessage = dialogState.successMessage,
+            showInviteDialog = dialogState.showInviteDialog,
+            isInviting = dialogState.isInviting
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = LinkedAccountsUiState()
+    )
 
     init {
-        loadLinkedUsers()
+        loadProAccountId()
     }
 
     /**
-     * Load all linked users for the current Pro account
+     * Load pro account ID using cache-first pattern.
+     * Tries local cache first, falls back to remote if needed.
      */
-    fun loadLinkedUsers() {
+    private fun loadProAccountId() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
-
             try {
-                val proAccountId = authRepository.getCurrentProAccountId()
-                if (proAccountId == null) {
-                    _uiState.update { it.copy(
-                        isLoading = false,
-                        error = "Compte Pro non trouvé. Veuillez configurer votre compte professionnel."
+                val currentUser = authRepository.authState.first().user
+                if (currentUser == null) {
+                    _dialogState.update { it.copy(
+                        error = "Utilisateur non connecté"
                     )}
+                    _isInitialLoading.value = false
                     return@launch
                 }
 
-                val result = linkedAccountRepository.getLinkedUsers(proAccountId)
+                // Try local cache first (offline-first)
+                val localProAccount = offlineFirstProAccountRepo.getProAccountForUserOnce(currentUser.id)
+                if (localProAccount != null) {
+                    MotiumApplication.logger.d("Found ProAccount in local cache: ${localProAccount.id}", TAG)
+                    _proAccountId.value = localProAccount.id
+                    _isInitialLoading.value = false
+                    return@launch
+                }
+
+                // Fall back to remote API
+                val proAccountId = authRepository.getCurrentProAccountId()
+                if (proAccountId != null) {
+                    _proAccountId.value = proAccountId
+                } else {
+                    _dialogState.update { it.copy(
+                        error = "Compte Pro non trouvé. Veuillez configurer votre compte professionnel."
+                    )}
+                }
+                _isInitialLoading.value = false
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error loading Pro account ID: ${e.message}", TAG, e)
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+                _isInitialLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Refresh linked users from the server.
+     * The Flow subscription (linkedUsersFlow) handles automatic updates.
+     * This is for manual refresh / pull-to-refresh scenarios.
+     */
+    fun loadLinkedUsers() {
+        viewModelScope.launch {
+            val proAccountId = _proAccountId.value ?: return@launch
+
+            try {
+                // Force refresh from server - updates will come through the Flow
+                val result = offlineFirstLinkedUserRepo.forceRefresh(proAccountId)
                 result.fold(
                     onSuccess = { users ->
-                        // Extract unique departments
-                        val departments = users
-                            .map { it.department ?: "Sans département" }
-                            .distinct()
-                            .sorted()
-                        _uiState.update { it.copy(
-                            isLoading = false,
-                            linkedUsers = users,
-                            availableDepartments = departments,
-                            selectedDepartments = departments.toSet() // Select all by default
-                        )}
+                        MotiumApplication.logger.d("Refreshed ${users.size} linked users", TAG)
                     },
                     onFailure = { e ->
-                        MotiumApplication.logger.e("Failed to load linked users: ${e.message}", "LinkedAccountsVM", e)
-                        _uiState.update { it.copy(
-                            isLoading = false,
-                            error = "Erreur lors du chargement: ${e.message}"
-                        )}
+                        // Don't show error for network issues - cached data is already displayed
+                        MotiumApplication.logger.w("Failed to refresh linked users (using cache): ${e.message}", TAG)
                     }
                 )
             } catch (e: Exception) {
-                MotiumApplication.logger.e("Error loading linked users: ${e.message}", "LinkedAccountsVM", e)
-                _uiState.update { it.copy(
-                    isLoading = false,
-                    error = "Erreur: ${e.message}"
-                )}
+                MotiumApplication.logger.e("Error refreshing linked users: ${e.message}", TAG, e)
             }
         }
     }
@@ -115,14 +258,14 @@ class LinkedAccountsViewModel(
      * Show the invite dialog
      */
     fun showInviteDialog() {
-        _uiState.update { it.copy(showInviteDialog = true) }
+        _dialogState.update { it.copy(showInviteDialog = true) }
     }
 
     /**
      * Hide the invite dialog
      */
     fun hideInviteDialog() {
-        _uiState.update { it.copy(showInviteDialog = false) }
+        _dialogState.update { it.copy(showInviteDialog = false) }
     }
 
     /**
@@ -130,12 +273,12 @@ class LinkedAccountsViewModel(
      */
     fun inviteUser(email: String) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isInviting = true) }
+            _dialogState.update { it.copy(isInviting = true) }
 
             try {
-                val proAccountId = authRepository.getCurrentProAccountId()
+                val proAccountId = _proAccountId.value
                 if (proAccountId == null) {
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         isInviting = false,
                         error = "Compte Pro non trouvé"
                     )}
@@ -146,23 +289,26 @@ class LinkedAccountsViewModel(
                 val authState = authRepository.authState.first()
                 val currentUser = authState.user
                 if (currentUser == null) {
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         isInviting = false,
                         error = "Utilisateur non connecté"
                     )}
                     return@launch
                 }
-                val proAccountResult = proAccountRepository.getProAccount(currentUser.id)
-                val companyName = proAccountResult.getOrNull()?.companyName
+
+                // Try to get company name from local first, then remote
+                val localProAccount = offlineFirstProAccountRepo.getProAccountForUserOnce(currentUser.id)
+                val companyName = localProAccount?.companyName
+                    ?: proAccountRemoteDataSource.getProAccount(currentUser.id).getOrNull()?.companyName
                 if (companyName == null) {
-                    _uiState.update { it.copy(
+                    _dialogState.update { it.copy(
                         isInviting = false,
                         error = "Nom de l'entreprise non trouvé"
                     )}
                     return@launch
                 }
 
-                val result = linkedAccountRepository.inviteUser(proAccountId, companyName, email)
+                val result = linkedAccountRemoteDataSource.inviteUser(proAccountId, companyName, email)
                 result.fold(
                     onSuccess = { userId ->
                         val message = if (userId != null) {
@@ -170,7 +316,7 @@ class LinkedAccountsViewModel(
                         } else {
                             "Utilisateur non trouvé. L'invitation sera envoyée par email."
                         }
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             isInviting = false,
                             showInviteDialog = false,
                             successMessage = message
@@ -178,15 +324,15 @@ class LinkedAccountsViewModel(
                         loadLinkedUsers()
                     },
                     onFailure = { e ->
-                        MotiumApplication.logger.e("Failed to invite user: ${e.message}", "LinkedAccountsVM", e)
-                        _uiState.update { it.copy(
+                        MotiumApplication.logger.e("Failed to invite user: ${e.message}", TAG, e)
+                        _dialogState.update { it.copy(
                             isInviting = false,
                             error = "Erreur: ${e.message}"
                         )}
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { it.copy(
+                _dialogState.update { it.copy(
                     isInviting = false,
                     error = "Erreur: ${e.message}"
                 )}
@@ -200,22 +346,126 @@ class LinkedAccountsViewModel(
     fun revokeUser(userId: String) {
         viewModelScope.launch {
             try {
-                val result = linkedAccountRepository.revokeUser(userId)
+                val result = linkedAccountRemoteDataSource.revokeUser(userId)
                 result.fold(
                     onSuccess = {
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             successMessage = "Accès révoqué"
                         )}
                         loadLinkedUsers()
                     },
                     onFailure = { e ->
-                        _uiState.update { it.copy(
+                        _dialogState.update { it.copy(
                             error = "Erreur: ${e.message}"
                         )}
                     }
                 )
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Erreur: ${e.message}") }
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Resend invitation email to a pending user
+     */
+    fun resendInvitation(user: LinkedUserDto) {
+        viewModelScope.launch {
+            try {
+                val proAccountId = _proAccountId.value
+                if (proAccountId == null) {
+                    _dialogState.update { it.copy(error = "Compte Pro non trouvé") }
+                    return@launch
+                }
+
+                // Get company name
+                val authState = authRepository.authState.first()
+                val currentUser = authState.user ?: return@launch
+
+                val localProAccount = offlineFirstProAccountRepo.getProAccountForUserOnce(currentUser.id)
+                val companyName = localProAccount?.companyName
+                    ?: proAccountRemoteDataSource.getProAccount(currentUser.id).getOrNull()?.companyName
+                if (companyName == null) {
+                    _dialogState.update { it.copy(error = "Nom de l'entreprise non trouvé") }
+                    return@launch
+                }
+
+                val result = linkedAccountRemoteDataSource.resendInvitation(
+                    companyLinkId = user.linkId,
+                    companyName = companyName,
+                    email = user.userEmail,
+                    userName = user.userName ?: user.userEmail  // Fallback to email if no name
+                )
+                result.fold(
+                    onSuccess = {
+                        _dialogState.update { it.copy(
+                            successMessage = "Invitation renvoyée à ${user.userEmail}"
+                        )}
+                    },
+                    onFailure = { e ->
+                        _dialogState.update { it.copy(
+                            error = "Erreur: ${e.message}"
+                        )}
+                    }
+                )
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Failed to resend invitation: ${e.message}", TAG, e)
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Delete a linked account.
+     * If the account had a license assigned, the license will be set to pending unlink.
+     * The linked user loses Pro access and reverts to FREE (unless they have their own subscription).
+     */
+    fun deleteLinkedAccount(user: LinkedUserDto) {
+        viewModelScope.launch {
+            try {
+                val proAccountId = _proAccountId.value
+                if (proAccountId == null) {
+                    _dialogState.update { it.copy(error = "Compte Pro non trouvé") }
+                    return@launch
+                }
+
+                // Check if user has an assigned license
+                val userId = user.userId
+                val license = if (userId != null) {
+                    uiState.value.userLicenses[userId]
+                } else null
+
+                // If licensed, first request unlink on the license
+                if (license != null && !license.isPendingUnlink) {
+                    MotiumApplication.logger.i("User has license ${license.id}, requesting unlink before deletion", TAG)
+                    val unlinkResult = licenseRemoteDataSource.requestUnlink(license.id, proAccountId)
+                    unlinkResult.onFailure { e ->
+                        MotiumApplication.logger.w("Failed to request license unlink: ${e.message}", TAG)
+                        // Continue with deletion anyway
+                    }
+                }
+
+                // Delete the company link
+                val result = linkedAccountRemoteDataSource.deleteLinkedAccount(user.linkId)
+                result.fold(
+                    onSuccess = {
+                        val message = if (license != null) {
+                            "Compte supprimé. La licence sera libérée après la période de préavis."
+                        } else {
+                            "Compte supprimé"
+                        }
+                        _dialogState.update { it.copy(successMessage = message) }
+                        loadLinkedUsers()
+                    },
+                    onFailure = { e ->
+                        _dialogState.update { it.copy(
+                            error = "Erreur: ${e.message}"
+                        )}
+                    }
+                )
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Failed to delete linked account: ${e.message}", TAG, e)
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
             }
         }
     }
@@ -224,21 +474,21 @@ class LinkedAccountsViewModel(
      * Clear error message
      */
     fun clearError() {
-        _uiState.update { it.copy(error = null) }
+        _dialogState.update { it.copy(error = null) }
     }
 
     /**
      * Clear success message
      */
     fun clearSuccessMessage() {
-        _uiState.update { it.copy(successMessage = null) }
+        _dialogState.update { it.copy(successMessage = null) }
     }
 
     /**
      * Toggle selection for a department
      */
     fun toggleDepartmentSelection(department: String) {
-        _uiState.update { state ->
+        _dialogState.update { state ->
             val newSelection = if (state.selectedDepartments.contains(department)) {
                 state.selectedDepartments - department
             } else {
@@ -252,18 +502,27 @@ class LinkedAccountsViewModel(
      * Toggle select all departments
      */
     fun toggleSelectAllDepartments() {
-        _uiState.update { state ->
-            if (state.allDepartmentsSelected) {
+        val currentState = uiState.value
+        _dialogState.update { state ->
+            if (currentState.allDepartmentsSelected) {
                 state.copy(selectedDepartments = emptySet())
             } else {
-                state.copy(selectedDepartments = state.availableDepartments.toSet())
+                state.copy(selectedDepartments = currentState.availableDepartments.toSet())
             }
         }
     }
 
     /**
-     * Get count of users by status (from filtered users)
+     * Get count of users by license status (from filtered users)
      */
-    fun getActiveCount(): Int = _uiState.value.filteredUsers.count { it.status == LinkStatus.ACTIVE }
-    fun getPendingCount(): Int = _uiState.value.filteredUsers.count { it.status == LinkStatus.PENDING }
+    fun getLicensedCount(): Int = uiState.value.filteredUsers.count { user ->
+        user.userId?.let { uiState.value.getLicenseStatus(it) } == AccountLicenseStatus.LICENSED
+    }
+    fun getUnlicensedCount(): Int = uiState.value.filteredUsers.count { user ->
+        user.userId?.let { uiState.value.getLicenseStatus(it) } == AccountLicenseStatus.UNLICENSED
+    }
+
+    // Keep old methods for backwards compatibility if needed
+    fun getActiveCount(): Int = getLicensedCount()
+    fun getPendingCount(): Int = getUnlicensedCount()
 }

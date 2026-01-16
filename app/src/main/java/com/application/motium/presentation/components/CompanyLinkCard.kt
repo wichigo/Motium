@@ -162,6 +162,7 @@ fun LinkStatusBadge(
         LinkStatus.INACTIVE -> "Inactif" to Color(0xFF6B7280)
         LinkStatus.REVOKED -> "Révoqué" to Color(0xFFEF4444)
         LinkStatus.PENDING_ACTIVATION -> "Activation..." to Color(0xFFF59E0B)
+        LinkStatus.PENDING_UNLINK -> "Déliaison..." to Color(0xFFF59E0B)
     }
 
     Surface(

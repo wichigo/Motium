@@ -28,7 +28,8 @@ data class AuthState(
     val user: User? = null,
     val isLoading: Boolean = false,
     val error: String? = null,
-    val isCriticalError: Boolean = false  // SÉCURITÉ: Erreur non récupérable (échec du chiffrement, etc.)
+    val isCriticalError: Boolean = false,  // SÉCURITÉ: Erreur non récupérable (échec du chiffrement, etc.)
+    val initialSyncDone: Boolean = false   // OFFLINE-FIRST: true après sync initiale avec Supabase (ou timeout)
 )
 
 sealed class AuthResult<out T> {

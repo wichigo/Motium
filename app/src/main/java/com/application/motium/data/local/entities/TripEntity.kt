@@ -13,7 +13,13 @@ import kotlinx.serialization.json.Json
  * Room entity for storing trip data locally.
  * Allows offline trip viewing and automatic sync when connection is restored.
  */
-@Entity(tableName = "trips")
+@Entity(
+    tableName = "trips",
+    indices = [
+        androidx.room.Index(value = ["syncStatus"]),
+        androidx.room.Index(value = ["userId", "startTime"])
+    ]
+)
 @TypeConverters(TripConverters::class)
 data class TripEntity(
     @PrimaryKey
@@ -33,9 +39,13 @@ data class TripEntity(
     val isWorkHomeTrip: Boolean = false, // Trajet travail-maison (perso uniquement, donne droit aux indemnités)
     val createdAt: Long,
     val updatedAt: Long,
-    val lastSyncedAt: Long?, // Timestamp of last sync with Supabase
-    val needsSync: Boolean, // Flag indicating if trip needs to be synced
-    val matchedRouteCoordinates: String? = null // CACHE: Map-matched route coordinates as JSON [[lon,lat],...]
+    val matchedRouteCoordinates: String? = null, // CACHE: Map-matched route coordinates as JSON [[lon,lat],...]
+    // ==================== OFFLINE-FIRST SYNC FIELDS ====================
+    val syncStatus: String = SyncStatus.SYNCED.name, // SyncStatus enum as String
+    val localUpdatedAt: Long = System.currentTimeMillis(), // Local modification timestamp
+    val serverUpdatedAt: Long? = null, // Server's updated_at (from Supabase)
+    val version: Int = 1, // Optimistic locking version
+    val deletedAt: Long? = null // Soft delete timestamp (null = not deleted)
 )
 
 /**
@@ -75,8 +85,7 @@ fun TripEntity.toDataModel(): com.application.motium.data.Trip {
         isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt,
         updatedAt = updatedAt,
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync,
+        userId = userId,
         matchedRouteCoordinates = matchedRouteCoordinates
     )
 }
@@ -84,7 +93,13 @@ fun TripEntity.toDataModel(): com.application.motium.data.Trip {
 /**
  * Extension function to convert data Trip to TripEntity
  */
-fun com.application.motium.data.Trip.toEntity(userId: String): TripEntity {
+fun com.application.motium.data.Trip.toEntity(
+    userId: String,
+    syncStatus: String = SyncStatus.SYNCED.name,
+    localUpdatedAt: Long = System.currentTimeMillis(),
+    serverUpdatedAt: Long? = null,
+    version: Int = 1
+): TripEntity {
     return TripEntity(
         id = id,
         userId = userId,
@@ -102,8 +117,10 @@ fun com.application.motium.data.Trip.toEntity(userId: String): TripEntity {
         isWorkHomeTrip = isWorkHomeTrip,
         createdAt = createdAt,
         updatedAt = updatedAt,
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync,
-        matchedRouteCoordinates = matchedRouteCoordinates
+        matchedRouteCoordinates = matchedRouteCoordinates,
+        syncStatus = syncStatus,
+        localUpdatedAt = localUpdatedAt,
+        serverUpdatedAt = serverUpdatedAt,
+        version = version
     )
 }

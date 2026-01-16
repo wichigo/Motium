@@ -123,7 +123,7 @@ fun ExportScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // Quick Export section
@@ -628,83 +628,57 @@ fun ExportScreen(
                         }
                     }
 
-                    // Include Photos filter (only visible if expenses are included)
-                    if (filters.expenseMode != "trips_only") {
-                        var includePhotosExpanded by remember { mutableStateOf(false) }
-
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            OutlinedTextField(
-                                value = if (filters.includePhotos) "With photos" else "Without photos",
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Include Photos") },
-                                modifier = Modifier.fillMaxWidth(),
-                                trailingIcon = {
-                                    Icon(
-                                        if (includePhotosExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                        contentDescription = null,
-                                        tint = MotiumPrimary
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Photo,
-                                        contentDescription = null,
-                                        tint = MotiumPrimary
-                                    )
-                                },
-                                enabled = false,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    disabledLeadingIconColor = MotiumPrimary,
-                                    disabledTrailingIconColor = MotiumPrimary
-                                ),
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .matchParentSize()
-                                    .padding(top = 8.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable {
-                                        includePhotosExpanded = !includePhotosExpanded
-                                        selectedField = if (includePhotosExpanded) "includePhotos" else null
-                                    }
-                            )
-
-                            DropdownMenu(
-                                expanded = includePhotosExpanded,
-                                onDismissRequest = {
-                                    includePhotosExpanded = false
-                                    selectedField = null
-                                },
-                                modifier = Modifier
-                                    .background(
-                                        color = MaterialTheme.colorScheme.surface,
-                                        shape = RoundedCornerShape(16.dp)
-                                    )
+                    // Include Photos toggle (only visible if expenses are included)
+                    AnimatedVisibility(
+                        visible = filters.expenseMode != "trips_only",
+                        enter = expandVertically(animationSpec = tween(200)) + fadeIn(),
+                        exit = shrinkVertically(animationSpec = tween(200)) + fadeOut()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isDarkMode) Color(0xFF1F2937) else Color(0xFFF3F4F6)
+                                )
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                DropdownMenuItem(
-                                    text = { Text("Without photos", color = MaterialTheme.colorScheme.onSurface) },
-                                    onClick = {
-                                        viewModel.setIncludePhotos(false)
-                                        includePhotosExpanded = false
-                                        selectedField = null
-                                    },
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                                Icon(
+                                    Icons.Default.Photo,
+                                    contentDescription = null,
+                                    tint = MotiumPrimary,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("With photos", color = MaterialTheme.colorScheme.onSurface) },
-                                    onClick = {
-                                        viewModel.setIncludePhotos(true)
-                                        includePhotosExpanded = false
-                                        selectedField = null
-                                    },
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                                )
+                                Column {
+                                    Text(
+                                        "Inclure les photos",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = textColor
+                                    )
+                                    Text(
+                                        "Ajoute les justificatifs au PDF",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = textSecondaryColor
+                                    )
+                                }
                             }
+                            Switch(
+                                checked = filters.includePhotos,
+                                onCheckedChange = { viewModel.setIncludePhotos(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = MotiumPrimary,
+                                    uncheckedThumbColor = Color.White,
+                                    uncheckedTrackColor = if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB)
+                                )
+                            )
                         }
                     }
                 }

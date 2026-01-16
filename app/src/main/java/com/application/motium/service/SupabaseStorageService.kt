@@ -1,7 +1,11 @@
 package com.application.motium.service
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.SupabaseClient
 import io.github.jan.supabase.storage.storage
@@ -9,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -26,6 +31,11 @@ class SupabaseStorageService(private val context: Context) {
         private var instance: SupabaseStorageService? = null
         private const val RECEIPTS_BUCKET = "receipts"
 
+        // Image compression settings
+        private const val MAX_IMAGE_DIMENSION = 1280 // Max width/height in pixels
+        private const val JPEG_QUALITY = 80 // 0-100, lower = smaller file
+        private const val MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 // 2MB max for Supabase free tier
+
         fun getInstance(context: Context): SupabaseStorageService {
             return instance ?: synchronized(this) {
                 instance ?: SupabaseStorageService(context.applicationContext).also { instance = it }
@@ -42,14 +52,14 @@ class SupabaseStorageService(private val context: Context) {
         try {
             MotiumApplication.logger.i("📤 Uploading receipt photo to Supabase Storage", "SupabaseStorage")
 
-            // Read the image file as bytes
-            val imageBytes = context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
-                inputStream.readBytes()
-            } ?: return@withContext Result.failure(Exception("Failed to read image file"))
+            // Compress the image before upload
+            val imageBytes = compressImage(imageUri)
+                ?: return@withContext Result.failure(Exception("Failed to compress image file"))
 
-            // Generate unique filename
-            val extension = getFileExtension(imageUri)
-            val fileName = "${UUID.randomUUID()}.$extension"
+            MotiumApplication.logger.i("📦 Compressed image size: ${imageBytes.size / 1024}KB", "SupabaseStorage")
+
+            // Generate unique filename (always jpg after compression)
+            val fileName = "${UUID.randomUUID()}.jpg"
             val filePath = "receipts/$fileName"
 
             // Upload to Supabase Storage
@@ -80,14 +90,14 @@ class SupabaseStorageService(private val context: Context) {
 
             val uri = Uri.parse(localUri)
 
-            // Read the image file as bytes
-            val imageBytes = context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                inputStream.readBytes()
-            } ?: return@withContext Result.failure(Exception("Failed to read image file from $localUri"))
+            // Compress the image before upload
+            val imageBytes = compressImage(uri)
+                ?: return@withContext Result.failure(Exception("Failed to compress image file from $localUri"))
 
-            // Generate unique filename
-            val extension = getFileExtension(uri)
-            val fileName = "${UUID.randomUUID()}.$extension"
+            MotiumApplication.logger.i("📦 Compressed image size: ${imageBytes.size / 1024}KB", "SupabaseStorage")
+
+            // Generate unique filename (always jpg after compression)
+            val fileName = "${UUID.randomUUID()}.jpg"
             val filePath = "receipts/$fileName"
 
             // Upload to Supabase Storage
@@ -188,6 +198,147 @@ class SupabaseStorageService(private val context: Context) {
             }
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * Compress an image from URI to fit within size limits.
+     * - Resizes to max dimension while maintaining aspect ratio
+     * - Corrects rotation based on EXIF data
+     * - Compresses to JPEG with quality reduction if needed
+     *
+     * @param uri The URI of the image to compress
+     * @return Compressed image bytes, or null if compression failed
+     */
+    private fun compressImage(uri: Uri): ByteArray? {
+        return try {
+            // First, get image dimensions without loading full bitmap
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream, null, options)
+            }
+
+            val originalWidth = options.outWidth
+            val originalHeight = options.outHeight
+
+            if (originalWidth <= 0 || originalHeight <= 0) {
+                MotiumApplication.logger.e("❌ Invalid image dimensions: ${originalWidth}x${originalHeight}", "SupabaseStorage")
+                return null
+            }
+
+            MotiumApplication.logger.i("📐 Original image: ${originalWidth}x${originalHeight}", "SupabaseStorage")
+
+            // Calculate sample size for initial downsampling (power of 2)
+            val sampleSize = calculateSampleSize(originalWidth, originalHeight, MAX_IMAGE_DIMENSION)
+
+            // Decode with subsampling
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+
+            var bitmap = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream, null, decodeOptions)
+            } ?: return null
+
+            MotiumApplication.logger.i("📐 Decoded bitmap: ${bitmap.width}x${bitmap.height} (sampleSize=$sampleSize)", "SupabaseStorage")
+
+            // Apply EXIF rotation correction
+            bitmap = correctImageRotation(uri, bitmap)
+
+            // Scale down to exact max dimension if still too large
+            if (bitmap.width > MAX_IMAGE_DIMENSION || bitmap.height > MAX_IMAGE_DIMENSION) {
+                val scale = MAX_IMAGE_DIMENSION.toFloat() / maxOf(bitmap.width, bitmap.height)
+                val newWidth = (bitmap.width * scale).toInt()
+                val newHeight = (bitmap.height * scale).toInt()
+                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                if (scaledBitmap != bitmap) {
+                    bitmap.recycle()
+                    bitmap = scaledBitmap
+                }
+                MotiumApplication.logger.i("📐 Scaled bitmap: ${bitmap.width}x${bitmap.height}", "SupabaseStorage")
+            }
+
+            // Compress to JPEG, reducing quality if needed to fit size limit
+            var quality = JPEG_QUALITY
+            var compressedBytes: ByteArray
+
+            do {
+                val outputStream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+                compressedBytes = outputStream.toByteArray()
+
+                if (compressedBytes.size > MAX_FILE_SIZE_BYTES && quality > 30) {
+                    quality -= 10
+                    MotiumApplication.logger.i("📦 Size ${compressedBytes.size / 1024}KB > ${MAX_FILE_SIZE_BYTES / 1024}KB, reducing quality to $quality", "SupabaseStorage")
+                } else {
+                    break
+                }
+            } while (quality > 30)
+
+            bitmap.recycle()
+
+            MotiumApplication.logger.i("✅ Final compressed size: ${compressedBytes.size / 1024}KB (quality=$quality)", "SupabaseStorage")
+            compressedBytes
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Image compression failed: ${e.message}", "SupabaseStorage", e)
+            null
+        }
+    }
+
+    /**
+     * Calculate sample size for BitmapFactory.Options.inSampleSize
+     * Returns the largest power of 2 that keeps both dimensions >= maxDimension
+     */
+    private fun calculateSampleSize(width: Int, height: Int, maxDimension: Int): Int {
+        var sampleSize = 1
+        val maxOriginal = maxOf(width, height)
+
+        while (maxOriginal / sampleSize > maxDimension * 2) {
+            sampleSize *= 2
+        }
+        return sampleSize
+    }
+
+    /**
+     * Correct image rotation based on EXIF orientation data.
+     * Camera photos often have rotation stored in EXIF rather than applied to pixels.
+     */
+    private fun correctImageRotation(uri: Uri, bitmap: Bitmap): Bitmap {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return bitmap
+            val exif = ExifInterface(inputStream)
+            inputStream.close()
+
+            val orientation = exif.getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+
+            val rotation = when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+
+            if (rotation != 0f) {
+                MotiumApplication.logger.i("🔄 Rotating image by $rotation degrees", "SupabaseStorage")
+                val matrix = Matrix().apply { postRotate(rotation) }
+                val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                if (rotatedBitmap != bitmap) {
+                    bitmap.recycle()
+                }
+                rotatedBitmap
+            } else {
+                bitmap
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("⚠️ Could not read EXIF data: ${e.message}", "SupabaseStorage")
+            bitmap
         }
     }
 }

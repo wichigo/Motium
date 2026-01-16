@@ -201,6 +201,7 @@ class CompanyLinkViewModel(
 
     /**
      * Confirm unlinking from a company.
+     * This initiates the confirmation flow - an email will be sent to confirm the unlink.
      */
     fun confirmUnlink() {
         val link = _showUnlinkConfirmation.value ?: return
@@ -213,23 +214,35 @@ class CompanyLinkViewModel(
 
             result.fold(
                 onSuccess = {
-                    // Update local state to show INACTIVE status
+                    // Update local state to show PENDING_UNLINK status
+                    // The actual INACTIVE status will be set when user confirms via email
                     _uiState.update { state ->
                         val updatedLinks = state.companyLinks.map { l ->
                             if (l.id == link.id) {
-                                l.copy(status = LinkStatus.INACTIVE)
+                                l.copy(status = LinkStatus.PENDING_UNLINK)
                             } else l
                         }
-                        state.copy(companyLinks = updatedLinks, isLoading = false)
+                        state.copy(
+                            companyLinks = updatedLinks,
+                            isLoading = false,
+                            successMessage = "Un email de confirmation a ete envoye a votre adresse email."
+                        )
                     }
-                    MotiumApplication.logger.i("Unlinked from ${link.companyName}", TAG)
+                    MotiumApplication.logger.i("Unlink confirmation requested for ${link.companyName}", TAG)
                 },
                 onFailure = { error ->
                     _uiState.update { it.copy(error = error.message, isLoading = false) }
-                    MotiumApplication.logger.e("Failed to unlink: ${error.message}", TAG)
+                    MotiumApplication.logger.e("Failed to request unlink: ${error.message}", TAG)
                 }
             )
         }
+    }
+
+    /**
+     * Clear success message.
+     */
+    fun clearSuccessMessage() {
+        _uiState.update { it.copy(successMessage = null) }
     }
 
     /**
@@ -265,14 +278,18 @@ class CompanyLinkViewModel(
  */
 data class CompanyLinkUiState(
     val companyLinks: List<CompanyLink> = emptyList(),
-    val isLoading: Boolean = false,
-    val error: String? = null
+    val isLoading: Boolean = true, // Start with true to show loading indicator immediately
+    val error: String? = null,
+    val successMessage: String? = null
 ) {
     val hasActiveLinks: Boolean
         get() = companyLinks.any { it.status == LinkStatus.ACTIVE }
 
     val activeLinksCount: Int
         get() = companyLinks.count { it.status == LinkStatus.ACTIVE }
+
+    val hasPendingUnlinks: Boolean
+        get() = companyLinks.any { it.status == LinkStatus.PENDING_UNLINK }
 }
 
 /**

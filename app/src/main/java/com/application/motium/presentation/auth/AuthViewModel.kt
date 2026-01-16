@@ -9,9 +9,9 @@ import com.application.motium.data.security.DeviceFingerprintManager
 import com.application.motium.data.supabase.DeviceFingerprintRepository
 import com.application.motium.data.supabase.EmailRepository
 import com.application.motium.data.supabase.LicenseRemoteDataSource
-import com.application.motium.data.supabase.PhoneVerificationRepository
 import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.data.sync.ProDataSyncTrigger
 import com.application.motium.domain.model.*
 import com.application.motium.domain.repository.AuthRepository
 import com.application.motium.service.SupabaseConnectionService
@@ -28,12 +28,12 @@ class AuthViewModel(
     private val authRepository: AuthRepository = SupabaseAuthRepository.getInstance(context),
     private val googleSignInHelper: GoogleSignInHelper? = null,
     private val deviceFingerprintRepository: DeviceFingerprintRepository = DeviceFingerprintRepository.getInstance(context),
-    private val phoneVerificationRepository: PhoneVerificationRepository = PhoneVerificationRepository.getInstance(context),
     private val deviceFingerprintManager: DeviceFingerprintManager = DeviceFingerprintManager.getInstance(context),
     private val emailRepository: EmailRepository = EmailRepository.getInstance(context),
     private val proAccountRemoteDataSource: ProAccountRemoteDataSource = ProAccountRemoteDataSource.getInstance(context),
     private val licenseRemoteDataSource: LicenseRemoteDataSource = LicenseRemoteDataSource.getInstance(context),
-    private val proLicenseCache: ProLicenseCache = ProLicenseCache.getInstance(context)
+    private val proLicenseCache: ProLicenseCache = ProLicenseCache.getInstance(context),
+    private val proDataSyncTrigger: ProDataSyncTrigger = ProDataSyncTrigger.getInstance(context)
 ) : ViewModel() {
 
     companion object {
@@ -266,6 +266,22 @@ class AuthViewModel(
         MotiumApplication.logger.i("Pro license state and cache reset", TAG)
     }
 
+    /**
+     * Trigger Pro data sync for Enterprise users (ProAccount, Licenses, LinkedUsers).
+     * Runs in background - does not block login flow.
+     * This ensures Room has data for offline access on Pro screens.
+     */
+    private fun triggerProDataSyncIfNeeded() {
+        viewModelScope.launch {
+            val user = authRepository.authState.first().user ?: return@launch
+
+            if (user.role == UserRole.ENTERPRISE) {
+                MotiumApplication.logger.i("Enterprise user detected - triggering Pro data sync", TAG)
+                proDataSyncTrigger.syncProData(user.id)
+            }
+        }
+    }
+
     fun signIn(email: String, password: String) {
         viewModelScope.launch {
             _loginState.value = _loginState.value.copy(isLoading = true, error = null)
@@ -283,6 +299,9 @@ class AuthViewModel(
                     // Démarrer le service de connexion permanente après connexion réussie
                     MotiumApplication.logger.i("✅ Login successful - starting connection service", "AuthViewModel")
                     SupabaseConnectionService.startService(context)
+
+                    // Trigger Pro data sync for Enterprise users (in background)
+                    triggerProDataSyncIfNeeded()
                 }
                 is AuthResult.Error -> {
                     _loginState.value = _loginState.value.copy(
@@ -301,15 +320,51 @@ class AuthViewModel(
         viewModelScope.launch {
             _registerState.value = _registerState.value.copy(isLoading = true, error = null)
 
-            // 🔧 FIX: Utiliser le role ENTERPRISE si professionnel, sinon INDIVIDUAL
             val userRole = if (isProfessional) UserRole.ENTERPRISE else UserRole.INDIVIDUAL
             val result = authRepository.signUp(RegisterRequest(email, password, name, userRole))
             when (result) {
                 is AuthResult.Success -> {
-                    // Create user profile after successful signup
-                    val profileResult = authRepository.createUserProfile(result.data, name, isProfessional, organizationName)
+                    val userId = result.data.id
+
+                    // Step 1: Create user profile first (without device_fingerprint_id)
+                    // This must happen BEFORE registerDevice because device_fingerprints.user_id
+                    // has a FK to public.users.id
+                    val profileResult = authRepository.createUserProfileWithTrial(
+                        userId = userId,
+                        name = name,
+                        isProfessional = isProfessional,
+                        organizationName = organizationName,
+                        verifiedPhone = "",
+                        deviceFingerprintId = null
+                    )
+
                     when (profileResult) {
                         is AuthResult.Success -> {
+                            // Step 2: Now register device (profile exists, FK constraint satisfied)
+                            val deviceId = deviceFingerprintManager.getDeviceId()
+                            if (deviceId != null) {
+                                deviceFingerprintRepository.registerDevice(profileResult.data.id)
+                                    .onSuccess { fingerprintId ->
+                                        // Step 3: Update user profile with device_fingerprint_id
+                                        viewModelScope.launch {
+                                            val updatedUser = profileResult.data.copy(
+                                                deviceFingerprintId = fingerprintId
+                                            )
+                                            authRepository.updateUserProfile(updatedUser)
+                                            MotiumApplication.logger.i(
+                                                "Device fingerprint linked: $fingerprintId",
+                                                "AuthViewModel"
+                                            )
+                                        }
+                                    }
+                                    .onFailure { e ->
+                                        MotiumApplication.logger.w(
+                                            "Failed to register device: ${e.message}",
+                                            "AuthViewModel"
+                                        )
+                                    }
+                            }
+
                             _registerState.value = _registerState.value.copy(
                                 isLoading = false,
                                 isSuccess = true
@@ -344,25 +399,20 @@ class AuthViewModel(
     }
 
     /**
-     * Complete registration with phone verification and device fingerprint.
-     * Called after phone verification is complete.
+     * Complete registration with device fingerprint check (no phone verification).
      */
     fun signUpWithVerification(
         email: String,
         password: String,
         name: String,
         isProfessional: Boolean = false,
-        organizationName: String = "",
-        verifiedPhone: String
+        organizationName: String = ""
     ) {
         viewModelScope.launch {
             _registerState.value = _registerState.value.copy(isLoading = true, error = null)
 
             try {
-                // Get device fingerprint
                 val deviceId = deviceFingerprintManager.getDeviceId()
-
-                // Create the user account
                 val userRole = if (isProfessional) UserRole.ENTERPRISE else UserRole.INDIVIDUAL
                 val result = authRepository.signUp(RegisterRequest(email, password, name, userRole))
 
@@ -370,53 +420,57 @@ class AuthViewModel(
                     is AuthResult.Success -> {
                         val userId = result.data.id
 
-                        // Register device fingerprint
-                        if (deviceId != null) {
-                            deviceFingerprintRepository.registerDevice(userId)
-                                .onFailure { e ->
-                                    MotiumApplication.logger.w(
-                                        "Failed to register device fingerprint: ${e.message}",
-                                        "AuthViewModel"
-                                    )
-                                }
-                        }
-
-                        // Register verified phone
-                        phoneVerificationRepository.registerVerifiedPhone(verifiedPhone, userId)
-                            .onFailure { e ->
-                                MotiumApplication.logger.w(
-                                    "Failed to register verified phone: ${e.message}",
-                                    "AuthViewModel"
-                                )
-                            }
-
-                        // Create user profile with trial subscription
+                        // Step 1: Create profile first (without device_fingerprint_id)
+                        // This must happen BEFORE registerDevice because device_fingerprints.user_id
+                        // has a FK to public.users.id
                         val profileResult = authRepository.createUserProfileWithTrial(
                             userId = userId,
                             name = name,
                             isProfessional = isProfessional,
                             organizationName = organizationName,
-                            verifiedPhone = verifiedPhone,
-                            deviceFingerprintId = deviceId
+                            verifiedPhone = "",
+                            deviceFingerprintId = null
                         )
 
                         when (profileResult) {
                             is AuthResult.Success -> {
+                                // Step 2: Now register device (profile exists, FK constraint satisfied)
+                                if (deviceId != null) {
+                                    deviceFingerprintRepository.registerDevice(profileResult.data.id)
+                                        .onSuccess { fingerprintId ->
+                                            // Step 3: Update user profile with device_fingerprint_id
+                                            viewModelScope.launch {
+                                                val updatedUser = profileResult.data.copy(
+                                                    deviceFingerprintId = fingerprintId
+                                                )
+                                                authRepository.updateUserProfile(updatedUser)
+                                                MotiumApplication.logger.i(
+                                                    "Device fingerprint linked: $fingerprintId",
+                                                    "AuthViewModel"
+                                                )
+                                            }
+                                        }
+                                        .onFailure { e ->
+                                            MotiumApplication.logger.w(
+                                                "Failed to register device: ${e.message}",
+                                                "AuthViewModel"
+                                            )
+                                        }
+                                }
+
                                 _registerState.value = _registerState.value.copy(
                                     isLoading = false,
                                     isSuccess = true
                                 )
 
-                                // Send welcome email (non-blocking, fire-and-forget)
+                                // Send welcome email (fire-and-forget)
                                 viewModelScope.launch {
                                     try {
                                         emailRepository.sendWelcomeEmail(
-                                            email = email,
-                                            name = name,
-                                            accountType = if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
+                                            email, name,
+                                            if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
                                         )
                                     } catch (e: Exception) {
-                                        // Log but don't fail registration
                                         MotiumApplication.logger.w(
                                             "Failed to send welcome email: ${e.message}",
                                             "AuthViewModel"
@@ -425,7 +479,7 @@ class AuthViewModel(
                                 }
 
                                 MotiumApplication.logger.i(
-                                    "Registration with verification successful",
+                                    "Registration successful",
                                     "AuthViewModel"
                                 )
                                 SupabaseConnectionService.startService(context)
@@ -473,6 +527,9 @@ class AuthViewModel(
             when (result) {
                 is AuthResult.Success -> {
                     _loginState.value = _loginState.value.copy(isLoading = false, isSuccess = true)
+
+                    // Trigger Pro data sync for Enterprise users (in background)
+                    triggerProDataSyncIfNeeded()
                 }
                 is AuthResult.Error -> {
                     _loginState.value = _loginState.value.copy(
@@ -611,6 +668,54 @@ class AuthViewModel(
         _loginState.value = _loginState.value.copy(credentialsToSave = null)
     }
 
+    /**
+     * Save credentials to password manager (Samsung Pass, Google, etc.)
+     * This runs in viewModelScope to survive composable recompositions.
+     * The navigation will only happen after this completes.
+     */
+    fun saveCredentialsAndNavigate(
+        activity: android.app.Activity,
+        credentialManager: CredentialManagerHelper
+    ) {
+        val credentials = _loginState.value.credentialsToSave ?: return
+
+        // Mark as saving to prevent duplicate calls
+        if (_loginState.value.isSavingCredentials) return
+        _loginState.value = _loginState.value.copy(isSavingCredentials = true)
+
+        viewModelScope.launch {
+            try {
+                MotiumApplication.logger.i("Starting credential save in ViewModel scope", "AuthViewModel")
+
+                // This will show the Samsung Pass / Google / other password manager dialog
+                // and wait for user interaction (save or dismiss)
+                credentialManager.saveCredentials(
+                    activity = activity,
+                    email = credentials.email,
+                    password = credentials.password
+                )
+
+                MotiumApplication.logger.i("Credential save completed", "AuthViewModel")
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Credential save failed: ${e.message}", "AuthViewModel")
+            } finally {
+                // Clear credentials and mark ready to navigate
+                _loginState.value = _loginState.value.copy(
+                    credentialsToSave = null,
+                    isSavingCredentials = false,
+                    isReadyToNavigate = true
+                )
+            }
+        }
+    }
+
+    /**
+     * Reset the navigation flag after navigating
+     */
+    fun onNavigated() {
+        _loginState.value = _loginState.value.copy(isReadyToNavigate = false)
+    }
+
     fun clearRegisterError() {
         _registerState.value = _registerState.value.copy(error = null)
     }
@@ -645,7 +750,11 @@ data class LoginUiState(
     val isLoading: Boolean = false,
     val isSuccess: Boolean = false,
     val error: String? = null,
-    val credentialsToSave: CredentialsToSave? = null
+    val credentialsToSave: CredentialsToSave? = null,
+    /** True while credentials are being saved to password manager (Samsung Pass, etc.) */
+    val isSavingCredentials: Boolean = false,
+    /** True when the full login flow is complete (auth + credential save) and ready to navigate */
+    val isReadyToNavigate: Boolean = false
 )
 
 /**

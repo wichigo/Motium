@@ -18,16 +18,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ## Machine d'État
  * ```
  * IDLE ──[VehicleEnter/BicycleEnter]──> MOVING
- * MOVING ──[StillEnter/WalkingEnter]──> POSSIBLY_STOPPED (timer 3 min)
+ * MOVING ──[StillEnter]──> reste en MOVING (ignore feux rouges)
+ * MOVING ──[WalkingEnter/RunningEnter]──> IDLE (trajet terminé)
  * POSSIBLY_STOPPED ──[VehicleEnter/BicycleEnter]──> MOVING (même tripId)
- * POSSIBLY_STOPPED ──[Timer expire]──> IDLE (trajet terminé)
+ * POSSIBLY_STOPPED ──[WalkingEnter/RunningEnter]──> reste en POSSIBLY_STOPPED
  * ```
  *
  * ## Comportements clés
  * - **IDLE**: GPS complètement coupé, 0 consommation batterie GPS
  * - **Démarrage immédiat**: IN_VEHICLE ENTER → MOVING sans délai
- * - **Feu rouge/bouchon**: STILL < 3 min → même trajet continue
- * - **Arrêt définitif**: STILL > 3 min → fin du trajet
+ * - **Feu rouge/bouchon**: STILL ignoré → même trajet continue
+ * - **Fin du trajet**: Walking/Running détecté en MOVING → fin immédiate
  * - **Persistance**: L'état survit aux kills de service par l'OS
  */
 object TripStateManager {
@@ -98,9 +99,9 @@ object TripStateManager {
         object VehicleEnter : TrackingEvent()
         object BicycleEnter : TrackingEvent()
         object StillEnter : TrackingEvent()
-        object WalkingEnter : TrackingEvent()  // Traité comme STILL si en MOVING
-        object RunningEnter : TrackingEvent()  // Traité comme STILL si en MOVING
-        object StillConfirmed : TrackingEvent()  // Timer 3 min expiré
+        object WalkingEnter : TrackingEvent()  // Fin du trajet si en MOVING
+        object RunningEnter : TrackingEvent()  // Fin du trajet si en MOVING
+        object StillConfirmed : TrackingEvent()  // DEPRECATED - ignoré (timer désactivé)
         object MovementResume : TrackingEvent()  // Reprise mouvement après POSSIBLY_STOPPED
 
         override fun toString(): String = this::class.simpleName ?: "Unknown"
@@ -227,23 +228,19 @@ object TripStateManager {
         event: TrackingEvent
     ): TrackingState {
         return when (event) {
-            // STILL ou WALKING → Passer en POSSIBLY_STOPPED avec timer 3 min
-            is TrackingEvent.StillEnter,
+            // STILL (IMMOBILE) → ignoré, le trajet continue
+            // Les arrêts courts (feux rouges, bouchons) ne terminent pas le trajet
+            is TrackingEvent.StillEnter -> {
+                logD("STILL ignored while MOVING - trip continues (feu rouge/bouchon)")
+                currentState
+            }
+
+            // WALKING/RUNNING → FIN IMMÉDIATE du trajet
+            // L'utilisateur est descendu du véhicule
             is TrackingEvent.WalkingEnter,
             is TrackingEvent.RunningEnter -> {
-                val nowMs = System.currentTimeMillis()
-                val deadlineMs = nowMs + Config.STILL_CONFIRMATION_DELAY_MS
-
-                logI("POSSIBLY_STOPPED: waiting ${Config.STILL_CONFIRMATION_DELAY_MS / 1000}s for confirmation")
-
-                // Lancer le timer de confirmation
-                startStillConfirmationTimer()
-
-                TrackingState.PossiblyStopped(
-                    tripId = currentState.tripId,
-                    stillSinceMs = nowMs,
-                    confirmationDeadlineMs = deadlineMs
-                )
+                logI("TRIP ENDED - Walking/Running detected (tripId=${currentState.tripId})")
+                TrackingState.Idle
             }
 
             // Véhicule/vélo détecté alors qu'on roule déjà → ignorer
@@ -283,17 +280,18 @@ object TripStateManager {
                 )
             }
 
-            // Timer expiré → FIN DU TRAJET
+            // StillConfirmed ignoré - le trajet ne se termine que via Walking/Running
             is TrackingEvent.StillConfirmed -> {
-                logI("TRIP ENDED - still confirmed after 3 min (tripId=${currentState.tripId})")
-                TrackingState.Idle
+                logD("StillConfirmed ignored - trip ends only via Walking/Running")
+                currentState
             }
 
-            // Encore STILL/WALKING → rester en POSSIBLY_STOPPED (timer continue)
+            // STILL/WALKING/RUNNING → rester en POSSIBLY_STOPPED
+            // On attend VehicleEnter/BicycleEnter pour reprendre
             is TrackingEvent.StillEnter,
             is TrackingEvent.WalkingEnter,
             is TrackingEvent.RunningEnter -> {
-                logD("Still/Walking in POSSIBLY_STOPPED, timer continues")
+                logD("Still/Walking/Running in POSSIBLY_STOPPED, waiting for vehicle")
                 currentState
             }
 
@@ -426,40 +424,14 @@ object TripStateManager {
             }
             "POSSIBLY_STOPPED" -> {
                 if (tripId != null && stillSinceMs > 0) {
-                    val nowMs = System.currentTimeMillis()
-                    val elapsedMs = nowMs - stillSinceMs
-
-                    // Si le timer a déjà expiré pendant que l'app était morte
-                    if (elapsedMs >= Config.STILL_CONFIRMATION_DELAY_MS) {
-                        logI(
-                            "Restored POSSIBLY_STOPPED but timer already expired (${elapsedMs}ms). " +
-                                    "Ending trip: $tripId"
-                        )
-                        // Notifier la fin du trajet
-                        onTripEnded?.invoke(tripId)
-                        TrackingState.Idle
-                    } else {
-                        // Timer pas encore expiré, reprendre le compte à rebours
-                        val remainingMs = Config.STILL_CONFIRMATION_DELAY_MS - elapsedMs
-                        val newDeadlineMs = nowMs + remainingMs
-
-                        logI(
-                            "Restoring POSSIBLY_STOPPED: tripId=$tripId, " +
-                                    "remaining=${remainingMs / 1000}s"
-                        )
-
-                        // Relancer le timer avec le temps restant
-                        stillConfirmationJob = scope.launch {
-                            delay(remainingMs)
-                            onEvent(TrackingEvent.StillConfirmed)
-                        }
-
-                        TrackingState.PossiblyStopped(
-                            tripId = tripId,
-                            stillSinceMs = stillSinceMs,
-                            confirmationDeadlineMs = newDeadlineMs
-                        )
-                    }
+                    // Restaurer l'état POSSIBLY_STOPPED sans timer
+                    // Le trajet se terminera uniquement via Walking/Running
+                    logI("Restoring POSSIBLY_STOPPED: tripId=$tripId (no timer)")
+                    TrackingState.PossiblyStopped(
+                        tripId = tripId,
+                        stillSinceMs = stillSinceMs,
+                        confirmationDeadlineMs = 0L // Timer désactivé
+                    )
                 } else {
                     logW("Invalid POSSIBLY_STOPPED state in prefs, resetting to IDLE")
                     TrackingState.Idle

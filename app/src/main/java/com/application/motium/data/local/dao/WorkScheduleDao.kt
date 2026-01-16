@@ -71,13 +71,13 @@ interface WorkScheduleDao {
     /**
      * Get work schedules that need to be synced.
      */
-    @Query("SELECT * FROM work_schedules WHERE userId = :userId AND needsSync = 1")
+    @Query("SELECT * FROM work_schedules WHERE userId = :userId AND syncStatus != 'SYNCED'")
     suspend fun getWorkSchedulesNeedingSync(userId: String): List<WorkScheduleEntity>
 
     /**
      * Mark a work schedule as synced.
      */
-    @Query("UPDATE work_schedules SET needsSync = 0, lastSyncedAt = :timestamp WHERE id = :scheduleId")
+    @Query("UPDATE work_schedules SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE id = :scheduleId")
     suspend fun markWorkScheduleAsSynced(scheduleId: String, timestamp: Long)
 
     /**
@@ -121,19 +121,19 @@ interface WorkScheduleDao {
     /**
      * Update tracking mode.
      */
-    @Query("UPDATE auto_tracking_settings SET trackingMode = :mode, updatedAt = :updatedAt, needsSync = 1 WHERE userId = :userId")
-    suspend fun updateTrackingMode(userId: String, mode: String, updatedAt: String)
+    @Query("UPDATE auto_tracking_settings SET trackingMode = :mode, updatedAt = :updatedAt, syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :localUpdatedAt WHERE userId = :userId")
+    suspend fun updateTrackingMode(userId: String, mode: String, updatedAt: String, localUpdatedAt: Long = System.currentTimeMillis())
 
     /**
      * Get auto-tracking settings that need sync.
      */
-    @Query("SELECT * FROM auto_tracking_settings WHERE userId = :userId AND needsSync = 1")
+    @Query("SELECT * FROM auto_tracking_settings WHERE userId = :userId AND syncStatus != 'SYNCED'")
     suspend fun getAutoTrackingSettingsNeedingSync(userId: String): AutoTrackingSettingsEntity?
 
     /**
      * Mark auto-tracking settings as synced.
      */
-    @Query("UPDATE auto_tracking_settings SET needsSync = 0, lastSyncedAt = :timestamp WHERE userId = :userId")
+    @Query("UPDATE auto_tracking_settings SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE userId = :userId")
     suspend fun markAutoTrackingSettingsAsSynced(userId: String, timestamp: Long)
 
     /**

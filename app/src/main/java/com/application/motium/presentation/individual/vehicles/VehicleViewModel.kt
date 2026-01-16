@@ -14,6 +14,13 @@ import kotlinx.coroutines.launch
 import kotlinx.datetime.*
 import java.util.UUID
 
+/**
+ * OFFLINE-FIRST: ViewModel for vehicle management.
+ * Uses VehicleRepository which handles offline-first strategy:
+ * - Reads from Room Database (works offline)
+ * - Writes to Room first, then syncs to Supabase in background
+ * - Background sync does not block UI operations
+ */
 class VehicleViewModel(
     private val context: Context,
     private val vehicleRepository: VehicleRepository = VehicleRepository.getInstance(context),
@@ -272,7 +279,7 @@ class VehicleViewModel(
 }
 
 data class VehicleUiState(
-    val isLoading: Boolean = false,
+    val isLoading: Boolean = true, // Start with true to show loading indicator immediately
     val error: String? = null,
     val successMessage: String? = null,
     val showAddDialog: Boolean = false

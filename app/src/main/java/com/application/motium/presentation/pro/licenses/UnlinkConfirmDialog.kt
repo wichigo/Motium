@@ -28,6 +28,8 @@ fun UnlinkConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         icon = {
             Icon(
                 Icons.Outlined.Warning,

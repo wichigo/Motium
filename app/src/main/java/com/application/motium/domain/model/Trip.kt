@@ -26,6 +26,8 @@ data class Trip(
     val reimbursementAmount: Double? = null, // Stored mileage reimbursement calculated at save time
     val isWorkHomeTrip: Boolean = false, // Trajet travail-maison (uniquement pour trajets perso, donne droit aux indemnités)
     val tracePoints: List<LocationPoint>?,
+    val notes: String? = null,
+    val matchedRouteCoordinates: String? = null, // CACHE: Map-matched route coordinates as JSON [[lon,lat],...]
     val createdAt: Instant,
     val updatedAt: Instant
 )

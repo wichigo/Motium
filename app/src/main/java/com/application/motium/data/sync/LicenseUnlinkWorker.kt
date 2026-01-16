@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.application.motium.MotiumApplication
-import com.application.motium.data.supabase.LicenseRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -24,7 +24,7 @@ class LicenseUnlinkWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
-    private val licenseRepository by lazy { LicenseRepository.getInstance(applicationContext) }
+    private val licenseRemoteDataSource by lazy { LicenseRemoteDataSource.getInstance(applicationContext) }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
@@ -33,7 +33,7 @@ class LicenseUnlinkWorker(
                 "LicenseUnlinkWorker"
             )
 
-            val result = licenseRepository.processExpiredUnlinks()
+            val result = licenseRemoteDataSource.processExpiredUnlinks()
 
             result.fold(
                 onSuccess = { count ->

@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,6 +36,8 @@ fun AssignLicenseDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         title = {
             Text(
                 "Assigner la licence",
@@ -127,17 +130,18 @@ fun AssignLicenseDialog(
                         }
                     }
                     else -> {
-                        // Accounts list
+                        // Accounts list (only show accounts with userId - not pending invitations)
+                        val assignableAccounts = linkedAccounts.filter { it.userId != null }
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 300.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(linkedAccounts) { account ->
+                            items(assignableAccounts) { account ->
                                 AccountSelectionRow(
                                     account = account,
-                                    onClick = { onAssign(license.id, account.userId) }
+                                    onClick = { account.userId?.let { onAssign(license.id, it) } }
                                 )
                             }
                         }

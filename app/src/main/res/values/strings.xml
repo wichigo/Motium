@@ -2,6 +2,10 @@
     <string name="app_name">Motium</string>
 
     <!-- Google Sign-In configuration -->
-    <!-- TODO: Replace with your actual Google Cloud Console Web Client ID -->
-    <string name="default_web_client_id">YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com</string>
+    <string name="default_web_client_id">187742237215-tbrprl2pbhusr92o5nl4vbfvt04b9m3k.apps.googleusercontent.com</string>
+
+    <!-- Sync Status Indicator -->
+    <string name="sync_status_offline">Mode hors-ligne</string>
+    <string name="sync_status_pending">%1$d en attente</string>
+    <string name="sync_status_synced">Synchronisé</string>
 </resources>

@@ -8,8 +8,10 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.application.motium.data.local.dao.CompanyLinkDao
+import com.application.motium.data.local.dao.ConsentDao
 import com.application.motium.data.local.dao.ExpenseDao
 import com.application.motium.data.local.dao.LicenseDao
+import com.application.motium.data.local.dao.LinkedUserDao
 import com.application.motium.data.local.dao.PendingFileUploadDao
 import com.application.motium.data.local.dao.PendingOperationDao
 import com.application.motium.data.local.dao.ProAccountDao
@@ -21,8 +23,10 @@ import com.application.motium.data.local.dao.VehicleDao
 import com.application.motium.data.local.dao.WorkScheduleDao
 import com.application.motium.data.local.entities.AutoTrackingSettingsEntity
 import com.application.motium.data.local.entities.CompanyLinkEntity
+import com.application.motium.data.local.entities.ConsentEntity
 import com.application.motium.data.local.entities.ExpenseEntity
 import com.application.motium.data.local.entities.LicenseEntity
+import com.application.motium.data.local.entities.LinkedUserEntity
 import com.application.motium.data.local.entities.PendingFileUploadEntity
 import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.ProAccountEntity
@@ -58,9 +62,11 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         LicenseEntity::class,
         ProAccountEntity::class,
         StripeSubscriptionEntity::class,
-        PendingFileUploadEntity::class
+        PendingFileUploadEntity::class,
+        ConsentEntity::class,
+        LinkedUserEntity::class
     ],
-    version = 17,  // v17: Added pending_file_uploads table for offline receipt uploads
+    version = 22,  // v22: Add LinkedUserEntity for offline-first Pro linked users
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)
@@ -78,6 +84,8 @@ abstract class MotiumDatabase : RoomDatabase() {
     abstract fun proAccountDao(): ProAccountDao
     abstract fun stripeSubscriptionDao(): StripeSubscriptionDao
     abstract fun pendingFileUploadDao(): PendingFileUploadDao
+    abstract fun consentDao(): ConsentDao
+    abstract fun linkedUserDao(): LinkedUserDao
 
     companion object {
         private const val DATABASE_NAME = "motium_database"
@@ -325,6 +333,431 @@ abstract class MotiumDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from v17 to v18: Offline-first GDPR consent management
+         * - Create consents table for user consent tracking
+         * - Enables offline consent management with sync
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ==================== TABLE: consents ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS consents (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        consentType TEXT NOT NULL,
+                        granted INTEGER NOT NULL,
+                        version INTEGER NOT NULL,
+                        grantedAt INTEGER,
+                        revokedAt INTEGER,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        syncStatus TEXT NOT NULL DEFAULT 'SYNCED',
+                        localUpdatedAt INTEGER NOT NULL,
+                        serverUpdatedAt INTEGER
+                    )
+                """)
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_consents_userId_consentType ON consents(userId, consentType)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_consents_syncStatus ON consents(syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_consents_userId ON consents(userId)")
+            }
+        }
+
+        /**
+         * Migration from v18 to v19: Remove phone verification columns
+         * - Remove phoneVerified column from users table
+         * - Remove verifiedPhone column from users table
+         * - Phone verification is no longer required for account creation
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // SQLite < 3.35 doesn't support DROP COLUMN - recreate table
+                // Create new users table without phone verification columns
+                // NOTE: Do NOT use DEFAULT clauses - Room expects 'undefined' for columns
+                // without @ColumnInfo(defaultValue=...) annotation
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS users_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        name TEXT NOT NULL,
+                        email TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        subscriptionType TEXT NOT NULL,
+                        subscriptionExpiresAt TEXT,
+                        trialStartedAt TEXT,
+                        trialEndsAt TEXT,
+                        stripeCustomerId TEXT,
+                        stripeSubscriptionId TEXT,
+                        phoneNumber TEXT NOT NULL,
+                        address TEXT NOT NULL,
+                        deviceFingerprintId TEXT,
+                        considerFullDistance INTEGER NOT NULL,
+                        favoriteColors TEXT NOT NULL,
+                        createdAt TEXT NOT NULL,
+                        updatedAt TEXT NOT NULL,
+                        lastSyncedAt INTEGER,
+                        isLocallyConnected INTEGER NOT NULL,
+                        syncStatus TEXT NOT NULL,
+                        localUpdatedAt INTEGER NOT NULL,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL
+                    )
+                """)
+
+                // Copy data from old table, excluding phoneVerified and verifiedPhone
+                db.execSQL("""
+                    INSERT INTO users_new SELECT
+                        id, name, email, role, subscriptionType, subscriptionExpiresAt,
+                        trialStartedAt, trialEndsAt, stripeCustomerId, stripeSubscriptionId,
+                        phoneNumber, address, deviceFingerprintId, considerFullDistance,
+                        favoriteColors, createdAt, updatedAt, lastSyncedAt, isLocallyConnected,
+                        syncStatus, localUpdatedAt, serverUpdatedAt, version
+                    FROM users
+                """)
+
+                // Drop old table and rename new one
+                db.execSQL("DROP TABLE users")
+                db.execSQL("ALTER TABLE users_new RENAME TO users")
+
+                // Recreate index
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_users_email ON users(email)")
+            }
+        }
+
+        /**
+         * Migration from v19 to v20: Invitation flow improvements
+         * - Add invitation_email column to company_links (email of invited person)
+         * - Add invitation_expires_at column to company_links
+         * - Make userId nullable (null until invitation is accepted)
+         * - Enables inviting users who don't have an account yet
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add new columns to company_links for invitation flow
+                db.execSQL("ALTER TABLE company_links ADD COLUMN invitationEmail TEXT")
+                db.execSQL("ALTER TABLE company_links ADD COLUMN invitationExpiresAt TEXT")
+
+                // Note: SQLite doesn't support changing NOT NULL to NULL for existing columns
+                // The userId column is already TEXT which can store NULL values
+                // Room will handle the nullable type mapping correctly
+            }
+        }
+
+        /**
+         * Migration from v20 to v21: Standardize sync pattern across all entities
+         * - Add modern sync fields to CompanyLinkEntity, WorkScheduleEntity, AutoTrackingSettingsEntity
+         * - Add deletedAt to LicenseEntity for consistency
+         * - IMPORTANT: Recreate trips table to remove legacy columns (lastSyncedAt, needsSync)
+         *   Room does NOT ignore extra columns - it requires exact schema match
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ==================== TRIPS - RECREATE TO REMOVE LEGACY COLUMNS ====================
+                // Room requires exact schema match, so we must remove lastSyncedAt and needsSync
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS trips_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        startTime INTEGER NOT NULL,
+                        endTime INTEGER,
+                        locations TEXT NOT NULL,
+                        totalDistance REAL NOT NULL,
+                        isValidated INTEGER NOT NULL,
+                        vehicleId TEXT,
+                        startAddress TEXT,
+                        endAddress TEXT,
+                        notes TEXT,
+                        tripType TEXT,
+                        reimbursementAmount REAL,
+                        isWorkHomeTrip INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        matchedRouteCoordinates TEXT,
+                        syncStatus TEXT NOT NULL,
+                        localUpdatedAt INTEGER NOT NULL,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL,
+                        deletedAt INTEGER
+                    )
+                """)
+
+                // Copy data from old table, excluding lastSyncedAt and needsSync
+                db.execSQL("""
+                    INSERT INTO trips_new (
+                        id, userId, startTime, endTime, locations, totalDistance,
+                        isValidated, vehicleId, startAddress, endAddress, notes, tripType,
+                        reimbursementAmount, isWorkHomeTrip, createdAt, updatedAt,
+                        matchedRouteCoordinates, syncStatus, localUpdatedAt, serverUpdatedAt,
+                        version, deletedAt
+                    )
+                    SELECT
+                        id, userId, startTime, endTime, locations, totalDistance,
+                        isValidated, vehicleId, startAddress, endAddress, notes, tripType,
+                        reimbursementAmount, isWorkHomeTrip, createdAt, updatedAt,
+                        matchedRouteCoordinates, syncStatus, localUpdatedAt, serverUpdatedAt,
+                        version, deletedAt
+                    FROM trips
+                """)
+
+                // Drop old table and rename new one
+                db.execSQL("DROP TABLE trips")
+                db.execSQL("ALTER TABLE trips_new RENAME TO trips")
+
+                // Recreate indexes for trips
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_trips_syncStatus ON trips(syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_trips_userId_startTime ON trips(userId, startTime)")
+
+                // ==================== VEHICLES - RECREATE TO REMOVE LEGACY COLUMNS ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS vehicles_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        licensePlate TEXT,
+                        power TEXT,
+                        fuelType TEXT,
+                        mileageRate REAL NOT NULL,
+                        isDefault INTEGER NOT NULL,
+                        totalMileagePerso REAL NOT NULL,
+                        totalMileagePro REAL NOT NULL,
+                        totalMileageWorkHome REAL NOT NULL,
+                        createdAt TEXT NOT NULL,
+                        updatedAt TEXT NOT NULL,
+                        syncStatus TEXT NOT NULL,
+                        localUpdatedAt INTEGER NOT NULL,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL,
+                        deletedAt INTEGER
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT INTO vehicles_new (
+                        id, userId, name, type, licensePlate, power, fuelType,
+                        mileageRate, isDefault, totalMileagePerso, totalMileagePro,
+                        totalMileageWorkHome, createdAt, updatedAt, syncStatus,
+                        localUpdatedAt, serverUpdatedAt, version, deletedAt
+                    )
+                    SELECT
+                        id, userId, name, type, licensePlate, power, fuelType,
+                        mileageRate, isDefault, totalMileagePerso, totalMileagePro,
+                        totalMileageWorkHome, createdAt, updatedAt, syncStatus,
+                        localUpdatedAt, serverUpdatedAt, version, deletedAt
+                    FROM vehicles
+                """)
+
+                db.execSQL("DROP TABLE vehicles")
+                db.execSQL("ALTER TABLE vehicles_new RENAME TO vehicles")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_vehicles_syncStatus ON vehicles(syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_vehicles_userId ON vehicles(userId)")
+
+                // ==================== EXPENSES - RECREATE TO REMOVE LEGACY COLUMNS ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS expenses_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        amount REAL NOT NULL,
+                        amountHT REAL,
+                        note TEXT NOT NULL,
+                        photoUri TEXT,
+                        createdAt TEXT NOT NULL,
+                        updatedAt TEXT NOT NULL,
+                        syncStatus TEXT NOT NULL,
+                        localUpdatedAt INTEGER NOT NULL,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL,
+                        deletedAt INTEGER
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT INTO expenses_new (
+                        id, userId, date, type, amount, amountHT, note, photoUri,
+                        createdAt, updatedAt, syncStatus, localUpdatedAt,
+                        serverUpdatedAt, version, deletedAt
+                    )
+                    SELECT
+                        id, userId, date, type, amount, amountHT, note, photoUri,
+                        createdAt, updatedAt, syncStatus, localUpdatedAt,
+                        serverUpdatedAt, version, deletedAt
+                    FROM expenses
+                """)
+
+                db.execSQL("DROP TABLE expenses")
+                db.execSQL("ALTER TABLE expenses_new RENAME TO expenses")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expenses_syncStatus ON expenses(syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expenses_userId_date ON expenses(userId, date)")
+
+                // ==================== WORK_SCHEDULES - RECREATE TO REMOVE LEGACY COLUMNS ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS work_schedules_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        dayOfWeek INTEGER NOT NULL,
+                        startHour INTEGER NOT NULL,
+                        startMinute INTEGER NOT NULL,
+                        endHour INTEGER NOT NULL,
+                        endMinute INTEGER NOT NULL,
+                        isOvernight INTEGER NOT NULL,
+                        isActive INTEGER NOT NULL,
+                        createdAt TEXT NOT NULL,
+                        updatedAt TEXT NOT NULL,
+                        syncStatus TEXT NOT NULL DEFAULT 'SYNCED',
+                        localUpdatedAt INTEGER NOT NULL DEFAULT 0,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL DEFAULT 1,
+                        deletedAt INTEGER
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT INTO work_schedules_new (
+                        id, userId, dayOfWeek, startHour, startMinute, endHour, endMinute,
+                        isOvernight, isActive, createdAt, updatedAt, syncStatus, localUpdatedAt,
+                        serverUpdatedAt, version, deletedAt
+                    )
+                    SELECT
+                        id, userId, dayOfWeek, startHour, startMinute, endHour, endMinute,
+                        isOvernight, isActive, createdAt, updatedAt, 'SYNCED',
+                        strftime('%s', 'now') * 1000, NULL, 1, NULL
+                    FROM work_schedules
+                """)
+
+                db.execSQL("DROP TABLE work_schedules")
+                db.execSQL("ALTER TABLE work_schedules_new RENAME TO work_schedules")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_work_schedules_syncStatus ON work_schedules(syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_work_schedules_userId ON work_schedules(userId)")
+
+                // ==================== AUTO_TRACKING_SETTINGS - RECREATE ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS auto_tracking_settings_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        trackingMode TEXT NOT NULL,
+                        minTripDistanceMeters INTEGER NOT NULL,
+                        minTripDurationSeconds INTEGER NOT NULL,
+                        createdAt TEXT NOT NULL,
+                        updatedAt TEXT NOT NULL,
+                        syncStatus TEXT NOT NULL DEFAULT 'SYNCED',
+                        localUpdatedAt INTEGER NOT NULL DEFAULT 0,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL DEFAULT 1,
+                        deletedAt INTEGER
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT INTO auto_tracking_settings_new (
+                        id, userId, trackingMode, minTripDistanceMeters, minTripDurationSeconds,
+                        createdAt, updatedAt, syncStatus, localUpdatedAt, serverUpdatedAt,
+                        version, deletedAt
+                    )
+                    SELECT
+                        id, userId, trackingMode, minTripDistanceMeters, minTripDurationSeconds,
+                        createdAt, updatedAt, 'SYNCED', strftime('%s', 'now') * 1000, NULL, 1, NULL
+                    FROM auto_tracking_settings
+                """)
+
+                db.execSQL("DROP TABLE auto_tracking_settings")
+                db.execSQL("ALTER TABLE auto_tracking_settings_new RENAME TO auto_tracking_settings")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_auto_tracking_settings_syncStatus ON auto_tracking_settings(syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_auto_tracking_settings_userId ON auto_tracking_settings(userId)")
+
+                // ==================== COMPANY_LINKS - RECREATE ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS company_links_new (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT,
+                        linkedProAccountId TEXT NOT NULL,
+                        companyName TEXT NOT NULL,
+                        department TEXT,
+                        status TEXT NOT NULL,
+                        shareProfessionalTrips INTEGER NOT NULL,
+                        sharePersonalTrips INTEGER NOT NULL,
+                        sharePersonalInfo INTEGER NOT NULL,
+                        shareExpenses INTEGER NOT NULL,
+                        invitationToken TEXT,
+                        invitationEmail TEXT,
+                        invitationExpiresAt TEXT,
+                        linkedAt TEXT,
+                        linkedActivatedAt TEXT,
+                        unlinkedAt TEXT,
+                        createdAt TEXT NOT NULL,
+                        updatedAt TEXT NOT NULL,
+                        syncStatus TEXT NOT NULL DEFAULT 'SYNCED',
+                        localUpdatedAt INTEGER NOT NULL DEFAULT 0,
+                        serverUpdatedAt INTEGER,
+                        version INTEGER NOT NULL DEFAULT 1,
+                        deletedAt INTEGER
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT INTO company_links_new (
+                        id, userId, linkedProAccountId, companyName, department, status,
+                        shareProfessionalTrips, sharePersonalTrips, sharePersonalInfo, shareExpenses,
+                        invitationToken, invitationEmail, invitationExpiresAt, linkedAt,
+                        linkedActivatedAt, unlinkedAt, createdAt, updatedAt,
+                        syncStatus, localUpdatedAt, serverUpdatedAt, version, deletedAt
+                    )
+                    SELECT
+                        id, userId, linkedProAccountId, companyName, department, status,
+                        shareProfessionalTrips, sharePersonalTrips, sharePersonalInfo, shareExpenses,
+                        invitationToken, invitationEmail, invitationExpiresAt, linkedAt,
+                        linkedActivatedAt, unlinkedAt, createdAt, updatedAt,
+                        'SYNCED', strftime('%s', 'now') * 1000, NULL, 1, NULL
+                    FROM company_links
+                """)
+
+                db.execSQL("DROP TABLE company_links")
+                db.execSQL("ALTER TABLE company_links_new RENAME TO company_links")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_company_links_userId ON company_links(userId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_company_links_linkedProAccountId ON company_links(linkedProAccountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_company_links_syncStatus ON company_links(syncStatus)")
+
+                // ==================== LICENSES ====================
+                // Add deletedAt for consistency (other sync fields already exist)
+                db.execSQL("ALTER TABLE licenses ADD COLUMN deletedAt INTEGER")
+            }
+        }
+
+        /**
+         * Migration from v21 to v22: Add LinkedUserEntity for offline-first Pro linked users
+         * - Create linked_users table to cache linked users (employees linked to Pro accounts)
+         * - Enables offline access to LinkedAccountsScreen
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ==================== TABLE: linked_users ====================
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS linked_users (
+                        linkId TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT,
+                        proAccountId TEXT NOT NULL,
+                        userName TEXT,
+                        userEmail TEXT NOT NULL,
+                        userPhone TEXT,
+                        department TEXT,
+                        linkStatus TEXT NOT NULL,
+                        shareProfessionalTrips INTEGER NOT NULL DEFAULT 1,
+                        sharePersonalTrips INTEGER NOT NULL DEFAULT 0,
+                        sharePersonalInfo INTEGER NOT NULL DEFAULT 1,
+                        shareExpenses INTEGER NOT NULL DEFAULT 0,
+                        invitedAt INTEGER,
+                        linkActivatedAt INTEGER,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        syncStatus TEXT NOT NULL DEFAULT 'SYNCED',
+                        version INTEGER NOT NULL DEFAULT 1
+                    )
+                """)
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_linked_users_proAccountId ON linked_users(proAccountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_linked_users_userId ON linked_users(userId)")
+            }
+        }
+
+        /**
          * Get singleton instance of the database.
          * Uses double-check locking for thread safety.
          */
@@ -340,6 +773,19 @@ abstract class MotiumDatabase : RoomDatabase() {
                 MotiumDatabase::class.java,
                 DATABASE_NAME
             )
+                // Add migrations for smooth schema updates
+                .addMigrations(
+                    MIGRATION_11_12,
+                    MIGRATION_12_13,
+                    MIGRATION_14_15,
+                    MIGRATION_15_16,
+                    MIGRATION_16_17,
+                    MIGRATION_17_18,
+                    MIGRATION_18_19,
+                    MIGRATION_19_20,
+                    MIGRATION_20_21,
+                    MIGRATION_21_22
+                )
                 // NOTE: fallbackToDestructiveMigration() est OK en développement
                 // Cela permet à Room de recréer la base si le schéma change
                 // ⚠️ AVANT LA PRODUCTION: Retirer cette ligne et écrire des migrations propres
@@ -366,6 +812,8 @@ abstract class MotiumDatabase : RoomDatabase() {
             db.proAccountDao().deleteAll()
             db.stripeSubscriptionDao().deleteAll()
             db.pendingFileUploadDao().deleteAll()
+            db.consentDao().deleteAll()
+            db.linkedUserDao().deleteAll()
         }
     }
 }

@@ -11,7 +11,13 @@ import kotlinx.datetime.Instant
  * Room entity for storing work schedule data locally.
  * Allows offline work schedule management and automatic sync when connection is restored.
  */
-@Entity(tableName = "work_schedules")
+@Entity(
+    tableName = "work_schedules",
+    indices = [
+        androidx.room.Index(value = ["syncStatus"]),
+        androidx.room.Index(value = ["userId"])
+    ]
+)
 data class WorkScheduleEntity(
     @PrimaryKey
     val id: String,
@@ -25,8 +31,12 @@ data class WorkScheduleEntity(
     val isActive: Boolean,
     val createdAt: String,         // Instant stored as ISO-8601 string
     val updatedAt: String,         // Instant stored as ISO-8601 string
-    val lastSyncedAt: Long?,       // Timestamp of last sync with Supabase
-    val needsSync: Boolean         // Flag indicating if schedule needs to be synced
+    // ==================== OFFLINE-FIRST SYNC FIELDS ====================
+    val syncStatus: String = SyncStatus.SYNCED.name, // SyncStatus enum as String
+    val localUpdatedAt: Long = System.currentTimeMillis(), // Local modification timestamp
+    val serverUpdatedAt: Long? = null, // Server's updated_at (from Supabase)
+    val version: Int = 1,          // Optimistic locking version
+    val deletedAt: Long? = null    // Soft delete timestamp (null = not deleted)
 )
 
 /**
@@ -51,7 +61,12 @@ fun WorkScheduleEntity.toDomainModel(): WorkSchedule {
 /**
  * Extension function to convert domain WorkSchedule to WorkScheduleEntity
  */
-fun WorkSchedule.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean = false): WorkScheduleEntity {
+fun WorkSchedule.toEntity(
+    syncStatus: String = SyncStatus.SYNCED.name,
+    localUpdatedAt: Long = System.currentTimeMillis(),
+    serverUpdatedAt: Long? = null,
+    version: Int = 1
+): WorkScheduleEntity {
     return WorkScheduleEntity(
         id = id,
         userId = userId,
@@ -64,15 +79,23 @@ fun WorkSchedule.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean = false
         isActive = isActive,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync
+        syncStatus = syncStatus,
+        localUpdatedAt = localUpdatedAt,
+        serverUpdatedAt = serverUpdatedAt,
+        version = version
     )
 }
 
 /**
  * Room entity for storing auto-tracking settings locally.
  */
-@Entity(tableName = "auto_tracking_settings")
+@Entity(
+    tableName = "auto_tracking_settings",
+    indices = [
+        androidx.room.Index(value = ["syncStatus"]),
+        androidx.room.Index(value = ["userId"])
+    ]
+)
 data class AutoTrackingSettingsEntity(
     @PrimaryKey
     val id: String,
@@ -82,8 +105,12 @@ data class AutoTrackingSettingsEntity(
     val minTripDurationSeconds: Int,
     val createdAt: String,
     val updatedAt: String,
-    val lastSyncedAt: Long?,
-    val needsSync: Boolean
+    // ==================== OFFLINE-FIRST SYNC FIELDS ====================
+    val syncStatus: String = SyncStatus.SYNCED.name, // SyncStatus enum as String
+    val localUpdatedAt: Long = System.currentTimeMillis(), // Local modification timestamp
+    val serverUpdatedAt: Long? = null, // Server's updated_at (from Supabase)
+    val version: Int = 1,          // Optimistic locking version
+    val deletedAt: Long? = null    // Soft delete timestamp (null = not deleted)
 )
 
 /**
@@ -104,7 +131,12 @@ fun AutoTrackingSettingsEntity.toDomainModel(): AutoTrackingSettings {
 /**
  * Extension function to convert domain AutoTrackingSettings to entity
  */
-fun AutoTrackingSettings.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean = false): AutoTrackingSettingsEntity {
+fun AutoTrackingSettings.toEntity(
+    syncStatus: String = SyncStatus.SYNCED.name,
+    localUpdatedAt: Long = System.currentTimeMillis(),
+    serverUpdatedAt: Long? = null,
+    version: Int = 1
+): AutoTrackingSettingsEntity {
     return AutoTrackingSettingsEntity(
         id = id,
         userId = userId,
@@ -113,7 +145,9 @@ fun AutoTrackingSettings.toEntity(lastSyncedAt: Long? = null, needsSync: Boolean
         minTripDurationSeconds = minTripDurationSeconds,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync
+        syncStatus = syncStatus,
+        localUpdatedAt = localUpdatedAt,
+        serverUpdatedAt = serverUpdatedAt,
+        version = version
     )
 }

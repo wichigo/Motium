@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Star
@@ -103,6 +104,31 @@ fun EditVehicleScreen(
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
                             contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            if (vehicle != null && name.isNotBlank()) {
+                                val updatedVehicle = vehicle.copy(
+                                    name = name,
+                                    type = selectedType,
+                                    licensePlate = licensePlate.takeIf { it.isNotBlank() },
+                                    power = selectedPower,
+                                    fuelType = selectedFuelType,
+                                    mileageRate = calculatedMileageRate,
+                                    isDefault = isDefault,
+                                    updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+                                )
+                                viewModel.updateVehicle(updatedVehicle)
+                            }
+                        },
+                        enabled = name.isNotBlank() && !uiState.isLoading
+                    ) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = "Save"
                         )
                     }
                 },

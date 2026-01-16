@@ -1,5 +1,6 @@
 package com.application.motium.domain.model
 
+import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -26,8 +27,19 @@ data class ProAccount(
     @SerialName("billing_day")
     val billingDay: Int = 5,
 
-    // Stripe
-    val stripeCustomerId: String? = null
+    // Jour de renouvellement unifié pour les licences mensuelles (1-15)
+    // Utilisé par Stripe pour ancrer les subscriptions
+    @SerialName("billing_anchor_day")
+    val billingAnchorDay: Int? = null,
+
+    // Départements/services de l'entreprise
+    val departments: List<String> = emptyList(),
+
+    // Timestamps
+    @SerialName("created_at")
+    val createdAt: Instant? = null,
+    @SerialName("updated_at")
+    val updatedAt: Instant? = null,
 ) {
     /**
      * Vérifie si le jour de facturation est valide (1-28)

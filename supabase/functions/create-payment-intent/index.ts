@@ -10,6 +10,24 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 }
 
+// Stripe Product IDs (Test Mode)
+const PRODUCTS = {
+  individual_monthly: "prod_TdmBT4sDscYZer",
+  individual_lifetime: "prod_Tdm94ZsJEGevzK",
+  pro_license_monthly: "prod_Tdm6mAbHVHJLxz",
+  pro_license_lifetime: "prod_TdmC9Jq3tCk94E",
+}
+
+// Prices in cents
+const PRICES = {
+  individual_monthly: 499,      // 4.99 EUR/month
+  individual_lifetime: 12000,   // 120.00 EUR one-time
+  pro_license_monthly: 499,     // 4.99 EUR/month per license
+  pro_license_lifetime: 12000,  // 120.00 EUR per license one-time
+}
+
+type PriceType = keyof typeof PRICES
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -27,88 +45,141 @@ serve(async (req) => {
       apiVersion: "2023-10-16",
     })
 
-    // Get Supabase client
+    // Get Supabase client with service role
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
     // Parse request body
-    const { userId, email, priceType, quantity = 1 } = await req.json()
+    const { userId, proAccountId, email, priceType, quantity = 1 } = await req.json()
 
-    if (!userId || !email || !priceType) {
+    // Validate inputs
+    if (!email || !priceType) {
       return new Response(
-        JSON.stringify({ error: "Missing required fields: userId, email, priceType" }),
+        JSON.stringify({ error: "Missing required fields: email, priceType" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      )
+    }
+
+    if (!userId && !proAccountId) {
+      return new Response(
+        JSON.stringify({ error: "Either userId or proAccountId is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       )
     }
 
     // Validate priceType
-    const validPriceTypes = [
+    const validPriceTypes: PriceType[] = [
       "individual_monthly",
       "individual_lifetime",
       "pro_license_monthly",
       "pro_license_lifetime"
     ]
-    if (!validPriceTypes.includes(priceType)) {
+    if (!validPriceTypes.includes(priceType as PriceType)) {
       return new Response(
         JSON.stringify({ error: `Invalid priceType. Must be one of: ${validPriceTypes.join(", ")}` }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       )
     }
 
-    // Price configuration (in cents)
-    const prices: Record<string, { amount: number; mode: "payment" | "subscription" }> = {
-      individual_monthly: { amount: 500, mode: "subscription" },      // 5€ TTC/mois
-      individual_lifetime: { amount: 10000, mode: "payment" },        // 100€ TTC
-      pro_license_monthly: { amount: 600, mode: "subscription" },     // 6€ TTC/mois (5€ HT + 20% TVA)
-      pro_license_lifetime: { amount: 12000, mode: "payment" },       // 120€ TTC (100€ HT + 20% TVA)
-    }
-
-    const priceConfig = prices[priceType]
-    const totalAmount = priceConfig.amount * quantity
+    const priceConfig = PRICES[priceType as PriceType]
+    const productId = PRODUCTS[priceType as PriceType]
+    const totalAmount = priceConfig * quantity
+    const isLifetime = priceType.includes("lifetime")
+    const isProLicense = priceType.includes("pro_license")
 
     // Create or retrieve Stripe customer
+    // Note: stripe_customer_id is always stored in users table, even for Pro accounts
     let customerId: string
+    let ownerUserId: string
 
-    // Check if user already has a Stripe customer ID
-    const { data: userData } = await supabase
-      .from("users")
-      .select("stripe_customer_id")
-      .eq("id", userId)
-      .single()
+    if (isProLicense && proAccountId) {
+      // For Pro licenses, get the owner's user_id from pro_accounts
+      const { data: proData } = await supabase
+        .from("pro_accounts")
+        .select("user_id, billing_email")
+        .eq("id", proAccountId)
+        .single()
 
-    if (userData?.stripe_customer_id) {
-      customerId = userData.stripe_customer_id
-    } else {
-      // Create new Stripe customer
-      const customer = await stripe.customers.create({
-        email: email,
-        metadata: {
-          supabase_user_id: userId,
-        },
-      })
-      customerId = customer.id
+      if (!proData?.user_id) {
+        throw new Error("Pro account not found or has no owner")
+      }
 
-      // Save customer ID to database
-      await supabase
+      ownerUserId = proData.user_id
+
+      // Get stripe_customer_id from the owner's users record
+      const { data: userData } = await supabase
         .from("users")
-        .update({ stripe_customer_id: customerId })
+        .select("stripe_customer_id")
+        .eq("id", ownerUserId)
+        .single()
+
+      if (userData?.stripe_customer_id) {
+        customerId = userData.stripe_customer_id
+      } else {
+        // Create new Stripe customer for the Pro account owner
+        const customer = await stripe.customers.create({
+          email: proData?.billing_email || email,
+          metadata: {
+            supabase_user_id: ownerUserId,
+            supabase_pro_account_id: proAccountId,
+          },
+        })
+        customerId = customer.id
+
+        // Save customer ID to users table (owner of pro account)
+        await supabase
+          .from("users")
+          .update({ stripe_customer_id: customerId })
+          .eq("id", ownerUserId)
+      }
+    } else if (userId) {
+      // For individual users, check users table
+      ownerUserId = userId
+
+      const { data: userData } = await supabase
+        .from("users")
+        .select("stripe_customer_id")
         .eq("id", userId)
+        .single()
+
+      if (userData?.stripe_customer_id) {
+        customerId = userData.stripe_customer_id
+      } else {
+        // Create new Stripe customer
+        const customer = await stripe.customers.create({
+          email: email,
+          metadata: {
+            supabase_user_id: userId,
+          },
+        })
+        customerId = customer.id
+
+        // Save customer ID to users table
+        await supabase
+          .from("users")
+          .update({ stripe_customer_id: customerId })
+          .eq("id", userId)
+      }
+    } else {
+      throw new Error("Invalid configuration: no user or pro account ID")
     }
 
     let clientSecret: string
     let paymentIntentId: string | null = null
     let subscriptionId: string | null = null
 
-    if (priceConfig.mode === "payment") {
-      // One-time payment (lifetime)
+    if (isLifetime) {
+      // One-time payment for lifetime purchases
       const paymentIntent = await stripe.paymentIntents.create({
         amount: totalAmount,
         currency: "eur",
         customer: customerId,
         metadata: {
-          supabase_user_id: userId,
+          supabase_user_id: userId || "",
+          supabase_pro_account_id: proAccountId || "",
           price_type: priceType,
+          product_id: productId,
           quantity: quantity.toString(),
         },
         automatic_payment_methods: {
@@ -118,21 +189,15 @@ serve(async (req) => {
       clientSecret = paymentIntent.client_secret!
       paymentIntentId = paymentIntent.id
     } else {
-      // Subscription (monthly)
-      // First, create or get price ID from Stripe
-      // For production, you should create these prices in Stripe Dashboard
-      // and store the price IDs in environment variables
-
+      // Subscription for monthly payments
       const subscription = await stripe.subscriptions.create({
         customer: customerId,
         items: [
           {
             price_data: {
               currency: "eur",
-              product_data: {
-                name: priceType === "individual_monthly" ? "Motium Premium" : "Motium Pro License",
-              },
-              unit_amount: priceConfig.amount,
+              product: productId,
+              unit_amount: priceConfig,
               recurring: {
                 interval: "month",
               },
@@ -146,8 +211,10 @@ serve(async (req) => {
         },
         expand: ["latest_invoice.payment_intent"],
         metadata: {
-          supabase_user_id: userId,
+          supabase_user_id: userId || "",
+          supabase_pro_account_id: proAccountId || "",
           price_type: priceType,
+          product_id: productId,
           quantity: quantity.toString(),
         },
       })
@@ -171,6 +238,8 @@ serve(async (req) => {
         ephemeral_key: ephemeralKey.secret,
         payment_intent_id: paymentIntentId,
         subscription_id: subscriptionId,
+        product_id: productId,
+        amount_cents: totalAmount,
       }),
       {
         status: 200,

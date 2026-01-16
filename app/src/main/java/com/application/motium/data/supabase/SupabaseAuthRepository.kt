@@ -20,6 +20,8 @@ import com.application.motium.domain.repository.AuthRepository
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
+import io.github.jan.supabase.auth.providers.builtin.IDToken
+import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.exceptions.RestException
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
@@ -49,6 +51,9 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     private val secureSessionStorage = SecureSessionStorage(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
+    private val emailRepository by lazy { EmailRepository.getInstance(context) }
+    private val database by lazy { MotiumDatabase.getInstance(context) }
+    private val proAccountDao by lazy { database.proAccountDao() }
 
     companion object {
         @Volatile
@@ -79,12 +84,39 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val trial_ends_at: String? = null,
         val stripe_customer_id: String? = null,
         val stripe_subscription_id: String? = null,
-        val phone_verified: Boolean = false,
-        val verified_phone: String? = null,
         val device_fingerprint_id: String? = null,
+        // User preferences
+        val phone_number: String = "",
+        val address: String = "",
+        val consider_full_distance: Boolean = false,
+        val favorite_colors: List<String> = emptyList(), // JSON array of color strings
         // Note: Pro link fields (linked_pro_account_id, link_status, sharing preferences, etc.)
         // are now managed in the company_links table
         val created_at: String,
+        val updated_at: String
+    )
+
+    /**
+     * Data class for UPDATE operations only.
+     * Does NOT include id, auth_id, or created_at to avoid corrupting these fields.
+     * Supabase RLS policy checks auth.uid() = auth_id, so we must NOT send auth_id in updates.
+     */
+    @Serializable
+    data class UserProfileUpdate(
+        val name: String,
+        val email: String,
+        val role: String,
+        val subscription_type: String = "TRIAL",
+        val subscription_expires_at: String? = null,
+        val trial_started_at: String? = null,
+        val trial_ends_at: String? = null,
+        val stripe_customer_id: String? = null,
+        val stripe_subscription_id: String? = null,
+        val device_fingerprint_id: String? = null,
+        val phone_number: String = "",
+        val address: String = "",
+        val consider_full_distance: Boolean = false,
+        val favorite_colors: List<String> = emptyList(),
         val updated_at: String
     )
 
@@ -112,11 +144,13 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 )
 
                 // Définir l'état authentifié avec les données locales
+                // IMPORTANT: initialSyncDone = false pour éviter navigation vers trial_expired avant sync
                 _authState.value = AuthState(
                     isAuthenticated = true,
                     authUser = authUser,
                     user = localUser,
-                    isLoading = false
+                    isLoading = false,
+                    initialSyncDone = false
                 )
 
                 // ÉTAPE 2: Rafraîchir la session DANS le mutex lock (pas dans un nouveau coroutine)
@@ -125,16 +159,23 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     withTimeout(10_000L) { // Timeout 10 secondes
                         refreshSessionSafe()
                     }
+                    // Sync réussie - marquer comme terminée
+                    _authState.value = _authState.value.copy(initialSyncDone = true)
+                    MotiumApplication.logger.i("✅ Initial sync completed successfully", "SupabaseAuth")
                 } catch (e: TimeoutCancellationException) {
                     MotiumApplication.logger.w(
                         "⏱️ Session refresh timeout - keeping local session (offline mode)",
                         "SupabaseAuth"
                     )
+                    // Timeout = sync terminée (mode offline), on utilise les données locales
+                    _authState.value = _authState.value.copy(initialSyncDone = true)
                 } catch (e: Exception) {
                     MotiumApplication.logger.w(
                         "⚠️ Session refresh failed: ${e.message} - keeping local session (offline mode)",
                         "SupabaseAuth"
                     )
+                    // Échec = sync terminée (mode offline), on utilise les données locales
+                    _authState.value = _authState.value.copy(initialSyncDone = true)
                 }
             } else {
                 // Pas d'utilisateur local - Vérifier l'ancienne méthode de stockage (migration)
@@ -146,7 +187,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     tryMigrateOldSession(restoredSession)
                 } else {
                     MotiumApplication.logger.i("ℹ️ Aucun utilisateur local. Utilisateur déconnecté.", "SupabaseAuth")
-                    _authState.value = AuthState(isLoading = false, isAuthenticated = false)
+                    _authState.value = AuthState(isLoading = false, isAuthenticated = false, initialSyncDone = true)
                 }
             }
         }
@@ -168,37 +209,18 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 syncUserProfileFromSupabase()
                 MotiumApplication.logger.i("✅ Session refreshed successfully", "SupabaseAuth")
             } catch (e: Exception) {
-                // Refresh failed - could be due to JWT migration (HS256 -> ES256)
+                // Refresh failed - could be network or auth error
                 MotiumApplication.logger.w(
-                    "⚠️ Session refresh failed: ${e.message}. Attempting silent re-authentication...",
+                    "⚠️ Session refresh failed: ${e.message}. Staying in offline mode with local session.",
                     "SupabaseAuth"
                 )
 
-                // Check if this might be a JWT migration issue
-                if (secureSessionStorage.needsJwtMigration()) {
-                    MotiumApplication.logger.w(
-                        "🔄 JWT migration detected (HS256 -> ES256). Old tokens are invalid.",
-                        "SupabaseAuth"
-                    )
-                }
-
-                // Try silent re-authentication with stored credentials
-                val reAuthSuccess = trySilentReAuthentication()
-
-                if (!reAuthSuccess) {
-                    // Silent re-auth failed - clean up and force re-login
-                    MotiumApplication.logger.e(
-                        "❌ Silent re-authentication failed. User must log in again.",
-                        "SupabaseAuth"
-                    )
-                    secureSessionStorage.invalidateSessionForMigration()
-                    localUserRepository.logoutUser()
-                    _authState.value = AuthState(
-                        isAuthenticated = false,
-                        isLoading = false,
-                        error = "Session expirée. Veuillez vous reconnecter."
-                    )
-                }
+                // OFFLINE-FIRST: Do NOT trigger silent re-authentication here as it causes
+                // Samsung Pass/Password Manager loops on some devices.
+                // We trust the local user data (Room) which is already loaded.
+                
+                // If it's a permanent error (invalid grant/token), the next explicit action 
+                // by the user will fail and trigger a clean logout/login flow.
             }
         }
     }
@@ -229,24 +251,27 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 saveCurrentSessionSecurely()
 
                 val userProfileResult = getUserProfile(authUser.id)
-                val user = if (userProfileResult is AuthResult.Success) userProfileResult.data else null
-
-                if (user != null) {
+                if (userProfileResult is AuthResult.Success) {
+                    val user = userProfileResult.data
                     localUserRepository.saveUser(user, isLocallyConnected = true)
+
+                    _authState.value = AuthState(
+                        isAuthenticated = true,
+                        authUser = authUser,
+                        user = user,
+                        isLoading = false,
+                        initialSyncDone = true
+                    )
+
+                    MotiumApplication.logger.i("✅ Reconnexion silencieuse réussie pour ${credentials.email}", "SupabaseAuth")
+                    return true
+                } else {
+                    MotiumApplication.logger.w("⚠️ Profil non trouvé lors de la reconnexion silencieuse", "SupabaseAuth")
+                    return false
                 }
-
-                _authState.value = AuthState(
-                    isAuthenticated = true,
-                    authUser = authUser,
-                    user = user,
-                    isLoading = false
-                )
-
-                MotiumApplication.logger.i("✅ Reconnexion silencieuse réussie pour ${credentials.email}", "SupabaseAuth")
-                true
             } else {
                 MotiumApplication.logger.w("⚠️ authUser null après reconnexion silencieuse", "SupabaseAuth")
-                false
+                return false
             }
         } catch (e: TimeoutCancellationException) {
             MotiumApplication.logger.w("⏱️ Timeout lors de la reconnexion silencieuse", "SupabaseAuth")
@@ -284,7 +309,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                         isAuthenticated = true,
                         authUser = authUser,
                         user = userProfileResult.data,
-                        isLoading = false
+                        isLoading = false,
+                        initialSyncDone = true
                     )
 
                     // CLEANUP: Nettoyer l'ancien stockage non chiffré après migration réussie
@@ -317,20 +343,20 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             }
 
             // Si tout échoue, marquer comme déconnecté
-            _authState.value = AuthState(isLoading = false, isAuthenticated = false)
+            _authState.value = AuthState(isLoading = false, isAuthenticated = false, initialSyncDone = true)
 
         } catch (e: TimeoutCancellationException) {
             MotiumApplication.logger.w("⏱️ Timeout lors de la migration, tentative de reconnexion silencieuse...", "SupabaseAuth")
             if (trySilentReAuthentication()) {
                 return
             }
-            _authState.value = AuthState(isLoading = false, isAuthenticated = false)
+            _authState.value = AuthState(isLoading = false, isAuthenticated = false, initialSyncDone = true)
         } catch (e: Exception) {
             MotiumApplication.logger.w("⚠️ Échec de la migration: ${e.message}, tentative de reconnexion silencieuse...", "SupabaseAuth")
             if (trySilentReAuthentication()) {
                 return
             }
-            _authState.value = AuthState(isLoading = false, isAuthenticated = false)
+            _authState.value = AuthState(isLoading = false, isAuthenticated = false, initialSyncDone = true)
         }
     }
 
@@ -355,6 +381,35 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
 
+    /**
+     * OFFLINE-FIRST: Vérifie si l'utilisateur est authentifié en priorisant le cache local.
+     * Cette méthode ne fait JAMAIS d'appel réseau bloquant.
+     *
+     * @return true si un utilisateur est connecté localement, même sans connexion réseau
+     */
+    suspend fun isUserAuthenticatedOfflineFirst(): Boolean {
+        // Priorité 1: Vérifier le cache local Room (rapide, offline-friendly)
+        val localUser = localUserRepository.getLoggedInUser()
+        if (localUser != null) {
+            MotiumApplication.logger.d("✅ User authenticated (local cache): ${localUser.email}", "SupabaseAuth")
+            return true
+        }
+
+        // Priorité 2: Vérifier l'état actuel (déjà chargé en mémoire)
+        if (_authState.value.isAuthenticated) {
+            return true
+        }
+
+        // Priorité 3: Vérifier Supabase si online (fire-and-forget, ne bloque pas)
+        return try {
+            auth.currentUserOrNull() != null
+        } catch (e: Exception) {
+            // Erreur réseau = pas de cache local = non authentifié
+            MotiumApplication.logger.d("⚠️ Network error checking auth, no local cache: ${e.message}", "SupabaseAuth")
+            false
+        }
+    }
+
     suspend fun refreshSession() {
         try {
             val refreshToken = secureSessionStorage.getRefreshToken()
@@ -365,25 +420,113 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 updateAuthState()
                 MotiumApplication.logger.i("✅ Session refreshed and validated successfully.", "SupabaseAuth")
             } else {
+                // OFFLINE-FIRST: Pas de refresh token MAIS utilisateur local ?
+                // Ne PAS déconnecter, garder la session locale
+                val localUser = localUserRepository.getLoggedInUser()
+                if (localUser != null) {
+                    MotiumApplication.logger.w(
+                        "⚠️ No refresh token but local user exists - keeping session (offline mode)",
+                        "SupabaseAuth"
+                    )
+                    // Garder l'utilisateur connecté avec les données locales
+                    return
+                }
+                // Pas de token ET pas d'utilisateur local = vraiment déconnecté
                 signOut()
             }
         } catch (e: Exception) {
+            // OFFLINE-FIRST: Distinguer les erreurs permanentes des erreurs réseau temporaires
             val isPermanentAuthError = e is RestException && (e.statusCode == 401 || e.statusCode == 400)
+
             if (isPermanentAuthError) {
+                // Erreur d'authentification permanente (token invalide, révoqué, etc.)
+                // MAIS vérifier d'abord si on a un utilisateur local avant de déconnecter
+                val localUser = localUserRepository.getLoggedInUser()
+                if (localUser != null) {
+                    // Tenter une reconnexion silencieuse avant de forcer la déconnexion
+                    MotiumApplication.logger.w(
+                        "⚠️ Auth error but local user exists - attempting silent re-auth...",
+                        "SupabaseAuth"
+                    )
+                    val reAuthSuccess = trySilentReAuthentication()
+                    if (reAuthSuccess) {
+                        MotiumApplication.logger.i("✅ Silent re-authentication successful after auth error", "SupabaseAuth")
+                        return
+                    }
+                }
+
                 MotiumApplication.logger.e("❌ PERMANENT AUTH ERROR on refresh: ${e.message}. Logging out.", "SupabaseAuth", e)
                 signOut()
             } else {
-                MotiumApplication.logger.w("⚠️ Temporary network error on refresh: ${e.message}. User remains logged in optimistically.", "SupabaseAuth")
+                // Erreur réseau temporaire (timeout, DNS, no internet, etc.)
+                // NE JAMAIS déconnecter sur une erreur réseau
+                MotiumApplication.logger.w(
+                    "⚠️ Temporary network error on refresh: ${e.message}. User remains logged in (offline-first).",
+                    "SupabaseAuth"
+                )
+                // L'utilisateur reste connecté avec ses données locales
             }
+        }
+    }
+
+    /**
+     * Refresh session specifically for DeltaSyncWorker.
+     * Returns true if session is valid and sync can proceed, false otherwise.
+     *
+     * Unlike refreshSession(), this method:
+     * - Returns a boolean instead of throwing/catching
+     * - Does NOT call signOut() on failure (to preserve local data)
+     * - Is designed to be called before sync operations
+     */
+    suspend fun refreshSessionForSync(): Boolean {
+        return try {
+            val refreshToken = secureSessionStorage.getRefreshToken()
+            if (refreshToken == null) {
+                MotiumApplication.logger.w("⚠️ No refresh token for sync", "SupabaseAuth")
+                return false
+            }
+
+            MotiumApplication.logger.i("🔄 Refreshing session before sync...", "SupabaseAuth")
+            auth.refreshSession(refreshToken)
+            saveCurrentSessionSecurely()
+
+            // Verify we got a valid user session (not just anon key)
+            val currentSession = auth.currentSessionOrNull()
+            if (currentSession?.user == null) {
+                // FIX: Even if SDK returns null, check secure storage which we just saved
+                // This handles race condition where SDK auth state hasn't propagated yet
+                val hasValidStoredSession = secureSessionStorage.hasValidSession()
+                if (hasValidStoredSession) {
+                    MotiumApplication.logger.w(
+                        "⚠️ SDK session user is null but secure storage has valid session - proceeding with sync",
+                        "SupabaseAuth"
+                    )
+                    return true
+                }
+                MotiumApplication.logger.w("⚠️ Session refresh succeeded but no user in session", "SupabaseAuth")
+                return false
+            }
+
+            MotiumApplication.logger.i("✅ Session refreshed for sync - user: ${currentSession.user?.email}", "SupabaseAuth")
+            true
+        } catch (e: Exception) {
+            // Don't sign out on network errors - just return false to skip sync
+            MotiumApplication.logger.w(
+                "⚠️ Session refresh for sync failed: ${e.message}. Sync will be skipped.",
+                "SupabaseAuth"
+            )
+            false
         }
     }
 
     override suspend fun signUp(request: RegisterRequest): AuthResult<AuthUser> {
         return try {
             _authState.value = _authState.value.copy(isLoading = true, error = null)
-            auth.signUpWith(Email) {
-                email = request.email
-                password = request.password
+            withTimeout(15_000L) {
+                auth.signUpWith(Email) {
+                    email = request.email
+                    password = request.password
+                }
             }
             val authUser = getCurrentAuthUser() ?: throw Exception("Failed to get user info after signup")
             saveCurrentSessionSecurely()
@@ -399,10 +542,27 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         return try {
             _authState.value = _authState.value.copy(isLoading = true, error = null)
 
+            // CLEANUP: Clear stale pending operations before sign-in
+            // This prevents RLS violations if previous user had pending sync operations
+            try {
+                val count = database.pendingOperationDao().getCount()
+                if (count > 0) {
+                    MotiumApplication.logger.i(
+                        "Clearing $count stale pending operations before email sign-in",
+                        "SupabaseAuth"
+                    )
+                    database.pendingOperationDao().deleteAll()
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Failed to clear pending operations: ${e.message}", "SupabaseAuth")
+            }
+
             // Authentification avec Supabase
-            auth.signInWith(Email) {
-                email = request.email
-                password = request.password
+            withTimeout(15_000L) {
+                auth.signInWith(Email) {
+                    email = request.email
+                    password = request.password
+                }
             }
 
             val authUser = getCurrentAuthUser() ?: throw Exception("Failed to get user info after signin")
@@ -412,13 +572,18 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             // Récupérer le profil utilisateur depuis Supabase
             val userProfileResult = getUserProfile(authUser.id)
-            val user = if (userProfileResult is AuthResult.Success) userProfileResult.data else null
+            if (userProfileResult is AuthResult.Error) {
+                MotiumApplication.logger.e("❌ Failed to load user profile during signin: ${userProfileResult.message}", "SupabaseAuth")
+                // Sign out from Supabase if we can't get the profile
+                try { auth.signOut() } catch (e: Exception) {}
+                return AuthResult.Error("Impossible de charger votre profil. Veuillez réessayer. (${userProfileResult.message})")
+            }
+            
+            val user = (userProfileResult as AuthResult.Success).data
 
             // CRITIQUE: Sauvegarder l'utilisateur dans la base de données locale Room pour l'accès offline
-            if (user != null) {
-                localUserRepository.saveUser(user, isLocallyConnected = true)
-                MotiumApplication.logger.i("✅ Utilisateur sauvegardé dans la base locale: ${user.email}", "SupabaseAuth")
-            }
+            localUserRepository.saveUser(user, isLocallyConnected = true)
+            MotiumApplication.logger.i("✅ Utilisateur sauvegardé dans la base locale: ${user.email}", "SupabaseAuth")
 
             // Sauvegarder les credentials pour la reconnexion automatique silencieuse
             secureSessionStorage.saveCredentials(request.email, request.password, "email")
@@ -431,10 +596,11 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 isAuthenticated = true,
                 authUser = authUser,
                 user = user,
-                isLoading = false
+                isLoading = false,
+                initialSyncDone = true
             )
 
-            AuthResult.Success(authUser)
+            return AuthResult.Success(authUser)
         } catch (e: Exception) {
             _authState.value = _authState.value.copy(isLoading = false, error = e.message)
             AuthResult.Error(e.message ?: "Login failed", e)
@@ -490,7 +656,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             SyncScheduler.cancelSyncWork(context)
 
             // Mettre à jour l'état de l'UI
-            _authState.value = AuthState(isAuthenticated = false, isLoading = false)
+            _authState.value = AuthState(isAuthenticated = false, isLoading = false, initialSyncDone = true)
 
             MotiumApplication.logger.i("✅ Utilisateur déconnecté avec succès. Données locales effacées.", "SupabaseAuth")
             AuthResult.Success(Unit)
@@ -519,7 +685,137 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
 
-    override suspend fun signInWithGoogle(idToken: String): AuthResult<AuthUser> = AuthResult.Error("Google Sign-In not yet implemented")
+    override suspend fun signInWithGoogle(idToken: String): AuthResult<AuthUser> {
+        return try {
+            _authState.value = _authState.value.copy(isLoading = true, error = null)
+
+            // CLEANUP: Clear stale pending operations before sign-in
+            // This prevents RLS violations if previous user had pending sync operations
+            try {
+                val count = database.pendingOperationDao().getCount()
+                if (count > 0) {
+                    MotiumApplication.logger.i(
+                        "Clearing $count stale pending operations before Google sign-in",
+                        "SupabaseAuth"
+                    )
+                    database.pendingOperationDao().deleteAll()
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Failed to clear pending operations: ${e.message}", "SupabaseAuth")
+            }
+
+            // Sign in via Supabase Auth Google provider
+            withTimeout(15_000L) {
+                auth.signInWith(IDToken) {
+                    this.idToken = idToken
+                    provider = Google
+                }
+            }
+
+            val authUser = getCurrentAuthUser()
+                ?: throw Exception("Failed to get user info after Google sign-in")
+
+            saveCurrentSessionSecurely()
+
+            // Récupérer ou créer profil utilisateur
+            val userProfileResult = getUserProfile(authUser.id)
+
+            val user = if (userProfileResult is AuthResult.Error) {
+                // Premier sign-in Google - créer profil avec essai 7 jours
+                MotiumApplication.logger.i("Creating profile for Google user", "SupabaseAuth")
+
+                val now = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
+                val trialEnds = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+                    .plus(7.days).toString()
+
+                // Step 1: Create profile first (without device_fingerprint_id)
+                val userProfile = UserProfile(
+                    auth_id = authUser.id,
+                    name = authUser.email?.split("@")?.firstOrNull() ?: "User",
+                    email = authUser.email ?: "",
+                    role = "INDIVIDUAL",
+                    subscription_type = "TRIAL",
+                    trial_started_at = now,
+                    trial_ends_at = trialEnds,
+                    device_fingerprint_id = null,
+                    created_at = now,
+                    updated_at = now
+                )
+
+                postgres.from("users").insert(userProfile)
+                val createdProfile = postgres.from("users")
+                    .select { filter { UserProfile::auth_id eq authUser.id } }
+                    .decodeSingle<UserProfile>()
+
+                val createdUser = createdProfile.toDomainUser()
+
+                // Step 2: Now register device (profile exists, FK constraint satisfied)
+                val deviceFingerprintRepo = DeviceFingerprintRepository.getInstance(context)
+                try {
+                    deviceFingerprintRepo.registerDevice(createdUser.id)
+                        .onSuccess { fingerprintId ->
+                            // Step 3: Update user profile with device_fingerprint_id
+                            try {
+                                val userProfileUpdate = UserProfileUpdate(
+                                    name = createdUser.name,
+                                    email = createdUser.email,
+                                    role = createdUser.role.name,
+                                    subscription_type = "TRIAL",
+                                    trial_started_at = now,
+                                    trial_ends_at = trialEnds,
+                                    device_fingerprint_id = fingerprintId,
+                                    updated_at = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
+                                )
+                                postgres.from("users").update(userProfileUpdate) {
+                                    filter { UserProfile::id eq createdUser.id }
+                                }
+                                MotiumApplication.logger.i(
+                                    "Device fingerprint linked for Google user: $fingerprintId",
+                                    "SupabaseAuth"
+                                )
+                            } catch (e: Exception) {
+                                MotiumApplication.logger.w(
+                                    "Failed to update profile with fingerprint: ${e.message}",
+                                    "SupabaseAuth"
+                                )
+                            }
+                        }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w(
+                        "Failed to register device for Google user: ${e.message}",
+                        "SupabaseAuth"
+                    )
+                }
+
+                createdUser
+            } else {
+                (userProfileResult as AuthResult.Success).data
+            }
+
+            // Sauvegarder localement pour offline-first
+            localUserRepository.saveUser(user, isLocallyConnected = true)
+            MotiumApplication.logger.i("✅ Google user saved: ${user.email}", "SupabaseAuth")
+
+            // Sauvegarder credentials avec provider type
+            secureSessionStorage.saveCredentials(user.email, "", "google")
+
+            SyncScheduler.scheduleSyncWork(context)
+
+            _authState.value = AuthState(
+                isAuthenticated = true,
+                authUser = authUser,
+                user = user,
+                isLoading = false,
+                initialSyncDone = true
+            )
+
+            AuthResult.Success(authUser)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Google sign-in failed: ${e.message}", "SupabaseAuth", e)
+            _authState.value = _authState.value.copy(isLoading = false, error = e.message)
+            AuthResult.Error(e.message ?: "Google sign-in failed", e)
+        }
+    }
 
     override suspend fun getCurrentAuthUser(): AuthUser? {
         val supabaseUser = auth.currentUserOrNull()
@@ -537,10 +833,47 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
     override suspend fun sendPasswordResetEmail(email: String): AuthResult<Unit> {
         return try {
-            auth.resetPasswordForEmail(email)
-            AuthResult.Success(Unit)
+            // Use custom email flow via Resend
+            val result = emailRepository.requestPasswordReset(email)
+            result.fold(
+                onSuccess = {
+                    MotiumApplication.logger.i("Password reset email sent to $email", "SupabaseAuth")
+                    AuthResult.Success(Unit)
+                },
+                onFailure = { e ->
+                    // If user not found, return success to prevent email enumeration
+                    if (e.message?.contains("User not found") == true) {
+                        MotiumApplication.logger.w("Password reset requested for unknown email: $email", "SupabaseAuth")
+                        AuthResult.Success(Unit)
+                    } else {
+                        AuthResult.Error(e.message ?: "Failed to send reset email", e)
+                    }
+                }
+            )
         } catch (e: Exception) {
+            MotiumApplication.logger.e("Password reset error: ${e.message}", "SupabaseAuth", e)
             AuthResult.Error(e.message ?: "Failed to send reset email", e)
+        }
+    }
+
+    /**
+     * Reset password using token (called after user clicks link in email)
+     */
+    suspend fun resetPasswordWithToken(token: String, newPassword: String): AuthResult<Unit> {
+        return try {
+            val result = emailRepository.resetPassword(token, newPassword)
+            result.fold(
+                onSuccess = {
+                    MotiumApplication.logger.i("Password reset successful", "SupabaseAuth")
+                    AuthResult.Success(Unit)
+                },
+                onFailure = { e ->
+                    AuthResult.Error(e.message ?: "Failed to reset password", e)
+                }
+            )
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Password reset error: ${e.message}", "SupabaseAuth", e)
+            AuthResult.Error(e.message ?: "Failed to reset password", e)
         }
     }
 
@@ -565,7 +898,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             // Note: pro_accounts.user_id est une FK vers public.users.id
             if (isEnterprise && organizationName.isNotBlank()) {
                 try {
-                    val proAccountRepo = ProAccountRepository.getInstance(context)
+                    val proAccountRepo = ProAccountRemoteDataSource.getInstance(context)
                     proAccountRepo.createProAccount(
                         userId = user.id,
                         companyName = organizationName
@@ -586,7 +919,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 isAuthenticated = true,
                 authUser = authUser,
                 user = user,
-                isLoading = false
+                isLoading = false,
+                initialSyncDone = true  // Inscription = sync terminée
             )
 
             AuthResult.Success(user)
@@ -627,8 +961,6 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 subscription_type = "TRIAL",
                 trial_started_at = nowString,
                 trial_ends_at = trialEndsString,
-                phone_verified = true,
-                verified_phone = verifiedPhone,
                 device_fingerprint_id = deviceFingerprintId,
                 created_at = nowString,
                 updated_at = nowString
@@ -641,17 +973,16 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             val user = createdProfile.toDomainUser()
 
-            // If it's an ENTERPRISE account, create a pro_account with trial
+            // If it's an ENTERPRISE account, create a pro_account
+            // Note: Trial period is tracked in users table, not pro_accounts
             if (isProfessional && organizationName.isNotBlank()) {
                 try {
-                    val proAccountRepo = ProAccountRepository.getInstance(context)
-                    proAccountRepo.createProAccountWithTrial(
+                    val proAccountRepo = ProAccountRemoteDataSource.getInstance(context)
+                    proAccountRepo.createProAccount(
                         userId = user.id,
-                        companyName = organizationName,
-                        trialStartedAt = nowString,
-                        trialEndsAt = trialEndsString
+                        companyName = organizationName
                     )
-                    MotiumApplication.logger.i("✅ Pro account with trial created for ${user.email}", "SupabaseAuth")
+                    MotiumApplication.logger.i("✅ Pro account created for ${user.email}", "SupabaseAuth")
                 } catch (e: Exception) {
                     MotiumApplication.logger.e("Error creating pro account: ${e.message}", "SupabaseAuth", e)
                 }
@@ -666,7 +997,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 isAuthenticated = true,
                 authUser = AuthUser(id = userId, email = email, isEmailConfirmed = true),
                 user = user,
-                isLoading = false
+                isLoading = false,
+                initialSyncDone = true  // Inscription = sync terminée
             )
 
             AuthResult.Success(user)
@@ -679,7 +1011,9 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     override suspend fun getUserProfile(userId: String): AuthResult<User> {
         return try {
             val authId = auth.currentUserOrNull()?.id ?: return AuthResult.Error("User not authenticated")
-            val userProfile = postgres.from("users").select { filter { UserProfile::auth_id eq authId } }.decodeSingle<UserProfile>()
+            val userProfile = withTimeout(15_000L) {
+                postgres.from("users").select { filter { UserProfile::auth_id eq authId } }.decodeSingle<UserProfile>()
+            }
             AuthResult.Success(userProfile.toDomainUser())
         } catch (e: Exception) {
             AuthResult.Error(e.message ?: "Failed to get user profile", e)
@@ -689,18 +1023,24 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     override suspend fun updateUserProfile(user: User): AuthResult<User> {
         return try {
             // Mettre à jour dans Supabase
-            val userProfile = user.toUserProfile()
-            postgres.from("users").update(userProfile) { filter { UserProfile::id eq user.id } }
+            // IMPORTANT: Utiliser UserProfileUpdate (sans id/auth_id) pour éviter de corrompre auth_id
+            // La RLS policy vérifie auth.uid() = auth_id, donc on ne doit PAS modifier auth_id
+            val userProfileUpdate = user.toUserProfileUpdate()
+            postgres.from("users").update(userProfileUpdate) {
+                filter { UserProfile::id eq user.id }
+            }
 
-            // Mettre à jour dans la base de données locale
-            localUserRepository.updateUser(user)
-            MotiumApplication.logger.i("✅ Profil utilisateur mis à jour dans la base locale", "SupabaseAuth")
+            // Mettre à jour dans la base de données locale SANS re-queuer une sync
+            // FIX: Utiliser saveUserFromServer() au lieu de updateUser() pour eviter la boucle de re-queueing
+            localUserRepository.saveUserFromServer(user, com.application.motium.data.local.entities.SyncStatus.SYNCED)
+            MotiumApplication.logger.i("✅ Profil utilisateur synchronise et marque SYNCED (consider_full_distance=${user.considerFullDistance})", "SupabaseAuth")
 
             // Mettre à jour l'état d'authentification
             _authState.value = _authState.value.copy(user = user)
 
             AuthResult.Success(user)
         } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to update user profile: ${e.message}", "SupabaseAuth", e)
             AuthResult.Error(e.message ?: "Failed to update user profile", e)
         }
     }
@@ -732,6 +1072,15 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
 
+    /**
+     * Rafraîchit l'état d'authentification depuis Supabase.
+     * Appeler après un paiement réussi pour mettre à jour le statut d'abonnement.
+     */
+    override suspend fun refreshAuthState() {
+        MotiumApplication.logger.i("🔄 refreshAuthState() called - forcing state update", "SupabaseAuth")
+        updateAuthState()
+    }
+
     private suspend fun updateAuthState() {
         MotiumApplication.logger.d("🔍 updateAuthState() called", "SupabaseAuth")
         val authUser = getCurrentAuthUser()
@@ -750,45 +1099,85 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             // Si pas d'utilisateur local non plus, alors vraiment déconnecté
             MotiumApplication.logger.w("⚠️ authUser and local user both null - setting isAuthenticated = false", "SupabaseAuth")
-            _authState.value = AuthState(isAuthenticated = false, isLoading = false)
+            _authState.value = AuthState(isAuthenticated = false, isLoading = false, initialSyncDone = true)
             return
         }
 
         val userProfileResult = getUserProfile(authUser.id)
         MotiumApplication.logger.d("   userProfileResult: ${if (userProfileResult is AuthResult.Success) "Success" else "Error"}", "SupabaseAuth")
-        val user = if (userProfileResult is AuthResult.Success) userProfileResult.data else null
+        
+        if (userProfileResult is AuthResult.Success) {
+            val user = userProfileResult.data
+            _authState.value = AuthState(
+                isAuthenticated = true,
+                authUser = authUser,
+                user = user,
+                isLoading = false,
+                initialSyncDone = true
+            )
+            MotiumApplication.logger.d("✅ updateAuthState() completed - isAuthenticated: true, user: ${user.email}", "SupabaseAuth")
+        } else {
+            // OFFLINE-FIRST: Si l'appel réseau échoue, vérifier si on a un utilisateur local
+            val localUser = localUserRepository.getLoggedInUser()
+            if (localUser != null) {
+                MotiumApplication.logger.w("⚠️ updateAuthState() network fail but local user found - keeping authenticated", "SupabaseAuth")
+                _authState.value = AuthState(
+                    isAuthenticated = true,
+                    authUser = authUser,
+                    user = localUser,
+                    isLoading = false,
+                    initialSyncDone = true
+                )
+                return
+            }
 
-        _authState.value = AuthState(
-            isAuthenticated = true,
-            authUser = authUser,
-            user = user,
-            isLoading = false,
-            error = if (user == null) "Failed to load user profile." else null
-        )
-        MotiumApplication.logger.d("✅ updateAuthState() completed - isAuthenticated: true, user: ${user?.email}", "SupabaseAuth")
+            MotiumApplication.logger.e("❌ updateAuthState() failed to load profile and no local user - setting isAuthenticated = false", "SupabaseAuth")
+            // Si on ne peut pas charger le profil ni en local ni en ligne, on ne peut pas considérer l'utilisateur comme pleinement connecté
+            _authState.value = AuthState(
+                isAuthenticated = false,
+                authUser = authUser,
+                user = null,
+                isLoading = false,
+                error = "Impossible de charger votre profil.",
+                initialSyncDone = true
+            )
+        }
     }
     
     private fun UserProfile.toDomainUser(): User {
         val resolvedId = id ?: auth_id
         MotiumApplication.logger.d("🔍 toDomainUser: UserProfile.id=$id, auth_id=$auth_id, resolvedId=$resolvedId", "SupabaseAuth")
+        
+        fun parseInstantSafe(dateStr: String?): Instant? {
+            if (dateStr.isNullOrBlank()) return null
+            return try {
+                Instant.parse(dateStr)
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Failed to parse date: $dateStr", "SupabaseAuth", e)
+                null
+            }
+        }
+
         return User(
             id = resolvedId,
             name = name,
             email = email,
-            role = UserRole.valueOf(role),
+            role = try { UserRole.valueOf(role) } catch (e: Exception) { UserRole.INDIVIDUAL },
             subscription = Subscription(
                 type = SubscriptionType.fromString(subscription_type),
-                expiresAt = subscription_expires_at?.let { Instant.parse(it) },
-                trialStartedAt = trial_started_at?.let { Instant.parse(it) },
-                trialEndsAt = trial_ends_at?.let { Instant.parse(it) },
+                expiresAt = parseInstantSafe(subscription_expires_at),
+                trialStartedAt = parseInstantSafe(trial_started_at),
+                trialEndsAt = parseInstantSafe(trial_ends_at),
                 stripeCustomerId = stripe_customer_id,
                 stripeSubscriptionId = stripe_subscription_id
             ),
-            phoneVerified = phone_verified,
-            verifiedPhone = verified_phone,
+            phoneNumber = phone_number,
+            address = address,
             deviceFingerprintId = device_fingerprint_id,
-            createdAt = Instant.parse(created_at),
-            updatedAt = Instant.parse(updated_at)
+            considerFullDistance = consider_full_distance,
+            favoriteColors = favorite_colors,
+            createdAt = parseInstantSafe(created_at) ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
+            updatedAt = parseInstantSafe(updated_at) ?: Instant.fromEpochMilliseconds(System.currentTimeMillis())
         )
     }
 
@@ -804,15 +1193,44 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         trial_ends_at = subscription.trialEndsAt?.toString(),
         stripe_customer_id = subscription.stripeCustomerId,
         stripe_subscription_id = subscription.stripeSubscriptionId,
-        phone_verified = phoneVerified,
-        verified_phone = verifiedPhone,
+        phone_number = phoneNumber,
+        address = address,
         device_fingerprint_id = deviceFingerprintId,
+        consider_full_distance = considerFullDistance,
+        favorite_colors = favoriteColors,
         created_at = createdAt.toString(),
         updated_at = updatedAt.toString()
     )
 
     /**
-     * Get the current user's Pro account ID if they are a Pro user.
+     * Convert User to UserProfileUpdate for UPDATE operations.
+     * Does NOT include id, auth_id, or created_at to avoid corrupting these immutable fields.
+     */
+    private fun User.toUserProfileUpdate(): UserProfileUpdate = UserProfileUpdate(
+        name = name,
+        email = email,
+        role = role.name,
+        subscription_type = subscription.type.name,
+        subscription_expires_at = subscription.expiresAt?.toString(),
+        trial_started_at = subscription.trialStartedAt?.toString(),
+        trial_ends_at = subscription.trialEndsAt?.toString(),
+        stripe_customer_id = subscription.stripeCustomerId,
+        stripe_subscription_id = subscription.stripeSubscriptionId,
+        phone_number = phoneNumber,
+        address = address,
+        device_fingerprint_id = deviceFingerprintId,
+        consider_full_distance = considerFullDistance,
+        favorite_colors = favoriteColors,
+        updated_at = kotlinx.datetime.Instant.fromEpochMilliseconds(java.lang.System.currentTimeMillis()).toString()
+    )
+
+    /**
+     * OFFLINE-FIRST: Get the current user's Pro account ID if they are a Pro user.
+     *
+     * Priority:
+     * 1. Check Room cache first (instant, works offline)
+     * 2. If not in cache, fetch from Supabase and cache the result
+     *
      * Returns null if the user is not a Pro user or not authenticated.
      */
     suspend fun getCurrentProAccountId(): String? {
@@ -824,10 +1242,17 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             return null
         }
 
-        return try {
-            MotiumApplication.logger.d("🔍 Looking for pro_account with user_id: ${currentUser.id}", "SupabaseAuth")
+        // OFFLINE-FIRST: Check Room cache first
+        val cachedProAccount = proAccountDao.getByUserIdOnce(currentUser.id)
+        if (cachedProAccount != null) {
+            MotiumApplication.logger.d("✅ Pro account ID from Room cache: ${cachedProAccount.id}", "SupabaseAuth")
+            return cachedProAccount.id
+        }
 
-            // Query pro_accounts table for this user
+        // Not in cache - try to fetch from Supabase
+        MotiumApplication.logger.d("🔍 Pro account not in cache, fetching from Supabase for user: ${currentUser.id}", "SupabaseAuth")
+
+        return try {
             val proAccounts = postgres.from("pro_accounts")
                 .select {
                     filter {
@@ -836,11 +1261,35 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 }
                 .decodeList<ProAccountDto>()
 
-            MotiumApplication.logger.d("🔍 Found ${proAccounts.size} pro_accounts", "SupabaseAuth")
+            val serverProAccount = proAccounts.firstOrNull()
 
-            val proAccountId = proAccounts.firstOrNull()?.id
-            MotiumApplication.logger.d("Pro account ID: $proAccountId", "SupabaseAuth")
-            proAccountId
+            if (serverProAccount != null) {
+                // Cache the result in Room for future offline access
+                val entity = com.application.motium.data.local.entities.ProAccountEntity(
+                    id = serverProAccount.id,
+                    userId = serverProAccount.userId,
+                    companyName = serverProAccount.companyName,
+                    siret = serverProAccount.siret,
+                    vatNumber = serverProAccount.vatNumber,
+                    legalForm = serverProAccount.legalForm,
+                    billingAddress = serverProAccount.billingAddress,
+                    billingEmail = serverProAccount.billingEmail,
+                    billingDay = serverProAccount.billingDay,
+                    departments = serverProAccount.departments?.toString() ?: "[]",
+                    createdAt = serverProAccount.createdAt?.let { Instant.parse(it).toEpochMilliseconds() }
+                        ?: System.currentTimeMillis(),
+                    updatedAt = serverProAccount.updatedAt?.let { Instant.parse(it).toEpochMilliseconds() }
+                        ?: System.currentTimeMillis(),
+                    syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name,
+                    serverUpdatedAt = serverProAccount.updatedAt?.let { Instant.parse(it).toEpochMilliseconds() }
+                )
+                proAccountDao.upsert(entity)
+                MotiumApplication.logger.i("✅ Pro account fetched and cached in Room: ${serverProAccount.id}", "SupabaseAuth")
+                serverProAccount.id
+            } else {
+                MotiumApplication.logger.d("No pro_account found for user ${currentUser.id}", "SupabaseAuth")
+                null
+            }
         } catch (e: PostgrestRestException) {
             // JWT expired - refresh token and retry once
             if (e.message?.contains("JWT expired") == true) {
@@ -867,9 +1316,10 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             MotiumApplication.logger.e("Error getting Pro account ID: ${e.message}", "SupabaseAuth", e)
             null
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error getting Pro account ID: ${e.message}", "SupabaseAuth", e)
+            // Network error - return null gracefully (offline mode)
+            MotiumApplication.logger.w("⚠️ Could not fetch Pro account from Supabase (offline?): ${e.message}", "SupabaseAuth")
             null
         }
     }
 }
-// ProAccountDto is defined in ProAccountRepository.kt
+// ProAccountDto is defined in ProAccountRemoteDataSource.kt

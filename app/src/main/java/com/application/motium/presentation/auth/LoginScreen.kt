@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -64,10 +65,11 @@ fun LoginScreen(
     val textSecondaryColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
     val borderColor = if (isDarkMode) Color(0xFF374151) else Color(0xFFE5E5E7)
 
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
-    var isEmailValid by remember { mutableStateOf(true) }
+    var email by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var isEmailValid by rememberSaveable { mutableStateOf(true) }
+    var credentialsRequested by rememberSaveable { mutableStateOf(false) }
 
     val loginState by viewModel.loginState.collectAsState()
     val authState by viewModel.authState.collectAsState()
@@ -95,42 +97,58 @@ fun LoginScreen(
 
     // Try to get saved credentials on first load
     LaunchedEffect(Unit) {
-        activity?.let { act ->
-            when (val result = credentialManager.getCredentials(act)) {
-                is CredentialManagerHelper.CredentialResult.Success -> {
-                    // Auto-fill with saved credentials
-                    email = result.email
-                    password = result.password
-                }
-                is CredentialManagerHelper.CredentialResult.Cancelled,
-                is CredentialManagerHelper.CredentialResult.NoCredentials,
-                is CredentialManagerHelper.CredentialResult.Error -> {
-                    // User cancelled or no saved credentials - continue normally
-                }
-            }
-        }
-    }
+        if (!credentialsRequested) {
+            // Delay to allow UI to settle and permissions to be requested if needed
+            // Prevents Samsung Pass from popping up too early or conflicting with permission dialogs
+            kotlinx.coroutines.delay(500)
 
-    // Save credentials after successful login
-    LaunchedEffect(loginState.credentialsToSave) {
-        loginState.credentialsToSave?.let { credentials ->
             activity?.let { act ->
-                // Save credentials to password manager (Samsung Pass, Google, etc.)
-                credentialManager.saveCredentials(
-                    activity = act,
-                    email = credentials.email,
-                    password = credentials.password
-                )
+                // Mark as requested to prevent re-triggering on recomposition
+                credentialsRequested = true
+                
+                when (val result = credentialManager.getCredentials(act)) {
+                    is CredentialManagerHelper.CredentialResult.Success -> {
+                        // Auto-fill with saved credentials
+                        email = result.email
+                        password = result.password
+                    }
+                    is CredentialManagerHelper.CredentialResult.Cancelled,
+                    is CredentialManagerHelper.CredentialResult.NoCredentials,
+                    is CredentialManagerHelper.CredentialResult.Error -> {
+                        // User cancelled or no saved credentials - continue normally
+                    }
+                }
             }
-            // Clear credentials after save attempt
-            viewModel.clearCredentialsToSave()
         }
     }
 
-    // Navigate to home if authenticated
-    LaunchedEffect(authState.isAuthenticated) {
+    // Trigger credential save when login succeeds
+    // The actual save happens in viewModelScope to survive recompositions
+    LaunchedEffect(loginState.credentialsToSave, loginState.isSavingCredentials) {
+        if (loginState.credentialsToSave != null && !loginState.isSavingCredentials) {
+            activity?.let { act ->
+                // This launches the save in viewModelScope (not LaunchedEffect scope)
+                // so it survives recompositions and won't be cancelled
+                viewModel.saveCredentialsAndNavigate(act, credentialManager)
+            }
+        }
+    }
+
+    // Navigate to home when ready
+    // This handles two cases:
+    // 1. Session restored: isAuthenticated=true but no login was attempted (isSuccess=false, isLoading=false)
+    // 2. Fresh login: isReadyToNavigate=true after credential save completes
+    LaunchedEffect(authState.isAuthenticated, loginState.isSuccess, loginState.isLoading, loginState.isReadyToNavigate) {
         if (authState.isAuthenticated) {
-            onNavigateToHome()
+            when {
+                // Case 1: Session restored - no login attempt was made, navigate immediately
+                !loginState.isSuccess && !loginState.isLoading -> onNavigateToHome()
+                // Case 2: Fresh login completed AND credential save finished (or was skipped)
+                loginState.isReadyToNavigate -> {
+                    viewModel.onNavigated()
+                    onNavigateToHome()
+                }
+            }
         }
     }
 

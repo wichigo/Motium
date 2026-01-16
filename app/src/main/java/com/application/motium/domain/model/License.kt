@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 /**
  * Représente une licence Pro pour un utilisateur lié
  * Tarif mensuel: 5€ HT/mois par utilisateur (6€ TTC avec TVA 20%)
- * Tarif à vie: 100€ HT par utilisateur (120€ TTC avec TVA 20%)
+ * Tarif à vie: 120€ HT par utilisateur (144€ TTC avec TVA 20%)
  *
  * Système de pool: Les licences sont achetées et vont dans un pool,
  * puis sont assignées aux comptes liés individuellement.
@@ -54,6 +54,10 @@ data class License(
     @SerialName("billing_starts_at")
     val billingStartsAt: Instant? = null,
 
+    // Pause (licence non assignée, facturation suspendue)
+    @SerialName("paused_at")
+    val pausedAt: Instant? = null,
+
     // Stripe
     @SerialName("stripe_subscription_id")
     val stripeSubscriptionId: String? = null,
@@ -70,7 +74,7 @@ data class License(
 ) {
     companion object {
         const val LICENSE_PRICE_HT = 5.0           // 5€ HT par utilisateur par mois
-        const val LICENSE_LIFETIME_PRICE_HT = 100.0 // 100€ HT par utilisateur à vie
+        const val LICENSE_LIFETIME_PRICE_HT = 120.0 // 120€ HT par utilisateur à vie
         const val VAT_RATE = 0.20                   // TVA 20%
         const val UNLINK_NOTICE_DAYS = 30          // Préavis de déliaison en jours
     }
@@ -104,6 +108,7 @@ data class License(
      */
     val effectiveStatus: LicenseEffectiveStatus
         get() = when {
+            status == LicenseStatus.PAUSED -> LicenseEffectiveStatus.PAUSED
             status != LicenseStatus.ACTIVE -> when (status) {
                 LicenseStatus.PENDING -> LicenseEffectiveStatus.PENDING_PAYMENT
                 LicenseStatus.EXPIRED -> LicenseEffectiveStatus.EXPIRED
@@ -171,6 +176,38 @@ data class License(
     fun canCancelUnlinkRequest(): Boolean {
         return isPendingUnlink
     }
+
+    /**
+     * Vérifie si la licence peut être mise en pause.
+     * Seules les licences actives NON assignées (dans le pool) peuvent être pausées.
+     * Cela permet au Pro de suspendre la facturation pour les licences inutilisées.
+     */
+    fun canPause(): Boolean {
+        return status == LicenseStatus.ACTIVE && !isAssigned && !isLifetime
+    }
+
+    /**
+     * Vérifie si la licence peut être reprise (dé-pausée).
+     */
+    fun canResume(): Boolean {
+        return status == LicenseStatus.PAUSED
+    }
+
+    /**
+     * Vérifie si la licence peut être supprimée définitivement.
+     * Seules les licences NON assignées (disponibles ou en pause) peuvent être supprimées.
+     * Les licences assignées ou en cours de déliaison ne peuvent pas être supprimées.
+     */
+    fun canDelete(): Boolean {
+        return !isAssigned && !isPendingUnlink &&
+            (status == LicenseStatus.ACTIVE || status == LicenseStatus.PAUSED || status == LicenseStatus.PENDING)
+    }
+
+    /**
+     * Vérifie si la licence est en pause
+     */
+    val isPaused: Boolean
+        get() = status == LicenseStatus.PAUSED
 }
 
 /**
@@ -188,7 +225,10 @@ enum class LicenseStatus {
     EXPIRED,     // Licence expirée (non renouvelée)
 
     @SerialName("cancelled")
-    CANCELLED    // Licence annulée par le Pro
+    CANCELLED,   // Licence annulée par le Pro
+
+    @SerialName("paused")
+    PAUSED       // Licence mise en pause (non assignée, facturation suspendue)
 }
 
 /**
@@ -202,6 +242,7 @@ enum class LicenseEffectiveStatus {
     PENDING_PAYMENT, // En attente de paiement
     EXPIRED,         // Licence expirée
     CANCELLED,       // Licence annulée
+    PAUSED,          // Licence mise en pause (facturation suspendue)
     INACTIVE         // Autre état inactif
 }
 
@@ -215,6 +256,7 @@ data class LicensesSummary(
     val pendingUnlinkLicenses: Int,  // En préavis de déliaison
     val pendingPaymentLicenses: Int, // En attente de paiement
     val expiredLicenses: Int,
+    val pausedLicenses: Int,         // En pause (facturation suspendue)
     val lifetimeLicenses: Int,       // Licences à vie
     val monthlyLicenses: Int,        // Licences mensuelles
     val monthlyTotalHT: Double,
@@ -228,10 +270,11 @@ data class LicensesSummary(
             val pendingUnlink = licenses.count { it.effectiveStatus == LicenseEffectiveStatus.PENDING_UNLINK }
             val pendingPayment = licenses.count { it.status == LicenseStatus.PENDING }
             val expired = licenses.count { it.status == LicenseStatus.EXPIRED }
+            val paused = licenses.count { it.status == LicenseStatus.PAUSED }
             val lifetime = licenses.count { it.isLifetime && it.status == LicenseStatus.ACTIVE }
             val monthly = licenses.count { !it.isLifetime && it.status == LicenseStatus.ACTIVE }
 
-            // Calcul du coût mensuel (seulement les licences mensuelles actives)
+            // Calcul du coût mensuel (seulement les licences mensuelles actives - exclut pausées)
             val monthlyActiveLicenses = licenses.filter { !it.isLifetime && it.status == LicenseStatus.ACTIVE }
             val totalHT = monthlyActiveLicenses.sumOf { it.priceMonthlyHT }
 
@@ -242,6 +285,7 @@ data class LicensesSummary(
                 pendingUnlinkLicenses = pendingUnlink,
                 pendingPaymentLicenses = pendingPayment,
                 expiredLicenses = expired,
+                pausedLicenses = paused,
                 lifetimeLicenses = lifetime,
                 monthlyLicenses = monthly,
                 monthlyTotalHT = totalHT,

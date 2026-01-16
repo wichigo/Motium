@@ -4,9 +4,11 @@ import android.content.Context
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
+import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
-import com.application.motium.data.supabase.SupabaseVehicleRepository
+import com.application.motium.data.supabase.VehicleRemoteDataSource
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.domain.model.Vehicle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -37,7 +39,7 @@ class VehicleRepository private constructor(context: Context) {
     private val database = MotiumDatabase.getInstance(context)
     private val vehicleDao = database.vehicleDao()
     private val tripDao = database.tripDao()
-    private val supabaseVehicleRepository = SupabaseVehicleRepository.getInstance(context)
+    private val vehicleRemoteDataSource = VehicleRemoteDataSource.getInstance(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
 
     /**
@@ -113,6 +115,22 @@ class VehicleRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error calculating work-home mileage: ${e.message}", "VehicleRepository", e)
             0.0
+        }
+    }
+
+    /**
+     * OFFLINE-FIRST: Get default vehicle for a specific user (for Pro export).
+     * Reads from Room database.
+     *
+     * @param userId The user ID
+     * @return The default vehicle for the user, or null if none found
+     */
+    suspend fun getDefaultVehicleForUser(userId: String): Vehicle? = withContext(Dispatchers.IO) {
+        try {
+            getDefaultVehicle(userId, applyWorkHomeDailyCap = true)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting default vehicle for user $userId: ${e.message}", "VehicleRepository", e)
+            null
         }
     }
 
@@ -232,7 +250,7 @@ class VehicleRepository private constructor(context: Context) {
             }
 
             // 1. Sauvegarder localement dans Room
-            val vehicleEntity = vehicle.toEntity(needsSync = true)
+            val vehicleEntity = vehicle.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             vehicleDao.insertVehicle(vehicleEntity)
 
             MotiumApplication.logger.i("✅ Vehicle saved to Room Database: ${vehicle.id}", "VehicleRepository")
@@ -243,10 +261,10 @@ class VehicleRepository private constructor(context: Context) {
                 if (localUser != null) {
                     // Si le véhicule est défaut, d'abord unset les autres sur Supabase
                     if (vehicle.isDefault) {
-                        supabaseVehicleRepository.setDefaultVehicle(vehicle.userId, vehicle.id)
+                        vehicleRemoteDataSource.setDefaultVehicle(vehicle.userId, vehicle.id)
                     }
 
-                    supabaseVehicleRepository.insertVehicle(vehicle)
+                    vehicleRemoteDataSource.insertVehicle(vehicle)
 
                     // Marquer comme synchronisé
                     vehicleDao.markVehicleAsSynced(vehicle.id, System.currentTimeMillis())
@@ -277,7 +295,7 @@ class VehicleRepository private constructor(context: Context) {
             }
 
             // 1. Mettre à jour localement dans Room
-            val vehicleEntity = vehicle.toEntity(needsSync = true)
+            val vehicleEntity = vehicle.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             vehicleDao.updateVehicle(vehicleEntity)
 
             MotiumApplication.logger.i("✅ Vehicle updated in Room Database: ${vehicle.id}, isDefault=${vehicle.isDefault}", "VehicleRepository")
@@ -288,10 +306,10 @@ class VehicleRepository private constructor(context: Context) {
                 if (localUser != null) {
                     // Si le véhicule est défaut, utiliser setDefaultVehicle pour unset les autres sur Supabase aussi
                     if (vehicle.isDefault) {
-                        supabaseVehicleRepository.setDefaultVehicle(vehicle.userId, vehicle.id)
+                        vehicleRemoteDataSource.setDefaultVehicle(vehicle.userId, vehicle.id)
                     }
                     // Puis mettre à jour toutes les autres propriétés
-                    supabaseVehicleRepository.updateVehicle(vehicle)
+                    vehicleRemoteDataSource.updateVehicle(vehicle)
 
                     // Marquer comme synchronisé
                     vehicleDao.markVehicleAsSynced(vehicle.id, System.currentTimeMillis())
@@ -325,7 +343,7 @@ class VehicleRepository private constructor(context: Context) {
             try {
                 val localUser = localUserRepository.getLoggedInUser()
                 if (localUser != null) {
-                    supabaseVehicleRepository.setDefaultVehicle(userId, vehicleId)
+                    vehicleRemoteDataSource.setDefaultVehicle(userId, vehicleId)
 
                     // Marquer comme synchronisé
                     vehicleDao.markVehicleAsSynced(vehicleId, System.currentTimeMillis())
@@ -357,7 +375,7 @@ class VehicleRepository private constructor(context: Context) {
             try {
                 val localUser = localUserRepository.getLoggedInUser()
                 if (localUser != null) {
-                    supabaseVehicleRepository.deleteVehicle(vehicle)
+                    vehicleRemoteDataSource.deleteVehicle(vehicle)
                     MotiumApplication.logger.i("✅ Vehicle deleted from Supabase: ${vehicle.id}", "VehicleRepository")
                 } else {
                     MotiumApplication.logger.i("Vehicle deleted locally only: ${vehicle.id}", "VehicleRepository")
@@ -395,7 +413,7 @@ class VehicleRepository private constructor(context: Context) {
             vehiclesNeedingSync.forEach { entity ->
                 try {
                     val vehicle = entity.toDomainModel()
-                    supabaseVehicleRepository.updateVehicle(vehicle)
+                    vehicleRemoteDataSource.updateVehicle(vehicle)
 
                     // Marquer comme synchronisé
                     vehicleDao.markVehicleAsSynced(vehicle.id, System.currentTimeMillis())
@@ -426,11 +444,11 @@ class VehicleRepository private constructor(context: Context) {
 
             MotiumApplication.logger.i("🔄 Fetching vehicles from Supabase for user: ${localUser.id}", "VehicleRepository")
 
-            val supabaseVehicles = supabaseVehicleRepository.getAllVehiclesForUser(localUser.id)
+            val supabaseVehicles = vehicleRemoteDataSource.getAllVehiclesForUser(localUser.id)
 
             if (supabaseVehicles.isNotEmpty()) {
                 // Convertir en entités et sauvegarder dans Room
-                val entities = supabaseVehicles.map { it.toEntity(lastSyncedAt = System.currentTimeMillis(), needsSync = false) }
+                val entities = supabaseVehicles.map { it.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
                 vehicleDao.insertVehicles(entities)
 
                 MotiumApplication.logger.i("✅ Synced ${supabaseVehicles.size} vehicles from Supabase to Room Database", "VehicleRepository")
@@ -479,20 +497,46 @@ class VehicleRepository private constructor(context: Context) {
                 return@withContext
             }
 
-            // Recalculer le kilométrage depuis les trajets
+            // Récupérer considerFullDistance pour savoir si on applique le cap de 80km/jour
+            val user = localUserRepository.getLoggedInUser()
+            val applyDailyCap = !(user?.considerFullDistance ?: false)
+
+            // Recalculer les 3 types de kilométrage depuis les trajets
             val proMileage = calculateLocalMileage(vehicleId, "PROFESSIONAL")
             val persoMileage = calculateLocalMileage(vehicleId, "PERSONAL")
+            val workHomeMileage = calculateWorkHomeMileage(vehicleId, applyDailyCap)
 
-            // Mettre à jour dans Room Database
-            vehicleDao.updateVehicleMileage(vehicleId, persoMileage, proMileage)
+            // Mettre à jour les 3 valeurs dans Room Database
+            vehicleDao.updateVehicleMileage(vehicleId, persoMileage, proMileage, workHomeMileage)
 
             MotiumApplication.logger.i(
-                "✅ Vehicle mileage updated: $vehicleId (Pro: ${"%.1f".format(proMileage)} km, Perso: ${"%.1f".format(persoMileage)} km)",
+                "✅ Vehicle mileage updated: $vehicleId (Pro: ${"%.1f".format(proMileage)} km, Perso: ${"%.1f".format(persoMileage)} km, WorkHome: ${"%.1f".format(workHomeMileage)} km)",
                 "VehicleRepository"
             )
 
             // Marquer le véhicule comme nécessitant une sync
             vehicleDao.markVehicleAsNeedingSync(vehicleId)
+
+            // OFFLINE-FIRST: Queue sync operation for immediate upload
+            try {
+                val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+                syncManager.queueOperation(
+                    entityType = PendingOperationEntity.TYPE_VEHICLE,
+                    entityId = vehicleId,
+                    action = PendingOperationEntity.ACTION_UPDATE,
+                    payload = null,
+                    priority = 0
+                )
+                MotiumApplication.logger.i(
+                    "🔄 Vehicle mileage queued for sync: $vehicleId",
+                    "VehicleRepository"
+                )
+            } catch (e: Exception) {
+                MotiumApplication.logger.w(
+                    "⚠️ Failed to queue vehicle mileage sync (will retry on next sync): ${e.message}",
+                    "VehicleRepository"
+                )
+            }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error updating vehicle mileage: ${e.message}", "VehicleRepository", e)
         }

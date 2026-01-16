@@ -67,6 +67,12 @@ fun LinkedAccountsScreen(
     val textColor = if (isDarkMode) TextDark else TextLight
     val textSecondaryColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
 
+    // Dialog states
+    var showPendingDialog by remember { mutableStateOf(false) }
+    var pendingUserName by remember { mutableStateOf("") }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var userToDelete by remember { mutableStateOf<LinkedUserDto?>(null) }
+
     // Snackbar
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -467,9 +473,21 @@ fun LinkedAccountsScreen(
                             uiState.filteredUsers.forEachIndexed { index, user ->
                                 LinkedUserRow(
                                     user = user,
-                                    licenseStatus = uiState.getLicenseStatus(user.userId),
-                                    onClick = { onNavigateToAccountDetails(user.userId) },
-                                    onRevoke = { viewModel.revokeUser(user.userId) },
+                                    licenseStatus = user.userId?.let { uiState.getLicenseStatus(it) } ?: AccountLicenseStatus.UNLICENSED,
+                                    onClick = {
+                                        // If PENDING, show dialog instead of navigating
+                                        if (user.status == LinkStatus.PENDING) {
+                                            pendingUserName = user.displayName
+                                            showPendingDialog = true
+                                        } else {
+                                            user.userId?.let { onNavigateToAccountDetails(it) }
+                                        }
+                                    },
+                                    onResendInvitation = { viewModel.resendInvitation(user) },
+                                    onDelete = {
+                                        userToDelete = user
+                                        showDeleteConfirmDialog = true
+                                    },
                                     textColor = textColor,
                                     textSecondaryColor = textSecondaryColor
                                 )
@@ -492,6 +510,103 @@ fun LinkedAccountsScreen(
         }
 
         // Bottom navigation is now handled at app-level in MainActivity
+    }
+
+    // Pending invitation dialog
+    if (showPendingDialog) {
+        AlertDialog(
+            onDismissRequest = { showPendingDialog = false },
+            icon = {
+                Icon(
+                    Icons.Outlined.HourglassEmpty,
+                    contentDescription = null,
+                    tint = PendingOrange,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = {
+                Text(
+                    "Invitation en attente",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    "$pendingUserName n'a pas encore accepté l'invitation. " +
+                    "Vous pourrez accéder à son profil une fois qu'il aura validé le lien depuis son application."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showPendingDialog = false }) {
+                    Text("Compris", color = MotiumPrimary, fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = if (isDarkMode) SurfaceDark else SurfaceLight
+        )
+    }
+
+    // Delete confirmation dialog
+    if (showDeleteConfirmDialog && userToDelete != null) {
+        val user = userToDelete!!
+        val hasLicense = user.userId?.let { uiState.getLicenseStatus(it) } == AccountLicenseStatus.LICENSED
+        val hasPendingUnlink = user.userId?.let { uiState.getLicenseStatus(it) } == AccountLicenseStatus.PENDING_UNLINK
+
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteConfirmDialog = false
+                userToDelete = null
+            },
+            icon = {
+                Icon(
+                    Icons.Outlined.PersonRemove,
+                    contentDescription = null,
+                    tint = ErrorRed,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = {
+                Text(
+                    "Supprimer ce compte lié ?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Voulez-vous vraiment supprimer ${user.displayName} de vos comptes liés ?")
+
+                    if (hasLicense || hasPendingUnlink) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "La licence assignée sera automatiquement mise en déliaison et l'utilisateur perdra l'accès aux fonctionnalités Pro.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = PendingOrange
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteLinkedAccount(user)
+                        showDeleteConfirmDialog = false
+                        userToDelete = null
+                    }
+                ) {
+                    Text("Supprimer", color = ErrorRed, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmDialog = false
+                        userToDelete = null
+                    }
+                ) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            },
+            containerColor = if (isDarkMode) SurfaceDark else SurfaceLight
+        )
     }
 }
 
@@ -564,10 +679,13 @@ private fun LinkedUserRow(
     user: LinkedUserDto,
     licenseStatus: AccountLicenseStatus,
     onClick: () -> Unit,
-    onRevoke: () -> Unit,
+    onResendInvitation: () -> Unit,
+    onDelete: () -> Unit,
     textColor: Color,
     textSecondaryColor: Color
 ) {
+    val isPending = user.status == LinkStatus.PENDING
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -614,8 +732,12 @@ private fun LinkedUserRow(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // License status badge (based on license assignment)
-        LicenseStatusBadge(licenseStatus = licenseStatus)
+        // Status badge - show PENDING status or license status
+        if (isPending) {
+            StatusBadge(status = LinkStatus.PENDING)
+        } else {
+            LicenseStatusBadge(licenseStatus = licenseStatus)
+        }
 
         // More options
         var showMenu by remember { mutableStateOf(false) }
@@ -635,6 +757,7 @@ private fun LinkedUserRow(
                     shape = RoundedCornerShape(16.dp)
                 )
             ) {
+                // View details - always available
                 DropdownMenuItem(
                     text = { Text("Voir les détails", color = MaterialTheme.colorScheme.onSurface) },
                     onClick = {
@@ -646,23 +769,42 @@ private fun LinkedUserRow(
                     },
                     modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                 )
-                if (user.status == LinkStatus.ACTIVE) {
+
+                // Resend invitation - only for PENDING status
+                if (isPending) {
                     DropdownMenuItem(
-                        text = { Text("Révoquer l'accès", color = ErrorRed) },
+                        text = { Text("Renvoyer l'invitation", color = MotiumPrimary) },
                         onClick = {
                             showMenu = false
-                            onRevoke()
+                            onResendInvitation()
                         },
                         leadingIcon = {
                             Icon(
-                                Icons.Outlined.PersonRemove,
+                                Icons.Outlined.Send,
                                 contentDescription = null,
-                                tint = ErrorRed
+                                tint = MotiumPrimary
                             )
                         },
                         modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                     )
                 }
+
+                // Delete - always available for all statuses
+                DropdownMenuItem(
+                    text = { Text("Supprimer", color = ErrorRed) },
+                    onClick = {
+                        showMenu = false
+                        onDelete()
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = null,
+                            tint = ErrorRed
+                        )
+                    },
+                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                )
             }
         }
     }
@@ -732,6 +874,11 @@ private fun StatusBadge(status: LinkStatus) {
             PendingOrange.copy(alpha = 0.15f),
             PendingOrange,
             "Activation..."
+        )
+        LinkStatus.PENDING_UNLINK -> Triple(
+            PendingOrange.copy(alpha = 0.15f),
+            PendingOrange,
+            "Déliaison..."
         )
     }
 

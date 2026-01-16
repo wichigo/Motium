@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.MotiumApplication
-import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
 import com.application.motium.data.VehicleRepository
@@ -44,6 +43,7 @@ import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.AutoTrackingSettings
 import kotlinx.datetime.Instant
 import com.application.motium.service.ActivityRecognitionService
+import com.application.motium.worker.ActivityRecognitionHealthWorker
 import com.application.motium.utils.ThemeManager
 import com.application.motium.presentation.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +51,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 import com.application.motium.data.geocoding.NominatimService
+import com.application.motium.data.sync.OfflineFirstSyncManager
+import com.application.motium.presentation.components.SyncStatusIndicator
 
 // Couleurs additionnelles (MotiumPrimary remplacé par MotiumPrimary du thème)
 val MockupTextBlack = Color(0xFF1F2937)
@@ -79,10 +81,10 @@ fun NewHomeScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
-    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     val workScheduleRepository = remember { WorkScheduleRepository.getInstance(context) }
     val themeManager = remember { ThemeManager.getInstance(context) }
+    val syncManager = remember { OfflineFirstSyncManager.getInstance(context) }
 
     val authState by authViewModel.authState.collectAsState()
     val currentUser = authState.user
@@ -188,7 +190,6 @@ fun NewHomeScreen(
 
                 coroutineScope.launch(Dispatchers.IO) {
                     tripRepository.syncTripsFromSupabase(freshUser.id)
-                    expenseRepository.syncFromSupabase(freshUser.id)
                     // Recharger après synchro pour afficher les nouveaux trajets
                     val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
                     trips = syncedTrips
@@ -230,7 +231,6 @@ fun NewHomeScreen(
             coroutineScope.launch(Dispatchers.IO) {
                 // Sync trips and expenses
                 tripRepository.syncTripsFromSupabase(user.id)
-                expenseRepository.syncFromSupabase(user.id)
 
                 // Recharger après synchro pour afficher les nouveaux trajets
                 val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
@@ -329,6 +329,14 @@ fun NewHomeScreen(
                         )
                     },
                     actions = {
+                        // Sync status indicator
+                        SyncStatusIndicator(
+                            isOnline = syncManager.isOnline,
+                            pendingOperationsCount = syncManager.pendingOperationsCount,
+                            onSyncClick = { syncManager.triggerImmediateSync() },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        // Theme toggle
                         IconButton(onClick = { coroutineScope.launch { themeManager.toggleTheme() } }) {
                             Icon(
                                 imageVector = if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
@@ -354,9 +362,6 @@ fun NewHomeScreen(
 
                             // 1. Sync trips depuis Supabase
                             tripRepository.syncTripsFromSupabase(userId)
-
-                            // 2. Sync expenses depuis Supabase
-                            expenseRepository.syncFromSupabase(userId)
 
                             // 3. Sync véhicules (pour les kilométrages à jour)
                             vehicleRepository.syncVehiclesFromSupabase()
@@ -468,11 +473,13 @@ fun NewHomeScreen(
                                                         autoTrackingEnabled = true
                                                         ActivityRecognitionService.startService(context)
                                                         AutoTrackingScheduleWorker.cancel(context)
+                                                        ActivityRecognitionHealthWorker.schedule(context)
                                                         MotiumApplication.logger.i("ALWAYS mode: Auto-tracking permanently enabled", "HomeScreen")
                                                     }
                                                     TrackingMode.WORK_HOURS_ONLY -> {
                                                         AutoTrackingScheduleWorker.schedule(context)
                                                         AutoTrackingScheduleWorker.runNow(context)
+                                                        ActivityRecognitionHealthWorker.schedule(context)
                                                         MotiumApplication.logger.i("PRO mode: Auto-tracking managed by work schedule", "HomeScreen")
                                                     }
                                                     TrackingMode.DISABLED -> {
@@ -480,6 +487,7 @@ fun NewHomeScreen(
                                                         autoTrackingEnabled = false
                                                         ActivityRecognitionService.stopService(context)
                                                         AutoTrackingScheduleWorker.cancel(context)
+                                                        ActivityRecognitionHealthWorker.cancel(context)
                                                         MotiumApplication.logger.i("DISABLED mode: Auto-tracking stopped", "HomeScreen")
                                                     }
                                                 }
@@ -513,7 +521,7 @@ fun NewHomeScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 StatItem(String.format("%.1f", todayDistance / 1000), "Kilometers", MotiumPrimary, textColor, subTextColor)
-                                StatItem(String.format("$%.2f", todayIndemnities / 1000), "Indemnities", MotiumPrimary, textColor, subTextColor)
+                                StatItem(String.format("%.2f€", todayIndemnities), "Indemnities", MotiumPrimary, textColor, subTextColor)
                                 StatItem(todayTrips.size.toString(), "Trips", MotiumPrimary, textColor, subTextColor)
                             }
                         }
@@ -703,7 +711,7 @@ fun NewHomeScreen(
                 }
             },
             containerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White,
-            tonalElevation = 24.dp
+            tonalElevation = 0.dp
         )
     }
 }

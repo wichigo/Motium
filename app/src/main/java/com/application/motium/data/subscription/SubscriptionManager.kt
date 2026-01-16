@@ -659,6 +659,64 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
+     * Cancel a user's subscription.
+     * By default, cancels at end of billing period (user keeps access until then).
+     *
+     * @param userId The user's auth ID
+     * @param subscriptionId Optional specific subscription ID (will be looked up if not provided)
+     * @param cancelImmediately If true, cancel immediately instead of at period end
+     * @return Result containing cancellation details
+     */
+    suspend fun cancelSubscription(
+        userId: String,
+        subscriptionId: String? = null,
+        cancelImmediately: Boolean = false
+    ): Result<CancelSubscriptionResponse> = withContext(Dispatchers.IO) {
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/functions/v1/cancel-subscription"
+
+            val requestBody = CancelSubscriptionRequest(
+                userId = userId,
+                subscriptionId = subscriptionId,
+                cancelImmediately = cancelImmediately
+            )
+
+            val jsonBody = json.encodeToString(CancelSubscriptionRequest.serializer(), requestBody)
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            MotiumApplication.logger.i("Canceling subscription for user: $userId, immediate=$cancelImmediately", TAG)
+
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: throw Exception("Empty response from server")
+
+            if (!response.isSuccessful) {
+                val errorMessage = try {
+                    json.decodeFromString(ErrorResponse.serializer(), responseBody).error
+                } catch (e: Exception) {
+                    "Erreur serveur: ${response.code}"
+                }
+                throw Exception(errorMessage)
+            }
+
+            val cancelResponse = json.decodeFromString(CancelSubscriptionResponse.serializer(), responseBody)
+            MotiumApplication.logger.i("✅ Subscription canceled: ${cancelResponse.subscriptionId}, atPeriodEnd=${cancelResponse.cancelAtPeriodEnd}", TAG)
+
+            Result.success(cancelResponse)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Subscription cancellation failed: ${e.message}", TAG, e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Get the amount in cents for a given price type and quantity
      */
     fun getAmountCents(priceType: String, quantity: Int = 1): Long {
@@ -672,6 +730,28 @@ class SubscriptionManager private constructor(private val context: Context) {
         return (pricePerUnit * 100 * quantity).toLong()
     }
 }
+
+/**
+ * Request to cancel a subscription
+ */
+@Serializable
+data class CancelSubscriptionRequest(
+    @SerialName("userId") val userId: String,
+    @SerialName("subscriptionId") val subscriptionId: String? = null,
+    @SerialName("cancelImmediately") val cancelImmediately: Boolean = false
+)
+
+/**
+ * Response from cancel subscription endpoint
+ */
+@Serializable
+data class CancelSubscriptionResponse(
+    @SerialName("success") val success: Boolean,
+    @SerialName("subscriptionId") val subscriptionId: String,
+    @SerialName("cancelAtPeriodEnd") val cancelAtPeriodEnd: Boolean,
+    @SerialName("currentPeriodEnd") val currentPeriodEnd: String? = null,
+    @SerialName("message") val message: String
+)
 
 /**
  * Result of checking trip access

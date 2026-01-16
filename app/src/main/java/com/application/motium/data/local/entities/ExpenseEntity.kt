@@ -10,7 +10,13 @@ import kotlinx.datetime.Instant
  * Room entity for storing expense data locally.
  * Allows offline expense management and automatic sync when connection is restored.
  */
-@Entity(tableName = "expenses")
+@Entity(
+    tableName = "expenses",
+    indices = [
+        androidx.room.Index(value = ["syncStatus"]),
+        androidx.room.Index(value = ["userId", "date"])
+    ]
+)
 data class ExpenseEntity(
     @PrimaryKey
     val id: String,
@@ -23,8 +29,12 @@ data class ExpenseEntity(
     val photoUri: String?,
     val createdAt: String,         // Instant stored as ISO-8601 string
     val updatedAt: String,         // Instant stored as ISO-8601 string
-    val lastSyncedAt: Long?,       // Timestamp of last sync with Supabase
-    val needsSync: Boolean         // Flag indicating if expense needs to be synced
+    // ==================== OFFLINE-FIRST SYNC FIELDS ====================
+    val syncStatus: String = SyncStatus.SYNCED.name, // SyncStatus enum as String
+    val localUpdatedAt: Long = System.currentTimeMillis(), // Local modification timestamp
+    val serverUpdatedAt: Long? = null, // Server's updated_at (from Supabase)
+    val version: Int = 1, // Optimistic locking version
+    val deletedAt: Long? = null // Soft delete timestamp (null = not deleted)
 )
 
 /**
@@ -47,7 +57,13 @@ fun ExpenseEntity.toDomainModel(): Expense {
 /**
  * Extension function to convert domain Expense to ExpenseEntity
  */
-fun Expense.toEntity(userId: String, lastSyncedAt: Long? = null, needsSync: Boolean = false): ExpenseEntity {
+fun Expense.toEntity(
+    userId: String,
+    syncStatus: String = SyncStatus.SYNCED.name,
+    localUpdatedAt: Long = System.currentTimeMillis(),
+    serverUpdatedAt: Long? = null,
+    version: Int = 1
+): ExpenseEntity {
     return ExpenseEntity(
         id = id,
         userId = userId,
@@ -59,7 +75,9 @@ fun Expense.toEntity(userId: String, lastSyncedAt: Long? = null, needsSync: Bool
         photoUri = photoUri,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
-        lastSyncedAt = lastSyncedAt,
-        needsSync = needsSync
+        syncStatus = syncStatus,
+        localUpdatedAt = localUpdatedAt,
+        serverUpdatedAt = serverUpdatedAt,
+        version = version
     )
 }

@@ -43,7 +43,8 @@ interface CompanyLinkDao {
             sharePersonalInfo = :shareInfo,
             shareExpenses = :shareExpenses,
             updatedAt = :updatedAt,
-            needsSync = 1
+            syncStatus = 'PENDING_UPLOAD',
+            localUpdatedAt = :localUpdatedAt
         WHERE id = :linkId
     """)
     suspend fun updateSharingPreferences(
@@ -52,7 +53,8 @@ interface CompanyLinkDao {
         sharePerso: Boolean,
         shareInfo: Boolean,
         shareExpenses: Boolean,
-        updatedAt: String
+        updatedAt: String,
+        localUpdatedAt: Long = System.currentTimeMillis()
     )
 
     /**
@@ -63,14 +65,16 @@ interface CompanyLinkDao {
         SET status = :status,
             unlinkedAt = :unlinkedAt,
             updatedAt = :updatedAt,
-            needsSync = 1
+            syncStatus = 'PENDING_UPLOAD',
+            localUpdatedAt = :localUpdatedAt
         WHERE id = :linkId
     """)
     suspend fun updateStatus(
         linkId: String,
         status: String,
         unlinkedAt: String?,
-        updatedAt: String
+        updatedAt: String,
+        localUpdatedAt: Long = System.currentTimeMillis()
     )
 
     // ==================== Delete Operations ====================
@@ -142,18 +146,18 @@ interface CompanyLinkDao {
     /**
      * Get company links that need to be synced to Supabase.
      */
-    @Query("SELECT * FROM company_links WHERE userId = :userId AND needsSync = 1")
+    @Query("SELECT * FROM company_links WHERE userId = :userId AND syncStatus != 'SYNCED'")
     suspend fun getCompanyLinksNeedingSync(userId: String): List<CompanyLinkEntity>
 
     /**
      * Mark a company link as synced.
      */
-    @Query("UPDATE company_links SET needsSync = 0, lastSyncedAt = :timestamp WHERE id = :linkId")
+    @Query("UPDATE company_links SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE id = :linkId")
     suspend fun markCompanyLinkAsSynced(linkId: String, timestamp: Long)
 
     /**
      * Mark multiple company links as synced.
      */
-    @Query("UPDATE company_links SET needsSync = 0, lastSyncedAt = :timestamp WHERE id IN (:linkIds)")
+    @Query("UPDATE company_links SET syncStatus = 'SYNCED', serverUpdatedAt = :timestamp WHERE id IN (:linkIds)")
     suspend fun markCompanyLinksAsSynced(linkIds: List<String>, timestamp: Long)
 }

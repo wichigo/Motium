@@ -31,7 +31,8 @@ object SyncScheduler {
             // Contraintes pour le worker
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED) // Nécessite une connexion réseau
-                .setRequiresBatteryNotLow(false) // Exécuter même si batterie faible
+                // BATTERY OPTIMIZATION: Ne pas exécuter si batterie faible
+                .setRequiresBatteryNotLow(true)
                 .build()
 
             // Créer la requête périodique

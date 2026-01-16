@@ -53,7 +53,11 @@ data class LicensesDialogState(
     // Unlink confirm dialog state
     val showUnlinkConfirmDialog: Boolean = false,
     val licenseToUnlink: License? = null,
-    val isUnlinking: Boolean = false
+    val isUnlinking: Boolean = false,
+    // Billing anchor day state
+    val billingAnchorDay: Int? = null,
+    val showBillingAnchorDialog: Boolean = false,
+    val isUpdatingBillingAnchor: Boolean = false
 )
 
 /**
@@ -69,6 +73,7 @@ data class LicensesUiState(
         pendingUnlinkLicenses = 0,
         pendingPaymentLicenses = 0,
         expiredLicenses = 0,
+        pausedLicenses = 0,
         lifetimeLicenses = 0,
         monthlyLicenses = 0,
         monthlyTotalHT = 0.0,
@@ -95,7 +100,11 @@ data class LicensesUiState(
     // Unlink confirm dialog state
     val showUnlinkConfirmDialog: Boolean = false,
     val licenseToUnlink: License? = null,
-    val isUnlinking: Boolean = false
+    val isUnlinking: Boolean = false,
+    // Billing anchor day state
+    val billingAnchorDay: Int? = null,
+    val showBillingAnchorDialog: Boolean = false,
+    val isUpdatingBillingAnchor: Boolean = false
 )
 
 /**
@@ -189,7 +198,10 @@ class LicensesViewModel(
             isLoadingAccounts = dialogState.isLoadingAccounts,
             showUnlinkConfirmDialog = dialogState.showUnlinkConfirmDialog,
             licenseToUnlink = dialogState.licenseToUnlink,
-            isUnlinking = dialogState.isUnlinking
+            isUnlinking = dialogState.isUnlinking,
+            billingAnchorDay = dialogState.billingAnchorDay,
+            showBillingAnchorDialog = dialogState.showBillingAnchorDialog,
+            isUpdatingBillingAnchor = dialogState.isUpdatingBillingAnchor
         )
     }.stateIn(
         scope = viewModelScope,
@@ -211,11 +223,33 @@ class LicensesViewModel(
                 if (proAccountId != null) {
                     _proAccountId.value = proAccountId
                     MotiumApplication.logger.d("Pro account ID loaded: $proAccountId", TAG)
+
+                    // Load pro account to get billing anchor day
+                    loadBillingAnchorDay(proAccountId)
                 } else {
                     _dialogState.update { it.copy(error = "Compte Pro non trouvé") }
                 }
             } catch (e: Exception) {
                 _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Load billing anchor day from pro account
+     */
+    private fun loadBillingAnchorDay(proAccountId: String) {
+        viewModelScope.launch {
+            try {
+                val result = proAccountRemoteDataSource.getProAccountById(proAccountId)
+                result.onSuccess { proAccountDto ->
+                    _dialogState.update { it.copy(
+                        billingAnchorDay = proAccountDto?.billingAnchorDay
+                    )}
+                    MotiumApplication.logger.d("Billing anchor day loaded: ${proAccountDto?.billingAnchorDay}", TAG)
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Error loading billing anchor day: ${e.message}", TAG, e)
             }
         }
     }
@@ -422,25 +456,16 @@ class LicensesViewModel(
     }
 
     /**
-     * Cancel a license (monthly only) - requires server validation
+     * Cancel a license (monthly only) - offline-first with sync
      */
     fun cancelLicense(licenseId: String) {
         viewModelScope.launch {
             try {
-                val result = licenseRemoteDataSource.cancelLicense(licenseId)
-                result.fold(
-                    onSuccess = {
-                        _dialogState.update { it.copy(
-                            successMessage = "Licence annulee"
-                        )}
-                        // Flow will auto-update when sync pulls changes
-                    },
-                    onFailure = { e ->
-                        _dialogState.update { it.copy(
-                            error = "Erreur: ${e.message}"
-                        )}
-                    }
-                )
+                offlineFirstLicenseRepo.cancelLicense(licenseId)
+                _dialogState.update { it.copy(
+                    successMessage = "Licence annulee"
+                )}
+                // Flow will auto-update when local DB changes
             } catch (e: Exception) {
                 _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
             }
@@ -520,7 +545,7 @@ class LicensesViewModel(
     }
 
     /**
-     * Assign a license to a linked account - requires server validation
+     * Assign a license to a linked account - offline-first with sync
      */
     fun assignLicenseToAccount(licenseId: String, linkedAccountId: String) {
         viewModelScope.launch {
@@ -531,27 +556,18 @@ class LicensesViewModel(
                     return@launch
                 }
 
-                val result = licenseRemoteDataSource.assignLicenseToAccount(
+                offlineFirstLicenseRepo.assignLicenseToAccount(
                     licenseId = licenseId,
                     proAccountId = proAccountId,
                     linkedAccountId = linkedAccountId
                 )
 
-                result.fold(
-                    onSuccess = {
-                        _dialogState.update { it.copy(
-                            showAssignDialog = false,
-                            selectedLicenseForAssignment = null,
-                            successMessage = "Licence assignee avec succes"
-                        )}
-                        // Flow will auto-update when sync pulls changes
-                    },
-                    onFailure = { e ->
-                        _dialogState.update { it.copy(
-                            error = e.message ?: "Erreur lors de l'assignation"
-                        )}
-                    }
-                )
+                _dialogState.update { it.copy(
+                    showAssignDialog = false,
+                    selectedLicenseForAssignment = null,
+                    successMessage = "Licence assignee avec succes"
+                )}
+                // Flow will auto-update when local DB changes
             } catch (e: Exception) {
                 _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
             }
@@ -583,7 +599,7 @@ class LicensesViewModel(
     }
 
     /**
-     * Request to unlink a license (starts 30-day notice period) - requires server
+     * Request to unlink a license (starts 30-day notice period) - offline-first with sync
      */
     fun confirmUnlinkRequest() {
         val license = _dialogState.value.licenseToUnlink ?: return
@@ -601,28 +617,18 @@ class LicensesViewModel(
                     return@launch
                 }
 
-                val result = licenseRemoteDataSource.requestUnlink(
+                offlineFirstLicenseRepo.requestUnlink(
                     licenseId = license.id,
                     proAccountId = proAccountId
                 )
 
-                result.fold(
-                    onSuccess = {
-                        _dialogState.update { it.copy(
-                            isUnlinking = false,
-                            showUnlinkConfirmDialog = false,
-                            licenseToUnlink = null,
-                            successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
-                        )}
-                        // Flow will auto-update when sync pulls changes
-                    },
-                    onFailure = { e ->
-                        _dialogState.update { it.copy(
-                            isUnlinking = false,
-                            error = e.message ?: "Erreur lors de la demande de deliaison"
-                        )}
-                    }
-                )
+                _dialogState.update { it.copy(
+                    isUnlinking = false,
+                    showUnlinkConfirmDialog = false,
+                    licenseToUnlink = null,
+                    successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
+                )}
+                // Flow will auto-update when local DB changes
             } catch (e: Exception) {
                 _dialogState.update { it.copy(
                     isUnlinking = false,
@@ -633,7 +639,7 @@ class LicensesViewModel(
     }
 
     /**
-     * Cancel an unlink request - requires server
+     * Cancel an unlink request - offline-first with sync
      */
     fun cancelUnlinkRequest(licenseId: String) {
         viewModelScope.launch {
@@ -644,26 +650,162 @@ class LicensesViewModel(
                     return@launch
                 }
 
-                val result = licenseRemoteDataSource.cancelUnlinkRequest(
+                offlineFirstLicenseRepo.cancelUnlinkRequest(
                     licenseId = licenseId,
                     proAccountId = proAccountId
                 )
 
-                result.fold(
-                    onSuccess = {
-                        _dialogState.update { it.copy(
-                            successMessage = "Demande de deliaison annulee"
-                        )}
-                        // Flow will auto-update when sync pulls changes
-                    },
-                    onFailure = { e ->
-                        _dialogState.update { it.copy(
-                            error = e.message ?: "Erreur lors de l'annulation"
-                        )}
-                    }
-                )
+                _dialogState.update { it.copy(
+                    successMessage = "Demande de deliaison annulee"
+                )}
+                // Flow will auto-update when local DB changes
             } catch (e: Exception) {
                 _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    // ========================================
+    // Pause/Resume License Methods
+    // ========================================
+
+    /**
+     * Pause a license (suspend billing for unused license).
+     * Only unassigned, active, monthly licenses can be paused.
+     */
+    fun pauseLicense(licenseId: String) {
+        viewModelScope.launch {
+            try {
+                val proAccountId = _proAccountId.value
+                if (proAccountId == null) {
+                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
+                    return@launch
+                }
+
+                val result = licenseRemoteDataSource.pauseLicense(licenseId, proAccountId)
+                result.onSuccess {
+                    _dialogState.update { it.copy(
+                        successMessage = "Licence mise en pause. La facturation est suspendue."
+                    )}
+                    // Force refresh to update the Flow
+                    refreshLicenses()
+                }.onFailure { e ->
+                    _dialogState.update { it.copy(error = e.message ?: "Erreur lors de la mise en pause") }
+                }
+            } catch (e: Exception) {
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Resume a paused license (reactivate billing).
+     */
+    fun resumeLicense(licenseId: String) {
+        viewModelScope.launch {
+            try {
+                val proAccountId = _proAccountId.value
+                if (proAccountId == null) {
+                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
+                    return@launch
+                }
+
+                val result = licenseRemoteDataSource.resumeLicense(licenseId, proAccountId)
+                result.onSuccess {
+                    _dialogState.update { it.copy(
+                        successMessage = "Licence reactifee. La facturation reprend."
+                    )}
+                    // Force refresh to update the Flow
+                    refreshLicenses()
+                }.onFailure { e ->
+                    _dialogState.update { it.copy(error = e.message ?: "Erreur lors de la reactivation") }
+                }
+            } catch (e: Exception) {
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Delete a license permanently.
+     * Only unassigned licenses (available or paused) can be deleted.
+     */
+    fun deleteLicense(licenseId: String) {
+        viewModelScope.launch {
+            try {
+                val proAccountId = _proAccountId.value
+                if (proAccountId == null) {
+                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
+                    return@launch
+                }
+
+                val result = licenseRemoteDataSource.deleteLicense(licenseId, proAccountId)
+                result.onSuccess {
+                    _dialogState.update { it.copy(
+                        successMessage = "Licence supprimee definitivement."
+                    )}
+                    // Force refresh to update the Flow
+                    refreshLicenses()
+                }.onFailure { e ->
+                    _dialogState.update { it.copy(error = e.message ?: "Erreur lors de la suppression") }
+                }
+            } catch (e: Exception) {
+                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+            }
+        }
+    }
+
+    // ========================================
+    // Billing Anchor Day Methods
+    // ========================================
+
+    /**
+     * Show billing anchor dialog
+     */
+    fun showBillingAnchorDialog() {
+        _dialogState.update { it.copy(showBillingAnchorDialog = true) }
+    }
+
+    /**
+     * Hide billing anchor dialog
+     */
+    fun hideBillingAnchorDialog() {
+        _dialogState.update { it.copy(showBillingAnchorDialog = false) }
+    }
+
+    /**
+     * Update billing anchor day (1-15) for unified license renewals
+     */
+    fun updateBillingAnchorDay(day: Int) {
+        val proAccountId = _proAccountId.value ?: run {
+            _dialogState.update { it.copy(error = "Compte Pro non trouve") }
+            return
+        }
+
+        viewModelScope.launch {
+            _dialogState.update { it.copy(isUpdatingBillingAnchor = true) }
+
+            try {
+                val result = proAccountRemoteDataSource.updateBillingAnchorDay(proAccountId, day)
+                result.onSuccess {
+                    _dialogState.update { it.copy(
+                        billingAnchorDay = day,
+                        showBillingAnchorDialog = false,
+                        isUpdatingBillingAnchor = false,
+                        successMessage = "Date de renouvellement definie au $day de chaque mois"
+                    )}
+                    MotiumApplication.logger.i("Billing anchor day updated to $day", TAG)
+                }.onFailure { e ->
+                    _dialogState.update { it.copy(
+                        isUpdatingBillingAnchor = false,
+                        error = e.message ?: "Erreur lors de la mise a jour"
+                    )}
+                }
+            } catch (e: Exception) {
+                _dialogState.update { it.copy(
+                    isUpdatingBillingAnchor = false,
+                    error = "Erreur: ${e.message}"
+                )}
             }
         }
     }

@@ -25,8 +25,10 @@ import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.repository.OfflineFirstLicenseRepository
 import com.application.motium.data.repository.OfflineFirstProAccountRepository
 import com.application.motium.data.supabase.LicenseRemoteDataSource as SupabaseLicenseRepository
+import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.License
+import com.application.motium.domain.model.ProAccount
 import com.application.motium.presentation.components.DeferredPaymentConfig
 import com.application.motium.presentation.components.StripeDeferredPaymentSheet
 import com.application.motium.presentation.components.createLicenseButtonLabel
@@ -57,30 +59,93 @@ fun ProTrialExpiredScreen(
     val offlineProAccountRepo = remember { OfflineFirstProAccountRepository.getInstance(context) }
     val offlineLicenseRepo = remember { OfflineFirstLicenseRepository.getInstance(context) }
     val supabaseLicenseRepo = remember { SupabaseLicenseRepository.getInstance(context) }
+    val supabaseProAccountRepo = remember { ProAccountRemoteDataSource.getInstance(context) }
     val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
 
     // Get user ID synchronously (needed for Flow collection)
     var userId by remember { mutableStateOf<String?>(null) }
     var proAccountId by remember { mutableStateOf<String?>(null) }
+    var networkProAccount by remember { mutableStateOf<ProAccount?>(null) }
+    var networkFetchAttempted by remember { mutableStateOf(false) }
+    var isLoadingProAccount by remember { mutableStateOf(true) }
 
-    // Load user ID first
+    // Load user ID and fetch pro account from network immediately
+    // Using scope instead of LaunchedEffect to survive recomposition
     LaunchedEffect(Unit) {
         val user = localUserRepository.getLoggedInUser()
         userId = user?.id
+        MotiumApplication.logger.i("ProTrialExpiredScreen: userId loaded = ${user?.id}", "ProTrialExpired")
+
+        // Fetch from network immediately (don't wait for local cache check)
+        if (user?.id != null && !networkFetchAttempted) {
+            networkFetchAttempted = true
+            MotiumApplication.logger.i("ProTrialExpiredScreen: Fetching pro account from network", "ProTrialExpired")
+            try {
+                val result = supabaseProAccountRepo.getProAccount(user.id)
+                result.fold(
+                    onSuccess = { dto ->
+                        if (dto != null) {
+                            networkProAccount = dto.toDomainModel()
+                            proAccountId = dto.id
+                            MotiumApplication.logger.i("ProTrialExpiredScreen: Fetched pro account from network: ${dto.id}", "ProTrialExpired")
+                        } else {
+                            MotiumApplication.logger.w("ProTrialExpiredScreen: No pro account found on network", "ProTrialExpired")
+                        }
+                    },
+                    onFailure = { e ->
+                        MotiumApplication.logger.e("ProTrialExpiredScreen: Network fetch failed: ${e.message}", "ProTrialExpired", e)
+                    }
+                )
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("ProTrialExpiredScreen: Network fetch exception: ${e.message}", "ProTrialExpired", e)
+            }
+        }
+        isLoadingProAccount = false
     }
 
     // Collect Pro account reactively from local DB
-    val proAccount by offlineProAccountRepo.getProAccountForUser(userId ?: "")
+    val localProAccount by offlineProAccountRepo.getProAccountForUser(userId ?: "")
         .collectAsState(initial = null)
 
-    // Update proAccountId when proAccount changes
-    LaunchedEffect(proAccount) {
-        proAccountId = proAccount?.id
+    // Use local or network pro account
+    val proAccount = localProAccount ?: networkProAccount
+
+    // Update proAccountId when localProAccount changes
+    LaunchedEffect(localProAccount) {
+        val local = localProAccount
+        if (local != null && proAccountId == null) {
+            proAccountId = local.id
+            MotiumApplication.logger.i("ProTrialExpiredScreen: proAccountId from local = ${local.id}", "ProTrialExpired")
+        }
     }
 
     // Collect available licenses reactively from local DB (offline-first)
-    val availableLicenses by offlineLicenseRepo.getAvailableLicenses(proAccountId ?: "")
+    val localLicenses by offlineLicenseRepo.getAvailableLicenses(proAccountId ?: "")
         .collectAsState(initial = emptyList())
+
+    // Also fetch licenses from network if local is empty
+    var networkLicenses by remember { mutableStateOf<List<License>>(emptyList()) }
+    LaunchedEffect(proAccountId, localLicenses) {
+        if (proAccountId != null && localLicenses.isEmpty()) {
+            try {
+                val result = supabaseLicenseRepo.getAvailableLicenses(proAccountId!!)
+                result.fold(
+                    onSuccess = { licenses ->
+                        networkLicenses = licenses
+                        MotiumApplication.logger.i("ProTrialExpiredScreen: Fetched ${licenses.size} licenses from network", "ProTrialExpired")
+                    },
+                    onFailure = { e ->
+                        MotiumApplication.logger.w("ProTrialExpiredScreen: License network fetch failed: ${e.message}", "ProTrialExpired")
+                    }
+                )
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("ProTrialExpiredScreen: License fetch exception: ${e.message}", "ProTrialExpired")
+            }
+        }
+    }
+
+    // Use local or network licenses
+    val availableLicenses = if (localLicenses.isNotEmpty()) localLicenses else networkLicenses
 
     // Derived state
     val hasAvailableLicense = availableLicenses.isNotEmpty()
@@ -88,8 +153,8 @@ fun ProTrialExpiredScreen(
     val monthlyLicenses = availableLicenses.filter { !it.isLifetime }
     val hasBothTypes = lifetimeLicenses.isNotEmpty() && monthlyLicenses.isNotEmpty()
 
-    // UI State
-    val isLoading = userId == null || (userId != null && proAccountId == null && proAccount == null)
+    // UI State - show loading only while we're still trying to load data
+    val isLoading = isLoadingProAccount
     var showLogoutConfirm by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 

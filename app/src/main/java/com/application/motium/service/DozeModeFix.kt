@@ -2,7 +2,6 @@ package com.application.motium.service
 
 import android.app.AlarmManager
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -14,27 +13,49 @@ import com.application.motium.MotiumApplication
 /**
  * FIX CRITIQUE: Empêcher le Doze Mode de tuer les services en arrière-plan
  *
- * PROBLÈME IDENTIFIÉ DANS LES LOGS:
- * - "⚠️ No activity detected for 5251s - API may have stopped"
- * - L'Activity Recognition API de Google Play Services s'arrête après quelques heures
+ * PROBLÈME IDENTIFIÉ:
+ * - L'Activity Recognition API de Google Play Services peut s'arrêter après quelques heures
  * - Android Doze Mode met l'app en "deep sleep" et arrête les services
+ * - Samsung One UI tue agressivement les BroadcastReceivers
  *
- * SOLUTION:
+ * SOLUTION (2026-01):
  * 1. Demander l'exemption d'optimisation de batterie
- * 2. Utiliser AlarmManager avec setExactAndAllowWhileIdle() pour réveiller l'app
- * 3. Relancer l'Activity Recognition toutes les 1 heure (optimisé pour batterie)
+ * 2. Utiliser AlarmManager avec PendingIntent.getForegroundService() (pas getBroadcast!)
+ * 3. Réveiller directement le service (Samsung-compatible, pas de BroadcastReceiver)
  *
- * BATTERY OPTIMIZATION (2025-01-27):
- * - Intervalle augmenté de 15 minutes → 1 heure pour économiser batterie
- * - Google Play Services gère déjà l'Activity Recognition de manière efficace
- * - Un keep-alive moins fréquent réduit considérablement la consommation
+ * NOTE: Le BroadcastReceiver a été supprimé car Samsung One UI le tue même avec exemption batterie.
+ * On utilise maintenant PendingIntent.getForegroundService() qui est plus fiable.
  */
 object DozeModeFix {
 
-    // RELIABILITY FIX: Reduced from 1 hour to 30 minutes
-    // Samsung One UI can kill BroadcastReceivers even with battery optimization disabled
-    // 30 minutes ensures we catch return trips after shopping (~30-45 min typical)
-    private const val ALARM_INTERVAL = 30L * 60 * 1000 // 30 minutes
+    private const val TAG = "DozeModeFix"
+
+    // Intervalles de keep-alive AlarmManager
+    // Standard interval for most devices
+    private const val ALARM_INTERVAL_DEFAULT = 60L * 60 * 1000 // 60 minutes (1 heure)
+
+    // Samsung-specific interval (more aggressive due to One UI battery management)
+    private const val ALARM_INTERVAL_SAMSUNG = 30L * 60 * 1000 // 30 minutes
+
+    // Request code unique pour le PendingIntent keep-alive
+    private const val KEEPALIVE_REQUEST_CODE = 9999
+
+    // Action pour identifier les wake-ups AlarmManager dans ActivityRecognitionService
+    const val ACTION_KEEPALIVE_WAKEUP = "com.application.motium.ACTION_KEEPALIVE_WAKEUP"
+
+    /**
+     * Get the appropriate alarm interval based on device manufacturer.
+     * Samsung devices get a more aggressive 30-minute interval.
+     * Other devices use 60-minute interval.
+     */
+    private fun getAlarmInterval(): Long {
+        return if (AutoTrackingDiagnostics.isSamsungDevice()) {
+            MotiumApplication.logger.d("Using Samsung-specific 30-minute keep-alive interval", TAG)
+            ALARM_INTERVAL_SAMSUNG
+        } else {
+            ALARM_INTERVAL_DEFAULT
+        }
+    }
 
     /**
      * Vérifie si l'app est exemptée de l'optimisation de batterie
@@ -63,86 +84,93 @@ object DozeModeFix {
                     context.startActivity(intent)
                     MotiumApplication.logger.i(
                         "📱 Requesting battery optimization exemption",
-                        "DozeModeFix"
+                        TAG
                     )
                 } catch (e: Exception) {
                     MotiumApplication.logger.e(
                         "❌ Failed to request battery optimization exemption: ${e.message}",
-                        "DozeModeFix",
+                        TAG,
                         e
                     )
                 }
             } else {
                 MotiumApplication.logger.i(
                     "✅ App already exempted from battery optimization",
-                    "DozeModeFix"
+                    TAG
                 )
             }
         }
     }
 
     /**
-     * Configure un AlarmManager pour réveiller l'app toutes les 15 minutes
-     * et relancer l'Activity Recognition si nécessaire
+     * Configure un AlarmManager pour réveiller le service périodiquement.
+     *
+     * ## SAMSUNG FIX
+     * Utilise PendingIntent.getForegroundService() au lieu de getBroadcast() car
+     * Samsung One UI tue les BroadcastReceivers même avec exemption batterie.
+     *
+     * Le service ActivityRecognitionService gère ACTION_KEEPALIVE_WAKEUP dans onStartCommand().
      */
     fun scheduleActivityRecognitionKeepAlive(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, ActivityRecognitionKeepAliveReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
+
+        // SAMSUNG FIX: PendingIntent.getForegroundService() au lieu de getBroadcast()
+        val serviceIntent = Intent(context, ActivityRecognitionService::class.java).apply {
+            action = ACTION_KEEPALIVE_WAKEUP
+        }
+        val pendingIntent = PendingIntent.getForegroundService(
             context,
-            0,
-            intent,
+            KEEPALIVE_REQUEST_CODE,
+            serviceIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val triggerTime = System.currentTimeMillis() + ALARM_INTERVAL
+        val interval = getAlarmInterval()
+        val triggerTime = System.currentTimeMillis() + interval
+        val intervalMinutes = interval / 60000
 
-        // Vérifier si on peut utiliser les alarmes exactes (Android 12+)
+        // Planifier l'alarme selon la version Android
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (alarmManager.canScheduleExactAlarms()) {
-                // On peut utiliser les alarmes exactes
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     triggerTime,
                     pendingIntent
                 )
                 MotiumApplication.logger.i(
-                    "⏰ Scheduled EXACT Activity Recognition keep-alive alarm in ${ALARM_INTERVAL/60000} minutes",
-                    "DozeModeFix"
+                    "⏰ Scheduled EXACT keep-alive alarm in $intervalMinutes min (getForegroundService)",
+                    TAG
                 )
             } else {
-                // Fallback: utiliser setAndAllowWhileIdle() (moins précis mais fonctionne)
                 alarmManager.setAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     triggerTime,
                     pendingIntent
                 )
                 MotiumApplication.logger.w(
-                    "⚠️ Cannot schedule exact alarms, using inexact alarm (keep-alive in ~${ALARM_INTERVAL/60000} minutes)",
-                    "DozeModeFix"
+                    "⏰ Cannot schedule exact alarms, using inexact (~$intervalMinutes min)",
+                    TAG
                 )
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // Android 6-11: setExactAndAllowWhileIdle() fonctionne sans permission spéciale
             alarmManager.setExactAndAllowWhileIdle(
                 AlarmManager.RTC_WAKEUP,
                 triggerTime,
                 pendingIntent
             )
             MotiumApplication.logger.i(
-                "⏰ Scheduled Activity Recognition keep-alive alarm in ${ALARM_INTERVAL/60000} minutes",
-                "DozeModeFix"
+                "⏰ Scheduled keep-alive alarm in $intervalMinutes min",
+                TAG
             )
         } else {
-            // Android 5 et plus ancien
             alarmManager.setExact(
                 AlarmManager.RTC_WAKEUP,
                 triggerTime,
                 pendingIntent
             )
             MotiumApplication.logger.i(
-                "⏰ Scheduled Activity Recognition keep-alive alarm in ${ALARM_INTERVAL/60000} minutes",
-                "DozeModeFix"
+                "⏰ Scheduled keep-alive alarm in $intervalMinutes min",
+                TAG
             )
         }
     }
@@ -152,58 +180,19 @@ object DozeModeFix {
      */
     fun cancelActivityRecognitionKeepAlive(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, ActivityRecognitionKeepAliveReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
+        val serviceIntent = Intent(context, ActivityRecognitionService::class.java).apply {
+            action = ACTION_KEEPALIVE_WAKEUP
+        }
+        val pendingIntent = PendingIntent.getForegroundService(
             context,
-            0,
-            intent,
+            KEEPALIVE_REQUEST_CODE,
+            serviceIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         alarmManager.cancel(pendingIntent)
         MotiumApplication.logger.i(
             "🛑 Cancelled Activity Recognition keep-alive alarm",
-            "DozeModeFix"
+            TAG
         )
-    }
-}
-
-/**
- * Receiver déclenché toutes les 30 minutes pour maintenir l'Activity Recognition actif
- * RELIABILITY FIX: Samsung One UI can kill BroadcastReceiver callbacks even with
- * battery optimization disabled. This keep-alive forces re-registration.
- */
-class ActivityRecognitionKeepAliveReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        MotiumApplication.logger.i(
-            "⏰ Activity Recognition keep-alive alarm triggered",
-            "KeepAliveReceiver"
-        )
-
-        // Relancer l'alarme pour la prochaine fois
-        DozeModeFix.scheduleActivityRecognitionKeepAlive(context)
-
-        // RELIABILITY FIX: Force re-registration of ActivityRecognition transitions
-        // Samsung One UI may have killed the BroadcastReceiver callbacks
-        try {
-            // First, re-register the ActivityRecognition to ensure callbacks are fresh
-            ActivityRecognitionService.reregisterActivityRecognition(context)
-            MotiumApplication.logger.i(
-                "✅ Activity Recognition re-registered from keep-alive",
-                "KeepAliveReceiver"
-            )
-
-            // Then ensure the service is running
-            ActivityRecognitionService.startService(context)
-            MotiumApplication.logger.i(
-                "✅ Activity Recognition Service verified running",
-                "KeepAliveReceiver"
-            )
-        } catch (e: Exception) {
-            MotiumApplication.logger.e(
-                "❌ Failed to restart Activity Recognition Service: ${e.message}",
-                "KeepAliveReceiver",
-                e
-            )
-        }
     }
 }

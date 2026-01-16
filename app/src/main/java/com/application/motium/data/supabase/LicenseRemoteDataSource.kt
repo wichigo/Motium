@@ -172,6 +172,9 @@ class LicenseRemoteDataSource private constructor(
         linkedAccountId: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            // Get license to retrieve end_date and is_lifetime info
+            val license = getLicenseById(licenseId).getOrNull()
+
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
             supabaseClient.from("licenses")
                 .update({
@@ -184,8 +187,10 @@ class LicenseRemoteDataSource private constructor(
                     }
                 }
 
-            // Update user's subscription_type to LICENSED for offline-first checks
-            updateUserSubscriptionType(linkedAccountId, "LICENSED")
+            // Update user's subscription_type and subscription_expires_at for offline-first checks
+            // For lifetime licenses, subscription_expires_at is null
+            val expiresAt = if (license?.isLifetime == true) null else license?.endDate?.toString()
+            updateUserSubscriptionType(linkedAccountId, "LICENSED", expiresAt)
 
             MotiumApplication.logger.i("License $licenseId assigned to account $linkedAccountId", "LicenseRepo")
             Result.success(Unit)
@@ -359,8 +364,10 @@ class LicenseRemoteDataSource private constructor(
                     }
                 }
 
-            // Update user's subscription_type to LICENSED for offline-first checks
-            updateUserSubscriptionType(linkedAccountId, "LICENSED")
+            // Update user's subscription_type and subscription_expires_at for offline-first checks
+            // For lifetime licenses, subscription_expires_at is null
+            val expiresAt = if (license.isLifetime) null else license.endDate?.toString()
+            updateUserSubscriptionType(linkedAccountId, "LICENSED", expiresAt)
 
             MotiumApplication.logger.i(
                 "License $licenseId assigned to account $linkedAccountId",
@@ -525,8 +532,10 @@ class LicenseRemoteDataSource private constructor(
                     }
                 }
 
-            // Update user's subscription_type to LICENSED for offline-first checks
-            updateUserSubscriptionType(ownerUserId, "LICENSED")
+            // Update user's subscription_type and subscription_expires_at for offline-first checks
+            // For lifetime licenses, subscription_expires_at is null
+            val expiresAt = if (licenseToAssign.isLifetime) null else licenseToAssign.endDate?.toString()
+            updateUserSubscriptionType(ownerUserId, "LICENSED", expiresAt)
 
             MotiumApplication.logger.i(
                 "License ${licenseToAssign.id} assigned to owner $ownerUserId",
@@ -585,8 +594,10 @@ class LicenseRemoteDataSource private constructor(
                     }
                 }
 
-            // Update user's subscription_type to LICENSED for offline-first checks
-            updateUserSubscriptionType(ownerUserId, "LICENSED")
+            // Update user's subscription_type and subscription_expires_at for offline-first checks
+            // For lifetime licenses, subscription_expires_at is null
+            val expiresAt = if (licenseToAssign.isLifetime) null else licenseToAssign.endDate?.toString()
+            updateUserSubscriptionType(ownerUserId, "LICENSED", expiresAt)
 
             MotiumApplication.logger.i(
                 "License $licenseId (${if (licenseToAssign.isLifetime) "lifetime" else "monthly"}) assigned to owner $ownerUserId",
@@ -622,14 +633,23 @@ class LicenseRemoteDataSource private constructor(
     }
 
     /**
-     * Helper function to update user's subscription_type in the users table.
+     * Helper function to update user's subscription_type and subscription_expires_at in the users table.
      * This is critical for offline-first license checking.
+     *
+     * @param userId The user ID to update
+     * @param subscriptionType The new subscription type (LICENSED, FREE, etc.)
+     * @param subscriptionExpiresAt The expiration date (null for lifetime licenses or FREE)
      */
-    private suspend fun updateUserSubscriptionType(userId: String, subscriptionType: String) {
+    private suspend fun updateUserSubscriptionType(
+        userId: String,
+        subscriptionType: String,
+        subscriptionExpiresAt: String? = null
+    ) {
         try {
             supabaseClient.from("users")
                 .update({
                     set("subscription_type", subscriptionType)
+                    set("subscription_expires_at", subscriptionExpiresAt)
                     set("updated_at", Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString())
                 }) {
                     filter {
@@ -637,13 +657,13 @@ class LicenseRemoteDataSource private constructor(
                     }
                 }
             MotiumApplication.logger.i(
-                "Updated user $userId subscription_type to $subscriptionType",
+                "Updated user $userId subscription_type=$subscriptionType, expires_at=$subscriptionExpiresAt",
                 "LicenseRepo"
             )
         } catch (e: Exception) {
             // Log but don't fail the license operation - trigger will handle as backup
             MotiumApplication.logger.w(
-                "Failed to update subscription_type for user $userId: ${e.message}",
+                "Failed to update subscription for user $userId: ${e.message}",
                 "LicenseRepo"
             )
         }
@@ -685,6 +705,149 @@ class LicenseRemoteDataSource private constructor(
             Result.failure(e)
         }
     }
+
+    /**
+     * Pause a license (suspend billing for unused license in pool).
+     * Only unassigned, active, monthly licenses can be paused.
+     *
+     * @param licenseId The license ID to pause
+     * @param proAccountId The Pro account ID (for verification)
+     * @return Result with success or failure
+     */
+    suspend fun pauseLicense(licenseId: String, proAccountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Fetch the license to validate
+            val license = getLicenseById(licenseId).getOrNull()
+                ?: return@withContext Result.failure(Exception("Licence introuvable"))
+
+            if (!license.canPause()) {
+                val reason = when {
+                    license.status != LicenseStatus.ACTIVE -> "La licence n'est pas active"
+                    license.isAssigned -> "La licence est assignée à un utilisateur"
+                    license.isLifetime -> "Les licences à vie ne peuvent pas être mises en pause"
+                    else -> "Cette licence ne peut pas être mise en pause"
+                }
+                return@withContext Result.failure(Exception(reason))
+            }
+
+            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+            supabaseClient.from("licenses")
+                .update({
+                    set("status", "paused")
+                    set("paused_at", now.toString())
+                    set("updated_at", now.toString())
+                }) {
+                    filter {
+                        eq("id", licenseId)
+                        eq("pro_account_id", proAccountId)
+                    }
+                }
+
+            MotiumApplication.logger.i("License $licenseId paused", "LicenseRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error pausing license: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Resume a paused license (reactivate billing).
+     *
+     * @param licenseId The license ID to resume
+     * @param proAccountId The Pro account ID (for verification)
+     * @return Result with success or failure
+     */
+    suspend fun resumeLicense(licenseId: String, proAccountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Fetch the license to validate
+            val license = getLicenseById(licenseId).getOrNull()
+                ?: return@withContext Result.failure(Exception("Licence introuvable"))
+
+            if (!license.canResume()) {
+                return@withContext Result.failure(Exception("Cette licence n'est pas en pause"))
+            }
+
+            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+            supabaseClient.from("licenses")
+                .update({
+                    set("status", "active")
+                    set("paused_at", null as String?)
+                    set("updated_at", now.toString())
+                }) {
+                    filter {
+                        eq("id", licenseId)
+                        eq("pro_account_id", proAccountId)
+                    }
+                }
+
+            MotiumApplication.logger.i("License $licenseId resumed", "LicenseRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error resuming license: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get paused licenses for a Pro account
+     */
+    suspend fun getPausedLicenses(proAccountId: String): Result<List<License>> = withContext(Dispatchers.IO) {
+        try {
+            val response = supabaseClient.from("licenses")
+                .select {
+                    filter {
+                        eq("pro_account_id", proAccountId)
+                        eq("status", "paused")
+                    }
+                }
+                .decodeList<LicenseDto>()
+
+            Result.success(response.map { it.toDomain() })
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error getting paused licenses: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete a license permanently.
+     * Only unassigned licenses (available or paused) can be deleted.
+     *
+     * @param licenseId The license ID to delete
+     * @param proAccountId The Pro account ID (for verification)
+     * @return Result with success or failure
+     */
+    suspend fun deleteLicense(licenseId: String, proAccountId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Fetch the license to validate
+            val license = getLicenseById(licenseId).getOrNull()
+                ?: return@withContext Result.failure(Exception("Licence introuvable"))
+
+            if (!license.canDelete()) {
+                val reason = when {
+                    license.isAssigned -> "La licence est assignée à un utilisateur"
+                    license.isPendingUnlink -> "La licence est en cours de déliaison"
+                    else -> "Cette licence ne peut pas être supprimée"
+                }
+                return@withContext Result.failure(Exception(reason))
+            }
+
+            supabaseClient.from("licenses")
+                .delete {
+                    filter {
+                        eq("id", licenseId)
+                        eq("pro_account_id", proAccountId)
+                    }
+                }
+
+            MotiumApplication.logger.i("License $licenseId deleted permanently", "LicenseRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error deleting license: ${e.message}", "LicenseRepo", e)
+            Result.failure(e)
+        }
+    }
 }
 
 /**
@@ -718,6 +881,9 @@ data class LicenseDto(
     // Billing start date
     @SerialName("billing_starts_at")
     val billingStartsAt: String? = null,
+    // Pause
+    @SerialName("paused_at")
+    val pausedAt: String? = null,
     // Stripe
     @SerialName("stripe_subscription_id")
     val stripeSubscriptionId: String? = null,
@@ -743,6 +909,7 @@ data class LicenseDto(
                 "active" -> LicenseStatus.ACTIVE
                 "expired" -> LicenseStatus.EXPIRED
                 "cancelled" -> LicenseStatus.CANCELLED
+                "paused" -> LicenseStatus.PAUSED
                 else -> LicenseStatus.PENDING
             },
             startDate = startDate?.let { parseInstant(it) },
@@ -750,6 +917,7 @@ data class LicenseDto(
             unlinkRequestedAt = unlinkRequestedAt?.let { parseInstant(it) },
             unlinkEffectiveAt = unlinkEffectiveAt?.let { parseInstant(it) },
             billingStartsAt = billingStartsAt?.let { parseInstant(it) },
+            pausedAt = pausedAt?.let { parseInstant(it) },
             stripeSubscriptionId = stripeSubscriptionId,
             stripeSubscriptionItemId = stripeSubscriptionItemId,
             stripePriceId = stripePriceId,

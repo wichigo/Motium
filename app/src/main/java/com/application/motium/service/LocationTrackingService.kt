@@ -2095,6 +2095,10 @@ class LocationTrackingService : Service() {
         isInTrip = false
         isFinalizingTrip = false
 
+        // CRITICAL: Synchroniser TripStateManager singleton avec notre état local
+        // Sans ça, TripStateManager reste en MOVING et ignore les nouveaux VehicleEnter
+        TripStateManager.forceReset()
+
         MotiumApplication.logger.i("State transition: FINALIZING → STANDBY (trip completed, GPS + health check stopped)", "TripStateMachine")
 
         // Mettre à jour la notification

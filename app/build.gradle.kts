@@ -20,15 +20,25 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Build config for Supabase keys
-        buildConfigField("String", "SUPABASE_URL", "\"https://hjknuqqtmvbfvrmvvtxh.supabase.co\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhqa251cXF0bXZiZnZybXZ2dHhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3MTA0MjIsImV4cCI6MjA3NDI4NjQyMn0.VLh94hdp1Q1OFcKx-yM3j2EifxC5KJjUQEyZ7eMFOIk\"")
+        // Build config for Supabase keys (self-hosted)
+        buildConfigField("String", "SUPABASE_URL", "\"http://176.168.117.243:8000\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFub24iLCAiaXNzIjogInN1cGFiYXNlIiwgImlhdCI6IDE3MDQwNjcyMDAsICJleHAiOiAxODYxOTIwMDAwfQ.LUYd4QDV4W3yQc-HgbBHCmsjL1fkPU4xfTdlhabLN4M\"")
 
         // Stripe configuration (publishable key - safe to include in client)
         buildConfigField("String", "STRIPE_PUBLISHABLE_KEY", "\"pk_test_51RLY4eCsRT1u49RI1vDxDBpBaR0iphMbJk47LKowyTKII2wTwbkYScTIpr7kTOQBQ4dEOTkztv767Pw75MWsBB1y00xLwmOflF\"")
     }
 
     buildTypes {
+        debug {
+            isDebuggable = true
+        }
+        // Build type dédié pour les tests de batterie (non-debuggable)
+        create("battery") {
+            initWith(getByName("debug"))
+            isDebuggable = false
+            applicationIdSuffix = ".battery"
+            versionNameSuffix = "-battery"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

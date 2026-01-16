@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.application.motium.domain.model.License
@@ -34,6 +35,8 @@ fun PurchaseLicenseDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         title = {
             Text(
                 "Acheter des licences",

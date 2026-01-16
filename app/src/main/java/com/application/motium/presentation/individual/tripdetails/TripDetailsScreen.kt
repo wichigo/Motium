@@ -79,20 +79,22 @@ fun TripDetailsScreen(
     var matchedRouteCoordinates by remember { mutableStateOf<List<List<Double>>?>(null) }
     var isMapMatching by remember { mutableStateOf(false) }
     val nominatimService = remember { NominatimService.getInstance() }
-    val supabaseTripRepository = remember { com.application.motium.data.supabase.SupabaseTripRepository.getInstance(context) }
+    val tripRemoteDataSource = remember { com.application.motium.data.supabase.TripRemoteDataSource.getInstance(context) }
     val secureSessionStorage = remember { com.application.motium.data.preferences.SecureSessionStorage(context) }
 
-    // Charger le trip et les expenses au démarrage
-    // Include currentUser?.id as dependency to retry when auth becomes available
+    // OFFLINE-FIRST: Charger le trip depuis Room Database
+    // Fallback vers Supabase uniquement pour:
+    // 1. Trajets de linked users (Pro viewing linked user's trip)
+    // 2. Restauration de GPS trace corrompue en local
     LaunchedEffect(tripId, currentUser?.id, linkedUserId) {
         coroutineScope.launch {
             var loadedTrip: Trip? = null
 
-            // If linkedUserId is provided, fetch directly from Supabase (Pro viewing linked user's trip)
+            // STRATEGY 1: If linkedUserId is provided, fetch directly from Supabase (Pro viewing linked user's trip)
             if (!linkedUserId.isNullOrEmpty()) {
-                MotiumApplication.logger.i("Fetching linked user trip: tripId=$tripId, linkedUserId=$linkedUserId", "TripDetailsScreen")
+                MotiumApplication.logger.i("📥 Fetching linked user trip from Supabase: tripId=$tripId, linkedUserId=$linkedUserId", "TripDetailsScreen")
                 try {
-                    val supabaseResult = supabaseTripRepository.getTripByIdForLinkedUser(tripId, linkedUserId)
+                    val supabaseResult = tripRemoteDataSource.getTripByIdForLinkedUser(tripId, linkedUserId)
                     if (supabaseResult.isSuccess) {
                         val supabaseTrip = supabaseResult.getOrNull()
                         if (supabaseTrip != null) {
@@ -130,26 +132,28 @@ fun TripDetailsScreen(
                         }
                     }
                 } catch (e: Exception) {
-                    MotiumApplication.logger.e("Failed to fetch linked user trip: ${e.message}", "TripDetailsScreen", e)
+                    MotiumApplication.logger.e("❌ Failed to fetch linked user trip: ${e.message}", "TripDetailsScreen", e)
                 }
             } else {
-                // Standard flow: load from local Room database first
+                // STRATEGY 2 (OFFLINE-FIRST): Load from local Room database first
+                MotiumApplication.logger.i("📂 Loading trip from Room Database: tripId=$tripId", "TripDetailsScreen")
                 loadedTrip = tripRepository.getTripById(tripId)
 
-                // Check if local trip has suspiciously few GPS points - try to restore from Supabase
+                // FALLBACK: Check if local trip has suspiciously few GPS points - try to restore from Supabase
+                // This handles cases where local GPS trace was corrupted during sync
                 if (loadedTrip != null && loadedTrip.locations.size <= 5) {
                     // Try to get userId from auth state, fallback to secure storage
                     val userId = currentUser?.id ?: secureSessionStorage.restoreSession()?.userId
-                    MotiumApplication.logger.d("TripDetailsScreen: Checking GPS restoration - localPoints=${loadedTrip.locations.size}, userId=$userId", "TripDetailsScreen")
+                    MotiumApplication.logger.d("🔍 Checking GPS trace integrity - localPoints=${loadedTrip.locations.size}, userId=$userId", "TripDetailsScreen")
                     if (!userId.isNullOrEmpty()) {
-                        MotiumApplication.logger.i("⚠️ Local trip has only ${loadedTrip.locations.size} points, trying to restore from Supabase...", "TripDetailsScreen")
+                        MotiumApplication.logger.i("⚠️ Local trip has only ${loadedTrip.locations.size} points, trying to restore from Supabase (FALLBACK)...", "TripDetailsScreen")
                         try {
-                            val supabaseResult = supabaseTripRepository.getTripById(tripId, userId)
+                            val supabaseResult = tripRemoteDataSource.getTripById(tripId, userId)
                             if (supabaseResult.isSuccess) {
                                 val supabaseTrip = supabaseResult.getOrNull()
                                 val supabasePointsCount = supabaseTrip?.tracePoints?.size ?: 0
                                 if (supabasePointsCount > loadedTrip.locations.size) {
-                                    MotiumApplication.logger.i("✅ Restored GPS trace from Supabase: ${loadedTrip.locations.size} → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "TripDetailsScreen")
+                                    MotiumApplication.logger.i("✅ GPS trace restored from Supabase: ${loadedTrip.locations.size} → $supabasePointsCount points, distance: ${supabaseTrip!!.distanceKm}km", "TripDetailsScreen")
                                     val restoredLocations = supabaseTrip.tracePoints!!.map { point ->
                                         TripLocation(
                                             latitude = point.latitude,
@@ -167,7 +171,7 @@ fun TripDetailsScreen(
                                 }
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to restore GPS trace: ${e.message}", "TripDetailsScreen", e)
+                            MotiumApplication.logger.e("❌ Failed to restore GPS trace (will use local): ${e.message}", "TripDetailsScreen", e)
                         }
                     }
                 }
@@ -736,6 +740,8 @@ fun TripDetailsScreen(
     if (showTripTypeDialog) {
         AlertDialog(
             onDismissRequest = { showTripTypeDialog = false },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
             title = {
                 Text(
                     "Type de trajet",
@@ -858,6 +864,8 @@ fun TripDetailsScreen(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
             title = {
                 Text(
                     "Supprimer le trajet",
@@ -896,6 +904,8 @@ fun TripDetailsScreen(
     selectedPhotoUri?.let { photoUri ->
         AlertDialog(
             onDismissRequest = { selectedPhotoUri = null },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
             title = { Text("Receipt Photo") },
             text = {
                 Text(

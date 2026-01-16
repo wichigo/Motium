@@ -550,11 +550,12 @@ fun ProExportAdvancedScreen(
                                                 .heightIn(max = 250.dp)
                                                 .verticalScroll(rememberScrollState())
                                         ) {
-                                            searchFilteredUsers.forEachIndexed { index, user ->
+                                            // Only show users with userId (not pending invitations)
+                                            searchFilteredUsers.filter { it.userId != null }.forEachIndexed { index, user ->
                                                 UserSelectionRow(
                                                     user = user,
-                                                    isSelected = uiState.selectedUserIds.contains(user.userId),
-                                                    onToggle = { viewModel.toggleUserSelection(user.userId) },
+                                                    isSelected = user.userId?.let { uiState.selectedUserIds.contains(it) } ?: false,
+                                                    onToggle = { user.userId?.let { viewModel.toggleUserSelection(it) } },
                                                     textColor = textColor,
                                                     textSecondaryColor = textSecondaryColor
                                                 )
@@ -961,6 +962,360 @@ fun ProExportAdvancedScreen(
                                         modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                     )
                                 }
+                            }
+                        }
+
+                        // Vehicles filter (filtered by selected users)
+                        run {
+                            var vehiclesDropdownExpanded by remember { mutableStateOf(false) }
+                            var vehicleSearchQuery by remember { mutableStateOf("") }
+
+                            val filteredVehicles = uiState.filteredVehicles
+                            val selectedInFiltered = filteredVehicles.count { it.id in uiState.selectedVehicleIds }
+                            val totalCount = filteredVehicles.size
+                            val vehDisplayText = when {
+                                uiState.isLoadingVehicles -> "Chargement..."
+                                filteredVehicles.isEmpty() -> "Aucun véhicule disponible"
+                                selectedInFiltered == 0 -> "Sélectionner des véhicules"
+                                selectedInFiltered == totalCount -> "Tous les véhicules ($totalCount)"
+                                selectedInFiltered == 1 -> filteredVehicles.find { it.id in uiState.selectedVehicleIds }?.name ?: "1 véhicule"
+                                else -> "$selectedInFiltered véhicules sélectionnés"
+                            }
+
+                            Column {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    OutlinedTextField(
+                                        value = vehDisplayText,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Véhicules") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        trailingIcon = {
+                                            if (uiState.isLoadingVehicles) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(20.dp),
+                                                    color = MotiumPrimary,
+                                                    strokeWidth = 2.dp
+                                                )
+                                            } else {
+                                                Icon(
+                                                    if (vehiclesDropdownExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                                    contentDescription = null,
+                                                    tint = MotiumPrimary
+                                                )
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.DirectionsCar, contentDescription = null, tint = MotiumPrimary)
+                                        },
+                                        enabled = false,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            disabledTextColor = textColor,
+                                            disabledBorderColor = if (vehiclesDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                            disabledLabelColor = if (vehiclesDropdownExpanded) MotiumPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            disabledContainerColor = Color.Transparent
+                                        ),
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .matchParentSize()
+                                            .padding(top = 8.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable {
+                                                if (filteredVehicles.isNotEmpty() && !uiState.isLoadingVehicles) {
+                                                    vehiclesDropdownExpanded = !vehiclesDropdownExpanded
+                                                }
+                                            }
+                                    )
+                                }
+
+                                // Expandable vehicles list
+                                AnimatedVisibility(
+                                    visible = vehiclesDropdownExpanded,
+                                    enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
+                                    exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
+                                ) {
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp),
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isDarkMode) Color(0xFF1F2937) else Color.White
+                                        ),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.background(if (isDarkMode) Color(0xFF1F2937) else Color.White)
+                                        ) {
+                                            // Search field
+                                            OutlinedTextField(
+                                                value = vehicleSearchQuery,
+                                                onValueChange = { vehicleSearchQuery = it },
+                                                placeholder = { Text("Rechercher...") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Default.Search,
+                                                        contentDescription = null,
+                                                        tint = textSecondaryColor
+                                                    )
+                                                },
+                                                trailingIcon = {
+                                                    if (vehicleSearchQuery.isNotEmpty()) {
+                                                        IconButton(onClick = { vehicleSearchQuery = "" }) {
+                                                            Icon(
+                                                                Icons.Default.Clear,
+                                                                contentDescription = "Effacer",
+                                                                tint = textSecondaryColor
+                                                            )
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(12.dp),
+                                                colors = OutlinedTextFieldDefaults.colors(
+                                                    focusedBorderColor = MotiumPrimary,
+                                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                                    focusedContainerColor = Color.Transparent,
+                                                    unfocusedContainerColor = Color.Transparent,
+                                                    cursorColor = MotiumPrimary
+                                                ),
+                                                shape = RoundedCornerShape(12.dp),
+                                                singleLine = true
+                                            )
+
+                                            // Select all / Deselect all button
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { viewModel.toggleSelectAllVehicles() }
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Checkbox(
+                                                    checked = uiState.allVehiclesSelected,
+                                                    onCheckedChange = { viewModel.toggleSelectAllVehicles() },
+                                                    colors = CheckboxDefaults.colors(
+                                                        checkedColor = MotiumPrimary,
+                                                        checkmarkColor = Color.White,
+                                                        uncheckedColor = if (isDarkMode) Color.Gray else Color.Gray
+                                                    )
+                                                )
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Text(
+                                                    if (uiState.allVehiclesSelected) "Désélectionner tout" else "Sélectionner tout",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MotiumPrimary
+                                                )
+                                            }
+
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(horizontal = 16.dp),
+                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                                            )
+
+                                            // Filtered vehicles list - grouped by collaborator
+                                            val searchFilteredVehicles = filteredVehicles.filter { vehicle ->
+                                                vehicleSearchQuery.isEmpty() ||
+                                                    vehicle.name.contains(vehicleSearchQuery, ignoreCase = true) ||
+                                                    vehicle.type.contains(vehicleSearchQuery, ignoreCase = true) ||
+                                                    vehicle.userDisplayName.contains(vehicleSearchQuery, ignoreCase = true)
+                                            }
+
+                                            // Group vehicles by user
+                                            val vehiclesByUser = searchFilteredVehicles.groupBy { it.userDisplayName }
+
+                                            if (vehiclesByUser.isEmpty()) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(24.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text(
+                                                        "Aucun véhicule trouvé",
+                                                        color = textSecondaryColor
+                                                    )
+                                                }
+                                            } else {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .heightIn(max = 300.dp)
+                                                        .verticalScroll(rememberScrollState())
+                                                ) {
+                                                    vehiclesByUser.entries.forEachIndexed { userIndex, (userName, userVehicles) ->
+                                                        // Section header - Collaborator name
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .background(
+                                                                    if (isDarkMode) Color(0xFF374151).copy(alpha = 0.5f)
+                                                                    else Color(0xFFF3F4F6)
+                                                                )
+                                                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(28.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(MotiumPrimary.copy(alpha = 0.15f)),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Text(
+                                                                    text = userName.firstOrNull()?.uppercase() ?: "?",
+                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = MotiumPrimary
+                                                                )
+                                                            }
+                                                            Spacer(modifier = Modifier.width(10.dp))
+                                                            Text(
+                                                                userName,
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                color = textColor
+                                                            )
+                                                            Spacer(modifier = Modifier.weight(1f))
+                                                            Text(
+                                                                "${userVehicles.size} véhicule${if (userVehicles.size > 1) "s" else ""}",
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = textSecondaryColor
+                                                            )
+                                                        }
+
+                                                        // Vehicles for this user
+                                                        userVehicles.forEachIndexed { vehicleIndex, vehicle ->
+                                                            Row(
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .clickable { viewModel.toggleVehicleSelection(vehicle.id) }
+                                                                    .padding(start = 32.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Checkbox(
+                                                                    checked = vehicle.id in uiState.selectedVehicleIds,
+                                                                    onCheckedChange = { viewModel.toggleVehicleSelection(vehicle.id) },
+                                                                    colors = CheckboxDefaults.colors(
+                                                                        checkedColor = MotiumPrimary,
+                                                                        checkmarkColor = Color.White,
+                                                                        uncheckedColor = Color.Gray
+                                                                    )
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Icon(
+                                                                    Icons.Default.DirectionsCar,
+                                                                    contentDescription = null,
+                                                                    tint = MotiumPrimary.copy(alpha = 0.7f),
+                                                                    modifier = Modifier.size(18.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                    Text(
+                                                                        vehicle.name,
+                                                                        style = MaterialTheme.typography.bodyMedium,
+                                                                        fontWeight = FontWeight.Medium,
+                                                                        color = textColor
+                                                                    )
+                                                                    Text(
+                                                                        "${vehicle.type}${vehicle.power?.let { " • $it CV" } ?: ""}",
+                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                        color = textSecondaryColor
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (vehicleIndex < userVehicles.size - 1) {
+                                                                HorizontalDivider(
+                                                                    modifier = Modifier.padding(start = 56.dp, end = 16.dp),
+                                                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)
+                                                                )
+                                                            }
+                                                        }
+
+                                                        // Separator between user sections
+                                                        if (userIndex < vehiclesByUser.size - 1) {
+                                                            Spacer(modifier = Modifier.height(4.dp))
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Done button
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(12.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = { vehiclesDropdownExpanded = false },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ) {
+                                                    Text("Terminé", fontWeight = FontWeight.SemiBold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Toggle "Inclure photos" - visible uniquement si includeExpenses = true
+                        AnimatedVisibility(
+                            visible = uiState.includeExpenses,
+                            enter = expandVertically(animationSpec = tween(200)) + fadeIn(),
+                            exit = shrinkVertically(animationSpec = tween(200)) + fadeOut()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (isDarkMode) Color(0xFF1F2937) else Color(0xFFF3F4F6)
+                                    )
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Photo,
+                                        contentDescription = null,
+                                        tint = MotiumPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            "Inclure les photos",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = textColor
+                                        )
+                                        Text(
+                                            "Ajoute les justificatifs au PDF",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = textSecondaryColor
+                                        )
+                                    }
+                                }
+                                Switch(
+                                    checked = uiState.includePhotos,
+                                    onCheckedChange = { viewModel.setIncludePhotos(it) },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = MotiumPrimary,
+                                        uncheckedThumbColor = Color.White,
+                                        uncheckedTrackColor = if (isDarkMode) Color(0xFF374151) else Color(0xFFD1D5DB)
+                                    )
+                                )
                             }
                         }
                     }

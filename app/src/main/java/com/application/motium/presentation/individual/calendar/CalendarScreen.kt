@@ -31,8 +31,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
+import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.isPremium
 import com.application.motium.domain.model.TimeSlot
@@ -74,6 +76,7 @@ fun CalendarScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val tripRepository = remember { TripRepository.getInstance(context) }
+    val expenseRepository = remember { ExpenseRepository.getInstance(context) }
     val themeManager = remember { ThemeManager.getInstance(context) }
 
     // Utiliser authState de authViewModel au lieu de créer une nouvelle instance
@@ -82,6 +85,7 @@ fun CalendarScreen(
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
+    var expenses by remember { mutableStateOf<List<Expense>>(emptyList()) }
 
     // Use rememberSaveable to preserve calendar month and selected day across navigation
     var currentMonthTimestamp by rememberSaveable { mutableStateOf(Calendar.getInstance().timeInMillis) }
@@ -107,14 +111,15 @@ fun CalendarScreen(
     val textColor = if (isDarkMode) Color.White else Color(0xFF1F2937)
     val subTextColor = if (isDarkMode) Color.Gray else Color(0xFF6B7280)
 
-    // Load trips
+    // Load trips and expenses
     LaunchedEffect(Unit) {
         trips = tripRepository.getAllTrips()
+        expenses = expenseRepository.getExpensesForUser()
     }
 
-    // Calculate calendar days with trips
-    val calendarDays = remember(currentCalendar, trips) {
-        generateCalendarDays(currentCalendar, trips)
+    // Calculate calendar days with trips and expenses
+    val calendarDays = remember(currentCalendar, trips, expenses) {
+        generateCalendarDays(currentCalendar, trips, expenses)
     }
 
     // Calculate monthly stats
@@ -729,6 +734,9 @@ fun RadioButtonOption(text: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+// Color for expense indicator
+private val ExpenseBlue = Color(0xFF3B82F6) // Tailwind blue-500
+
 @Composable
 fun CalendarDay(
     day: CalendarDayData,
@@ -751,6 +759,7 @@ fun CalendarDay(
                     isToday -> MotiumPrimary
                     isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                     day.hasTrips -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                    day.hasExpenses -> ExpenseBlue.copy(alpha = 0.1f) // Light blue background for expense-only days
                     else -> Color.Transparent
                 },
                 shape = CircleShape
@@ -766,23 +775,43 @@ fun CalendarDay(
                 color = when {
                     isToday -> Color.White
                     day.hasTrips -> MotiumPrimary
+                    day.hasExpenses -> ExpenseBlue
                     else -> MaterialTheme.colorScheme.onSurface
                 },
-                fontWeight = if (day.hasTrips || isToday) FontWeight.Bold else FontWeight.Normal,
+                fontWeight = if (day.hasTrips || day.hasExpenses || isToday) FontWeight.Bold else FontWeight.Normal,
                 fontSize = 14.sp
             )
 
-            // Validation marker (dot) - Green if all validated, Orange if not
-            if (day.hasTrips) {
+            // Indicators row - show dots for trips and/or expenses
+            if (day.hasTrips || day.hasExpenses) {
                 Spacer(modifier = Modifier.height(2.dp))
-                Box(
-                    modifier = Modifier
-                        .size(4.dp)
-                        .background(
-                            color = if (day.allTripsValidated) ValidatedGreen else PendingOrange,
-                            shape = CircleShape
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Trip indicator (green/orange dot)
+                    if (day.hasTrips) {
+                        Box(
+                            modifier = Modifier
+                                .size(4.dp)
+                                .background(
+                                    color = if (day.allTripsValidated) ValidatedGreen else PendingOrange,
+                                    shape = CircleShape
+                                )
                         )
-                )
+                    }
+                    // Expense indicator (blue dot)
+                    if (day.hasExpenses) {
+                        Box(
+                            modifier = Modifier
+                                .size(4.dp)
+                                .background(
+                                    color = ExpenseBlue,
+                                    shape = CircleShape
+                                )
+                        )
+                    }
+                }
             }
         }
     }
@@ -1300,6 +1329,8 @@ fun TimeSlotEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         title = {
             Text(
                 text = "Edit Time Slot",
@@ -1408,8 +1439,7 @@ fun TimeSlotEditDialog(
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
             }
-        },
-        containerColor = MaterialTheme.colorScheme.surface
+        }
     )
 }
 
@@ -1418,6 +1448,7 @@ data class CalendarDayData(
     val number: Int,
     val hasTrips: Boolean = false,
     val allTripsValidated: Boolean = false,
+    val hasExpenses: Boolean = false,
     val year: Int = 0,
     val month: Int = 0
 )
@@ -1427,7 +1458,7 @@ data class DaySchedule(
     val timeSlots: List<TimeSlot> = emptyList()
 )
 
-fun generateCalendarDays(calendar: Calendar, trips: List<Trip>): List<CalendarDayData> {
+fun generateCalendarDays(calendar: Calendar, trips: List<Trip>, expenses: List<Expense> = emptyList()): List<CalendarDayData> {
     val year = calendar.get(Calendar.YEAR)
     val month = calendar.get(Calendar.MONTH)
 
@@ -1454,9 +1485,24 @@ fun generateCalendarDays(calendar: Calendar, trips: List<Trip>): List<CalendarDa
         }
     }
 
+    // Group expenses by day (expense.date is in YYYY-MM-DD format)
+    val expensesByDay = expenses.groupBy { expense ->
+        try {
+            val parts = expense.date.split("-")
+            if (parts.size == 3) {
+                val expYear = parts[0].toInt()
+                val expMonth = parts[1].toInt() - 1 // Calendar months are 0-indexed
+                val expDay = parts[2].toInt()
+                if (expYear == year && expMonth == month) expDay else null
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     // Create empty cells for days before the first day of the month
     val emptyCells = (1..emptyCellsCount).map {
-        CalendarDayData(number = 0, hasTrips = false, allTripsValidated = false, year = year, month = month)
+        CalendarDayData(number = 0, hasTrips = false, allTripsValidated = false, hasExpenses = false, year = year, month = month)
     }
 
     // Create cells for actual days of the month
@@ -1464,11 +1510,13 @@ fun generateCalendarDays(calendar: Calendar, trips: List<Trip>): List<CalendarDa
         val dayTrips = tripsByDay[day] ?: emptyList()
         val hasTrips = dayTrips.isNotEmpty()
         val allValidated = hasTrips && dayTrips.all { it.isValidated }
+        val hasExpenses = expensesByDay[day]?.isNotEmpty() == true
 
         CalendarDayData(
             number = day,
             hasTrips = hasTrips,
             allTripsValidated = allValidated,
+            hasExpenses = hasExpenses,
             year = year,
             month = month
         )

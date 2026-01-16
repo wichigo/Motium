@@ -15,27 +15,161 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.application.motium.MotiumApplication
+import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.subscription.SubscriptionManager
+import com.application.motium.domain.model.AuthResult
 import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.presentation.components.DeferredPaymentConfig
+import com.application.motium.presentation.components.StripeDeferredPaymentSheet
+import com.application.motium.presentation.components.createSubscriptionButtonLabel
 import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.presentation.auth.AuthViewModel
+import com.stripe.android.paymentsheet.PaymentSheetResult
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Blocking screen shown when trial has expired.
  * User must subscribe to continue using the app.
+ * Payment is handled directly in this screen via Stripe PaymentSheet.
  */
 @Composable
 fun TrialExpiredScreen(
     subscriptionManager: SubscriptionManager,
+    authViewModel: AuthViewModel,
     onSubscribe: (SubscriptionType) -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val paymentState by subscriptionManager.paymentState.collectAsState()
     var selectedPlan by remember { mutableStateOf<SubscriptionType?>(null) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
+
+    // Payment state
+    var isLoading by remember { mutableStateOf(false) }
+    var showPaymentSheet by remember { mutableStateOf(false) }
+    var paymentAmountCents by remember { mutableStateOf(0L) }
+    var paymentPriceType by remember { mutableStateOf("") }
+    var userId by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var paymentSuccess by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    // Repositories for refresh
+    val localUserRepository = remember { LocalUserRepository.getInstance(context) }
+    val supabaseAuthRepository = remember { SupabaseAuthRepository.getInstance(context) }
+
+    // Load user ID on start
+    LaunchedEffect(Unit) {
+        try {
+            val user = localUserRepository.getLoggedInUser()
+            userId = user?.id
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to load user: ${e.message}", "TrialExpired", e)
+        }
+    }
+
+    // Handle payment success - refresh user from Supabase and update authState
+    LaunchedEffect(paymentSuccess) {
+        if (paymentSuccess && !isRefreshing) {
+            isRefreshing = true
+            val uid = userId ?: return@LaunchedEffect
+
+            // Retry a few times to allow webhook to process
+            var attempts = 0
+            val maxAttempts = 5
+            while (attempts < maxAttempts) {
+                delay(2000)
+                attempts++
+
+                try {
+                    val result = supabaseAuthRepository.getUserProfile(uid)
+                    if (result is AuthResult.Success) {
+                        val freshUser = result.data
+                        localUserRepository.saveUser(freshUser, isLocallyConnected = true)
+
+                        val expectedType = if (paymentPriceType == "individual_lifetime")
+                            SubscriptionType.LIFETIME else SubscriptionType.PREMIUM
+
+                        if (freshUser.subscription.type == expectedType) {
+                            MotiumApplication.logger.i("✅ Subscription updated to $expectedType", "TrialExpired")
+                            // CRITICAL: Refresh authState BEFORE navigating to update LaunchedEffect dependencies
+                            authViewModel.refreshAuthState {
+                                isRefreshing = false
+                                onSubscribe(expectedType)
+                            }
+                            return@LaunchedEffect
+                        }
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.e("Refresh attempt $attempts failed: ${e.message}", "TrialExpired", e)
+                }
+            }
+
+            // Final sync attempt
+            try {
+                val result = supabaseAuthRepository.getUserProfile(uid)
+                if (result is AuthResult.Success) {
+                    localUserRepository.saveUser(result.data, isLocallyConnected = true)
+                    // Refresh authState before navigating
+                    authViewModel.refreshAuthState {
+                        onSubscribe(result.data.subscription.type)
+                    }
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("Final sync failed: ${e.message}", "TrialExpired", e)
+            }
+
+            isRefreshing = false
+        }
+    }
+
+    // Show PaymentSheet when ready
+    if (showPaymentSheet && userId != null) {
+        val isLifetime = paymentPriceType == "individual_lifetime"
+        StripeDeferredPaymentSheet(
+            config = DeferredPaymentConfig(
+                amountCents = paymentAmountCents,
+                currency = "eur",
+                isSubscription = false
+            ),
+            merchantName = "Motium",
+            primaryButtonLabel = createSubscriptionButtonLabel(paymentAmountCents.toInt(), isLifetime),
+            onCreateIntent = { paymentMethodId ->
+                subscriptionManager.confirmPaymentWithMethod(
+                    paymentMethodId = paymentMethodId,
+                    userId = userId!!,
+                    proAccountId = null,
+                    priceType = paymentPriceType,
+                    quantity = 1
+                )
+            },
+            onResult = { result ->
+                showPaymentSheet = false
+                when (result) {
+                    is PaymentSheetResult.Completed -> {
+                        MotiumApplication.logger.i("✅ Payment completed", "TrialExpired")
+                        paymentSuccess = true
+                    }
+                    is PaymentSheetResult.Canceled -> {
+                        MotiumApplication.logger.d("Payment canceled", "TrialExpired")
+                    }
+                    is PaymentSheetResult.Failed -> {
+                        MotiumApplication.logger.e("Payment failed: ${result.error.message}", "TrialExpired")
+                        errorMessage = result.error.message ?: "Le paiement a échoué"
+                    }
+                }
+            }
+        )
+    }
 
     Box(
         modifier = modifier
@@ -97,7 +231,7 @@ fun TrialExpiredScreen(
             // Monthly subscription card
             SubscriptionOptionCard(
                 title = "Mensuel",
-                price = "5€",
+                price = "${SubscriptionManager.INDIVIDUAL_MONTHLY_PRICE.toInt()}€",
                 period = "/mois",
                 description = "Flexibilité maximale, sans engagement",
                 isSelected = selectedPlan == SubscriptionType.PREMIUM,
@@ -110,21 +244,28 @@ fun TrialExpiredScreen(
             // Lifetime subscription card
             SubscriptionOptionCard(
                 title = "À vie",
-                price = "100€",
+                price = "${SubscriptionManager.INDIVIDUAL_LIFETIME_PRICE.toInt()}€",
                 period = "une fois",
                 description = "Accès illimité pour toujours",
                 isSelected = selectedPlan == SubscriptionType.LIFETIME,
                 isRecommended = false,
-                savingsText = "Économisez après 20 mois",
+                savingsText = "Économisez après 24 mois",
                 onClick = { selectedPlan = SubscriptionType.LIFETIME }
             )
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Subscribe button
+            // Subscribe button - directly triggers Stripe payment
             Button(
-                onClick = { selectedPlan?.let { onSubscribe(it) } },
-                enabled = selectedPlan != null && paymentState !is SubscriptionManager.PaymentState.Loading,
+                onClick = {
+                    selectedPlan?.let { plan ->
+                        val isLifetime = plan == SubscriptionType.LIFETIME
+                        paymentPriceType = if (isLifetime) "individual_lifetime" else "individual_monthly"
+                        paymentAmountCents = subscriptionManager.getAmountCents(paymentPriceType, 1)
+                        showPaymentSheet = true
+                    }
+                },
+                enabled = selectedPlan != null && !isLoading && !isRefreshing && userId != null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -133,7 +274,7 @@ fun TrialExpiredScreen(
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                if (paymentState is SubscriptionManager.PaymentState.Loading) {
+                if (isLoading || isRefreshing) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         color = Color.White,
@@ -179,13 +320,18 @@ fun TrialExpiredScreen(
         }
 
         // Error message
-        if (paymentState is SubscriptionManager.PaymentState.Error) {
+        errorMessage?.let { error ->
             Snackbar(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(16.dp)
+                    .padding(16.dp),
+                action = {
+                    TextButton(onClick = { errorMessage = null }) {
+                        Text("OK", color = Color.White)
+                    }
+                }
             ) {
-                Text((paymentState as SubscriptionManager.PaymentState.Error).message)
+                Text(error)
             }
         }
     }
@@ -194,6 +340,8 @@ fun TrialExpiredScreen(
     if (showLogoutConfirm) {
         AlertDialog(
             onDismissRequest = { showLogoutConfirm = false },
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
             title = { Text("Se déconnecter ?") },
             text = {
                 Text("Vos données resteront sauvegardées. Vous pourrez vous reconnecter et vous abonner plus tard.")

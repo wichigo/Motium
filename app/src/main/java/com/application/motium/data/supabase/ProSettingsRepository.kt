@@ -7,9 +7,7 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 
 /**
  * Repository for managing Pro account settings (departments, etc.)
@@ -20,7 +18,6 @@ class ProSettingsRepository private constructor(
 ) {
     private val supabaseClient = SupabaseClient.client
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
-    private val json = Json { ignoreUnknownKeys = true }
 
     companion object {
         @Volatile
@@ -78,11 +75,9 @@ class ProSettingsRepository private constructor(
      */
     suspend fun updateDepartments(proAccountId: String, departments: List<String>): Result<Unit> {
         return try {
-            // Simple JSON array encoding
-            val departmentsJson = "[${departments.joinToString(",") { "\"$it\"" }}]"
-
+            // Supabase accepts native JSON arrays for JSONB columns
             supabaseClient.from("pro_accounts")
-                .update(mapOf("departments" to departmentsJson)) {
+                .update(mapOf("departments" to departments)) {
                     filter { eq("id", proAccountId) }
                 }
 
@@ -128,25 +123,12 @@ class ProSettingsRepository private constructor(
 
 /**
  * DTO for reading departments from pro_accounts
+ * Note: Supabase returns JSONB columns as native JSON arrays, not strings
  */
 @Serializable
 private data class ProAccountDepartmentsDto(
     val id: String,
-    val departments: String? = null // JSONB as string
+    val departments: List<String>? = null // JSONB returned as native JSON array
 ) {
-    companion object {
-        private val jsonParser = Json { ignoreUnknownKeys = true }
-    }
-
-    fun getDepartmentsList(): List<String> {
-        return try {
-            if (departments != null) {
-                jsonParser.decodeFromString<List<String>>(departments)
-            } else {
-                emptyList()
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
+    fun getDepartmentsList(): List<String> = departments ?: emptyList()
 }

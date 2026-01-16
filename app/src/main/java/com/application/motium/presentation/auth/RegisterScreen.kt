@@ -42,7 +42,6 @@ import com.application.motium.utils.ThemeManager
 @Composable
 fun RegisterScreen(
     onNavigateToLogin: () -> Unit = {},
-    onNavigateToPhoneVerification: (email: String, password: String, name: String, isProfessional: Boolean, organizationName: String) -> Unit = { _, _, _, _, _ -> },
     viewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -559,7 +558,7 @@ fun RegisterScreen(
                                 onDone = {
                                     keyboardController?.hide()
                                     if (isFormValid(name, email, password, confirmPassword, isEmailValid, isPasswordValid, passwordsMatch)) {
-                                        onNavigateToPhoneVerification(email, password, name, isProfessional, organizationName)
+                                        viewModel.signUpWithVerification(email, password, name, isProfessional, organizationName)
                                     }
                                 }
                             ),
@@ -640,7 +639,7 @@ fun RegisterScreen(
                 Button(
                     onClick = {
                         keyboardController?.hide()
-                        onNavigateToPhoneVerification(email, password, name, isProfessional, organizationName)
+                        viewModel.signUpWithVerification(email, password, name, isProfessional, organizationName)
                     },
                     enabled = isFormValid(name, email, password, confirmPassword, isEmailValid, isPasswordValid, passwordsMatch) && !registerState.isLoading,
                     modifier = Modifier

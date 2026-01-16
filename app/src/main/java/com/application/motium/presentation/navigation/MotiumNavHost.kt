@@ -13,11 +13,12 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.application.motium.presentation.auth.AcceptInvitationScreen
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.auth.ForgotPasswordScreen
 import com.application.motium.presentation.auth.LoginScreen
-import com.application.motium.presentation.auth.PhoneVerificationScreen
 import com.application.motium.presentation.auth.RegisterScreen
+import com.application.motium.presentation.auth.ResetPasswordScreen
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -26,6 +27,7 @@ import com.application.motium.presentation.individual.calendar.CalendarScreen
 import com.application.motium.presentation.individual.vehicles.VehiclesScreen
 import com.application.motium.presentation.individual.export.ExportScreen
 import com.application.motium.presentation.individual.settings.SettingsScreen
+import com.application.motium.presentation.navigation.ConsentManagementRoute
 import com.application.motium.presentation.individual.tripdetails.TripDetailsScreen
 import com.application.motium.presentation.individual.addtrip.AddTripScreen
 import com.application.motium.presentation.individual.edittrip.EditTripScreen
@@ -34,12 +36,17 @@ import com.application.motium.presentation.individual.expense.ExpenseDetailsScre
 import com.application.motium.presentation.debug.LogViewerScreen
 import com.application.motium.presentation.splash.SplashScreen
 import com.application.motium.presentation.subscription.TrialExpiredScreen
+import com.application.motium.presentation.subscription.SubscriptionExpiredScreen
+import com.application.motium.presentation.subscription.ProTrialExpiredScreen
+import com.application.motium.presentation.individual.upgrade.UpgradeScreen
 import androidx.compose.ui.platform.LocalContext
 import com.application.motium.data.TripRepository
 import com.application.motium.data.ExpenseRepository
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.domain.model.UserRole
 import com.application.motium.MotiumApplication
+import com.application.motium.presentation.auth.ProLicenseState
 import com.application.motium.utils.DeepLinkHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,26 +60,52 @@ fun MotiumNavHost(
     authViewModel: AuthViewModel
 ) {
     val authState by authViewModel.authState.collectAsState()
+    val proLicenseState by authViewModel.proLicenseState.collectAsState()
 
     // Navigation automatique basée sur l'état d'authentification
-    LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role, authState.user?.subscription?.type) {
-        MotiumApplication.logger.d("🧭 Navigation LaunchedEffect triggered", "Navigation")
-        MotiumApplication.logger.d("   - isLoading: ${authState.isLoading}", "Navigation")
-        MotiumApplication.logger.d("   - isAuthenticated: ${authState.isAuthenticated}", "Navigation")
-        MotiumApplication.logger.d("   - user: ${authState.user?.email}", "Navigation")
-        MotiumApplication.logger.d("   - role: ${authState.user?.role}", "Navigation")
-        MotiumApplication.logger.d("   - subscription: ${authState.user?.subscription?.type}", "Navigation")
+    LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role, authState.user?.subscription?.type, authState.initialSyncDone) {
+        MotiumApplication.logger.i("🧭 Navigation LaunchedEffect triggered", "Navigation")
+        MotiumApplication.logger.i("   - isLoading: ${authState.isLoading}", "Navigation")
+        MotiumApplication.logger.i("   - isAuthenticated: ${authState.isAuthenticated}", "Navigation")
+        MotiumApplication.logger.i("   - user: ${authState.user?.email}", "Navigation")
+        MotiumApplication.logger.i("   - role: ${authState.user?.role}", "Navigation")
+        MotiumApplication.logger.i("   - subscription: ${authState.user?.subscription?.type}", "Navigation")
+        MotiumApplication.logger.i("   - initialSyncDone: ${authState.initialSyncDone}", "Navigation")
 
         if (!authState.isLoading) {
             // Chargement terminé, naviguer vers la destination appropriée
-            if (authState.isAuthenticated) {
-                // Check if trial has expired - block access
+            if (authState.isAuthenticated && authState.user != null) {
                 val subscriptionType = authState.user?.subscription?.type
                 val hasValidAccess = authState.user?.subscription?.hasValidAccess() == true
+                val isProUser = authState.user?.role == UserRole.ENTERPRISE
+                val userId = authState.user?.id
 
-                if (subscriptionType == SubscriptionType.EXPIRED || !hasValidAccess) {
-                    MotiumApplication.logger.i("🚫 Trial expired - navigating to trial_expired", "Navigation")
-                    navController.navigate("trial_expired") {
+                // PRO USERS: Trigger license check in ViewModel (non-blocking)
+                // Navigation will be handled by the separate proLicenseState LaunchedEffect
+                MotiumApplication.logger.i("🔍 Checking if Pro user: isProUser=$isProUser, userId=$userId", "Navigation")
+                if (isProUser && userId != null) {
+                    MotiumApplication.logger.i("✅ Pro user detected - triggering license check", "Navigation")
+                    authViewModel.checkProLicense(userId)
+                    return@LaunchedEffect  // Wait for proLicenseState to update
+                }
+                // INDIVIDUAL USERS: Check subscription/trial expiration
+                // IMPORTANT: Attendre initialSyncDone pour éviter de naviguer vers expired screen
+                // avec des données Room obsolètes (ex: user a payé mais Room pas encore mis à jour)
+                else if (subscriptionType == SubscriptionType.EXPIRED || !hasValidAccess) {
+                    if (!authState.initialSyncDone) {
+                        MotiumApplication.logger.d("⏳ Waiting for initial sync before expired decision...", "Navigation")
+                        return@LaunchedEffect  // Attendre que la sync soit terminée
+                    }
+
+                    // Determine if this is a subscription expiration (had paid) or trial expiration
+                    val hadPaidSubscription = authState.user?.subscription?.stripeCustomerId != null ||
+                        authState.user?.subscription?.stripeSubscriptionId != null ||
+                        subscriptionType == SubscriptionType.PREMIUM
+
+                    val targetRoute = if (hadPaidSubscription) "subscription_expired" else "trial_expired"
+                    MotiumApplication.logger.i("🚫 Access expired (sync done) - navigating to $targetRoute", "Navigation")
+
+                    navController.navigate(targetRoute) {
                         popUpTo("splash") { inclusive = true }
                         popUpTo("login") { inclusive = true }
                         popUpTo("register") { inclusive = true }
@@ -97,14 +130,9 @@ fun MotiumNavHost(
                         launchSingleTop = true
                     }
                 } else {
-                    // Déterminer si l'utilisateur est une entreprise en utilisant le rôle
-                    val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
-                    val homeRoute = if (isEnterprise) "enterprise_home" else "home"
-
-                    MotiumApplication.logger.i("🧭 Navigating to: $homeRoute (isEnterprise: $isEnterprise)", "Navigation")
-
-                    // Si l'utilisateur est connecté, aller à l'accueil approprié
-                    navController.navigate(homeRoute) {
+                    // Individual user - navigate to home
+                    MotiumApplication.logger.i("🧭 Navigating to: home (individual user)", "Navigation")
+                    navController.navigate("home") {
                         popUpTo("splash") { inclusive = true }
                         popUpTo("login") { inclusive = true }
                         popUpTo("register") { inclusive = true }
@@ -112,12 +140,101 @@ fun MotiumNavHost(
                     }
                 }
             } else {
-                MotiumApplication.logger.i("🧭 Navigating to: login (not authenticated)", "Navigation")
-                // Si l'utilisateur n'est pas connecté, aller à la connexion
-                navController.navigate("login") {
-                    popUpTo("splash") { inclusive = true }
+                // Reset pro license state on logout
+                authViewModel.resetProLicenseState()
+                authViewModel.resetLoginState()
+
+                // Check if there's a pending password reset deep link
+                if (DeepLinkHandler.hasPendingReset()) {
+                    val resetToken = DeepLinkHandler.consumePendingResetToken()
+                    if (resetToken != null) {
+                        MotiumApplication.logger.i("🔗 Pending password reset detected - navigating to reset_password", "Navigation")
+                        val encodedToken = URLEncoder.encode(resetToken, StandardCharsets.UTF_8.toString())
+                        navController.navigate("reset_password/$encodedToken") {
+                            popUpTo("splash") { inclusive = true }
+                            launchSingleTop = true
+                        }
+                        return@LaunchedEffect
+                    }
+                }
+
+                // Check if there's a pending company invitation deep link (user not logged in)
+                if (DeepLinkHandler.hasPendingLink()) {
+                    val invitationToken = DeepLinkHandler.pendingLinkToken
+                    if (invitationToken != null) {
+                        MotiumApplication.logger.i("🔗 Pending invitation detected (not logged in) - navigating to accept_invitation", "Navigation")
+                        val encodedToken = URLEncoder.encode(invitationToken, StandardCharsets.UTF_8.toString())
+                        navController.navigate("accept_invitation/$encodedToken") {
+                            popUpTo("splash") { inclusive = true }
+                            launchSingleTop = true
+                        }
+                        return@LaunchedEffect
+                    }
+                }
+
+                // Prevent redundant navigation if already on login screen
+                val currentRoute = navController.currentBackStackEntry?.destination?.route
+                if (currentRoute != "login" && currentRoute?.startsWith("accept_invitation") != true) {
+                    MotiumApplication.logger.i("🧭 Navigating to: login (not authenticated)", "Navigation")
+                    // Si l'utilisateur n'est pas connecté, aller à la connexion
+                    navController.navigate("login") {
+                        popUpTo("splash") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+        }
+    }
+
+    // Separate LaunchedEffect for Pro user license state navigation
+    // This ensures network calls in ViewModel survive recomposition
+    LaunchedEffect(proLicenseState) {
+        MotiumApplication.logger.i("🔐 ProLicenseState changed: $proLicenseState", "Navigation")
+        when (proLicenseState) {
+            is ProLicenseState.Licensed -> {
+                // Check for pending deep link first
+                if (DeepLinkHandler.hasPendingLink()) {
+                    MotiumApplication.logger.i("🔗 Pro user with pending deep link - navigating to pro_settings", "Navigation")
+                    navController.navigate("pro_settings") {
+                        popUpTo("splash") { inclusive = true }
+                        popUpTo("login") { inclusive = true }
+                        popUpTo("register") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                } else {
+                    MotiumApplication.logger.i("🧭 Pro user licensed - navigating to enterprise_home", "Navigation")
+                    navController.navigate("enterprise_home") {
+                        popUpTo("splash") { inclusive = true }
+                        popUpTo("login") { inclusive = true }
+                        popUpTo("register") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            is ProLicenseState.NotLicensed, is ProLicenseState.NoProAccount -> {
+                MotiumApplication.logger.i("🚫 Pro user not licensed - navigating to pro_trial_expired", "Navigation")
+                navController.navigate("pro_trial_expired") {
+                    popUpTo(0) { inclusive = true }  // Clear entire back stack safely
                     launchSingleTop = true
                 }
+            }
+            is ProLicenseState.Error -> {
+                // On error (network issue), allow access in offline mode (fail-open)
+                // This prevents getting stuck on the splash screen when offline with no cache
+                val errorState = proLicenseState as ProLicenseState.Error
+                MotiumApplication.logger.w(
+                    "License check error - defaulting to enterprise_home (offline mode): ${errorState.message}",
+                    "Navigation"
+                )
+                navController.navigate("enterprise_home") {
+                    popUpTo("splash") { inclusive = true }
+                    popUpTo("login") { inclusive = true }
+                    popUpTo("register") { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+            ProLicenseState.Idle, ProLicenseState.Loading -> {
+                // Do nothing - still loading or not yet triggered
             }
         }
     }
@@ -156,17 +273,136 @@ fun MotiumNavHost(
             )
         }
 
+        // Password reset screen (from deep link)
+        composable(
+            route = "reset_password/{token}",
+            arguments = listOf(navArgument("token") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val token = backStackEntry.arguments?.getString("token") ?: ""
+            val decodedToken = URLDecoder.decode(token, StandardCharsets.UTF_8.toString())
+            ResetPasswordScreen(
+                token = decodedToken,
+                onNavigateToLogin = {
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onNavigateBack = {
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // Accept invitation screen (from deep link, user not logged in)
+        composable(
+            route = "accept_invitation/{token}",
+            arguments = listOf(navArgument("token") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val token = backStackEntry.arguments?.getString("token") ?: ""
+            val decodedToken = URLDecoder.decode(token, StandardCharsets.UTF_8.toString())
+            AcceptInvitationScreen(
+                invitationToken = decodedToken,
+                invitationEmail = null, // Will be fetched from the invitation
+                companyName = null,     // Will be fetched from the invitation
+                onGoogleSignIn = {
+                    // Store token for after Google sign-in
+                    // pendingLinkToken is already set, navigate to login with Google hint
+                    navController.navigate("login") {
+                        popUpTo("accept_invitation/$token") { inclusive = true }
+                    }
+                },
+                onExistingAccount = {
+                    // Navigate to login screen
+                    navController.navigate("login") {
+                        popUpTo("accept_invitation/$token") { inclusive = true }
+                    }
+                },
+                onAccountCreated = { userId ->
+                    // Account created, consume the token and sign in
+                    DeepLinkHandler.consumePendingToken()
+                    MotiumApplication.logger.i("Account created via invitation, user: $userId", "Navigation")
+                    // The authViewModel will pick up the new session
+                    // Navigate to login to complete authentication
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onCancel = {
+                    DeepLinkHandler.consumePendingToken()
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
         // Trial expired screen - blocks access until subscription
+        // Payment is handled directly in this screen
         composable("trial_expired") {
             val context = LocalContext.current
             val subscriptionManager = SubscriptionManager.getInstance(context)
 
             TrialExpiredScreen(
                 subscriptionManager = subscriptionManager,
+                authViewModel = authViewModel,
                 onSubscribe = { subscriptionType ->
-                    // Handle subscription flow
-                    // TODO: Implement actual payment flow
-                    MotiumApplication.logger.i("Subscription requested: $subscriptionType", "Navigation")
+                    // After successful payment, navigate to home
+                    MotiumApplication.logger.i("✅ Subscription activated: $subscriptionType, navigating to home", "Navigation")
+                    navController.navigate("home") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onLogout = {
+                    authViewModel.signOut()
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // Subscription expired screen - blocks access after subscription cancellation/expiration
+        // User must resubscribe to continue using the app
+        composable("subscription_expired") {
+            val context = LocalContext.current
+            val subscriptionManager = SubscriptionManager.getInstance(context)
+
+            SubscriptionExpiredScreen(
+                subscriptionManager = subscriptionManager,
+                authViewModel = authViewModel,
+                onSubscribe = { subscriptionType ->
+                    // After successful payment, navigate to home
+                    MotiumApplication.logger.i("✅ Subscription renewed: $subscriptionType, navigating to home", "Navigation")
+                    navController.navigate("home") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onLogout = {
+                    authViewModel.signOut()
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // Pro trial expired screen - blocks Pro users until license assigned
+        // User must assign themselves a license (or purchase one first)
+        composable("pro_trial_expired") {
+            val context = LocalContext.current
+            val subscriptionManager = SubscriptionManager.getInstance(context)
+
+            ProTrialExpiredScreen(
+                subscriptionManager = subscriptionManager,
+                authViewModel = authViewModel,
+                onLicenseActivated = {
+                    // After successful license assignment, navigate to enterprise home
+                    MotiumApplication.logger.i("✅ Pro license activated, navigating to enterprise_home", "Navigation")
+                    navController.navigate("enterprise_home") {
+                        popUpTo(0) { inclusive = true }
+                    }
                 },
                 onLogout = {
                     authViewModel.signOut()
@@ -180,63 +416,10 @@ fun MotiumNavHost(
         composable("register") {
             RegisterScreen(
                 onNavigateToLogin = { navController.navigate("login") },
-                onNavigateToPhoneVerification = { email, password, name, isProfessional, organizationName ->
-                    // Encode parameters for safe navigation
-                    val encodedEmail = URLEncoder.encode(email, StandardCharsets.UTF_8.toString())
-                    val encodedPassword = URLEncoder.encode(password, StandardCharsets.UTF_8.toString())
-                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
-                    val encodedOrg = URLEncoder.encode(organizationName, StandardCharsets.UTF_8.toString())
-                    navController.navigate("phone_verification/$encodedEmail/$encodedPassword/$encodedName/$isProfessional/$encodedOrg")
-                },
                 viewModel = authViewModel
             )
         }
 
-        // Phone verification during registration
-        composable(
-            route = "phone_verification/{email}/{password}/{name}/{isProfessional}/{organizationName}",
-            arguments = listOf(
-                navArgument("email") { type = NavType.StringType },
-                navArgument("password") { type = NavType.StringType },
-                navArgument("name") { type = NavType.StringType },
-                navArgument("isProfessional") { type = NavType.BoolType },
-                navArgument("organizationName") { type = NavType.StringType }
-            )
-        ) { backStackEntry ->
-            val email = URLDecoder.decode(
-                backStackEntry.arguments?.getString("email") ?: "",
-                StandardCharsets.UTF_8.toString()
-            )
-            val password = URLDecoder.decode(
-                backStackEntry.arguments?.getString("password") ?: "",
-                StandardCharsets.UTF_8.toString()
-            )
-            val name = URLDecoder.decode(
-                backStackEntry.arguments?.getString("name") ?: "",
-                StandardCharsets.UTF_8.toString()
-            )
-            val isProfessional = backStackEntry.arguments?.getBoolean("isProfessional") ?: false
-            val organizationName = URLDecoder.decode(
-                backStackEntry.arguments?.getString("organizationName") ?: "",
-                StandardCharsets.UTF_8.toString()
-            )
-
-            PhoneVerificationScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onVerificationComplete = { verifiedPhone ->
-                    // Complete registration with verified phone
-                    authViewModel.signUpWithVerification(
-                        email = email,
-                        password = password,
-                        name = name,
-                        isProfessional = isProfessional,
-                        organizationName = organizationName,
-                        verifiedPhone = verifiedPhone
-                    )
-                    // Navigation will be handled by authState LaunchedEffect
-                }
-            )
-        }
         composable("home") {
             NewHomeScreen(
                 onNavigateToCalendar = { navController.navigate("calendar") },
@@ -442,13 +625,36 @@ fun MotiumNavHost(
                         popUpTo(0) { inclusive = true }
                     }
                 },
-                authViewModel = authViewModel
+                onNavigateToUpgrade = { navController.navigate("upgrade") },
+                authViewModel = authViewModel,
+                onNavigateToConsents = { navController.navigate("settings/consents") }
+            )
+        }
+
+        // GDPR Consent Management
+        composable("settings/consents") {
+            ConsentManagementRoute(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 
         composable("log_viewer") {
             LogViewerScreen(
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        // Upgrade screen for individual users to subscribe to Premium
+        composable("upgrade") {
+            UpgradeScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onUpgradeSuccess = {
+                    // After successful upgrade, navigate back to home
+                    // and let LaunchedEffect refresh the auth state
+                    navController.navigate("home") {
+                        popUpTo("upgrade") { inclusive = true }
+                    }
+                }
             )
         }
 
@@ -558,12 +764,21 @@ fun MotiumNavHost(
                         popUpTo(0) { inclusive = true }
                     }
                 },
+                onNavigateToUpgrade = { /* Pro users use licenses, not individual upgrade */ },
                 authViewModel = authViewModel,
                 // Pro-specific parameters
                 isPro = true,
                 onNavigateToLinkedAccounts = { navController.navigate("pro_linked_accounts") },
                 onNavigateToLicenses = { navController.navigate("pro_licenses") },
-                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") }
+                onNavigateToExportAdvanced = { navController.navigate("pro_export_advanced") },
+                onNavigateToConsents = { navController.navigate("pro_settings/consents") }
+            )
+        }
+
+        // GDPR Consent Management for Pro users
+        composable("pro_settings/consents") {
+            ConsentManagementRoute(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 
@@ -720,7 +935,22 @@ fun MotiumNavHost(
                 onNavigateToUserTrips = { userId ->
                     navController.navigate("pro_user_trips/$userId")
                 },
+                onNavigateToUserVehicles = { userId ->
+                    navController.navigate("pro_user_vehicles/$userId")
+                },
                 authViewModel = authViewModel
+            )
+        }
+
+        // Linked User Vehicles Screen - View vehicles for a specific linked user
+        composable(
+            route = "pro_user_vehicles/{userId}",
+            arguments = listOf(navArgument("userId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+            com.application.motium.presentation.pro.accounts.LinkedAccountVehiclesScreen(
+                accountId = userId,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

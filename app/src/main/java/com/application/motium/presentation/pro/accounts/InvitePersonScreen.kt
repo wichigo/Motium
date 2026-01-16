@@ -93,10 +93,11 @@ fun InvitePersonScreen(
             fullNameError = null
         }
 
-        if (email.isBlank()) {
+        val trimmedEmail = email.trim()
+        if (trimmedEmail.isBlank()) {
             emailError = "L'email est requis"
             isValid = false
-        } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+        } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(trimmedEmail).matches()) {
             emailError = "Email invalide"
             isValid = false
         } else {
@@ -120,7 +121,7 @@ fun InvitePersonScreen(
                 }
 
                 // Get company name from pro account
-                val proAccountRepository = com.application.motium.data.supabase.ProAccountRepository.getInstance(context)
+                val proAccountRemoteDataSource = com.application.motium.data.supabase.ProAccountRemoteDataSource.getInstance(context)
                 val authState = authRepository.authState.first()
                 val currentUser = authState.user
                 if (currentUser == null) {
@@ -128,7 +129,7 @@ fun InvitePersonScreen(
                     isLoading = false
                     return@launch
                 }
-                val proAccountResult = proAccountRepository.getProAccount(currentUser.id)
+                val proAccountResult = proAccountRemoteDataSource.getProAccount(currentUser.id)
                 val companyName = proAccountResult.getOrNull()?.companyName
                 if (companyName == null) {
                     snackbarHostState.showSnackbar("Nom de l'entreprise non trouvé")
@@ -136,13 +137,13 @@ fun InvitePersonScreen(
                     return@launch
                 }
 
-                val linkedAccountRepository = com.application.motium.data.supabase.LinkedAccountRepository.getInstance(context)
-                val result = linkedAccountRepository.inviteUserWithDetails(
+                val linkedAccountRemoteDataSource = com.application.motium.data.supabase.LinkedAccountRemoteDataSource.getInstance(context)
+                val result = linkedAccountRemoteDataSource.inviteUserWithDetails(
                     proAccountId = proAccountId,
                     companyName = companyName,
-                    email = email,
-                    fullName = fullName,
-                    phone = phone.takeIf { it.isNotBlank() },
+                    email = email.trim(),
+                    fullName = fullName.trim(),
+                    phone = phone.trim().takeIf { it.isNotBlank() },
                     department = selectedDepartment
                 )
 
@@ -400,40 +401,7 @@ fun InvitePersonScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Info card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MotiumPrimaryTint
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        "Tarif licence",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MotiumPrimary
-                    )
-                    Text(
-                        "5,00 € HT / mois par utilisateur",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = textColor.copy(alpha = 0.7f)
-                    )
-                    Text(
-                        "La licence sera facturée une fois l'invitation acceptée.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = textColor.copy(alpha = 0.6f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Invite button
             Button(
@@ -463,7 +431,8 @@ fun InvitePersonScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Extra space at bottom to clear navigation bar
+            Spacer(modifier = Modifier.height(100.dp))
         }
     }
 }

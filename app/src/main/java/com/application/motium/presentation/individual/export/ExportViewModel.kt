@@ -141,9 +141,10 @@ class ExportViewModel(private val context: Context) : ViewModel() {
             filtered = filtered.filter { it.vehicleId == currentFilters.vehicleId }
         }
 
-        // Filter by trip type (if implemented)
+        // Filter by trip type
         if (currentFilters.tripType != null && currentFilters.tripType != "All Types") {
-            // TODO: Filter by trip type when implemented
+            val filterType = currentFilters.tripType.uppercase()
+            filtered = filtered.filter { it.tripType?.uppercase() == filterType }
         }
 
         _filteredTrips.value = filtered
