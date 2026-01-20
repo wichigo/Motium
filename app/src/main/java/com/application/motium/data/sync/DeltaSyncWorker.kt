@@ -13,6 +13,8 @@ import com.application.motium.data.local.entities.ProAccountEntity
 import com.application.motium.data.local.entities.StripeSubscriptionEntity
 import com.application.motium.data.local.entities.SyncMetadataEntity
 import com.application.motium.data.local.entities.SyncStatus
+import com.application.motium.data.local.entities.TripEntity
+import com.application.motium.data.local.entities.VehicleEntity
 import com.application.motium.data.local.entities.toDataModel
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
@@ -22,6 +24,7 @@ import com.application.motium.data.supabase.ProAccountRemoteDataSource as Supaba
 import com.application.motium.data.supabase.TripRemoteDataSource
 import com.application.motium.data.supabase.VehicleRemoteDataSource
 import com.application.motium.data.supabase.ChangesRemoteDataSource
+import com.application.motium.data.supabase.SyncChangesRemoteDataSource
 import com.application.motium.data.supabase.ChangeEntityMapper
 import com.application.motium.data.CompanyLinkRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
@@ -35,12 +38,18 @@ import kotlinx.serialization.json.Json
 
 /**
  * WorkManager CoroutineWorker for delta synchronization.
- * Handles both upload (local changes) and download (server changes).
+ * Uses atomic push+pull via sync_changes() RPC to prevent race conditions.
  *
- * Sync Process:
- * 1. Upload Phase: Process pending operations (CREATE, UPDATE, DELETE)
- * 2. Download Phase: Fetch changes from server since lastSyncTimestamp
- * 3. Conflict Resolution: Last-write-wins based on timestamps
+ * Sync Process (v2 - Atomic):
+ * 1. File Upload Phase: Upload pending receipt photos to Storage
+ * 2. Atomic Sync Phase: Push pending operations + Pull changes in single RPC call
+ * 3. Process Phase: Apply pulled changes to local database
+ *
+ * Key improvements over v1:
+ * - No race condition between push and pull (atomic transaction)
+ * - Idempotent operations via idempotency_key
+ * - Version-based conflict detection for TRIP, VEHICLE, USER
+ * - Single HTTP request for push+pull (reduced latency)
  *
  * Note: When Hilt is enabled, convert to @HiltWorker with @AssistedInject
  */
@@ -71,7 +80,7 @@ class DeltaSyncWorker(
     private val localUserRepository = LocalUserRepository.getInstance(applicationContext)
     private val tripRemoteDataSource = TripRemoteDataSource.getInstance(applicationContext)
     private val vehicleRemoteDataSource = VehicleRemoteDataSource.getInstance(applicationContext)
-    private val changesRemoteDataSource = ChangesRemoteDataSource.getInstance(applicationContext)
+    private val syncChangesRemoteDataSource = SyncChangesRemoteDataSource.getInstance(applicationContext)
     private val supabaseLicenseRepository = SupabaseLicenseRepository.getInstance(applicationContext)
     private val supabaseProAccountRepository = SupabaseProAccountRepository.getInstance(applicationContext)
     private val companyLinkRepository = CompanyLinkRepository.getInstance(applicationContext)
@@ -100,16 +109,14 @@ class DeltaSyncWorker(
             // Initialize sync metadata for all entity types
             initializeSyncMetadata()
 
-            // Phase 1: Upload pending file uploads (receipts)
+            // Phase 1: Upload pending file uploads (receipts) - must happen before sync
             val fileUploadSuccess = uploadPendingFiles()
 
-            // Phase 2: Upload pending operations
-            val uploadSuccess = uploadPendingOperations(user.id)
+            // Phase 2: Atomic push+pull via sync_changes() RPC
+            // This replaces the old separate uploadPendingOperations() + downloadServerChanges()
+            val syncSuccess = performAtomicSync(user.id)
 
-            // Phase 3: Download changes from server (delta sync)
-            val downloadSuccess = downloadServerChanges(user.id)
-
-            if (fileUploadSuccess && uploadSuccess && downloadSuccess) {
+            if (fileUploadSuccess && syncSuccess) {
                 MotiumApplication.logger.i("Delta sync completed successfully", TAG)
                 Result.success()
             } else {
@@ -283,8 +290,206 @@ class DeltaSyncWorker(
         }
     }
 
-    // ==================== UPLOAD PHASE ====================
+    // ==================== ATOMIC SYNC PHASE (v2) ====================
 
+    /**
+     * Perform atomic push+pull synchronization via sync_changes() RPC.
+     *
+     * This method:
+     * 1. Collects all pending operations ready for sync
+     * 2. Calls sync_changes() RPC which atomically:
+     *    - Processes all push operations in a transaction
+     *    - Fetches all changes since lastSync in the same transaction
+     * 3. Processes push results (mark synced or increment retry)
+     * 4. Processes pulled changes (apply to local DB)
+     *
+     * @param userId Current user's ID
+     * @return true if sync completed successfully
+     */
+    private suspend fun performAtomicSync(userId: String): Boolean {
+        // Calculate backoff threshold (operations ready for retry)
+        val now = System.currentTimeMillis()
+        val backoffThreshold = now - PendingOperationEntity.calculateBackoffMs(0)
+
+        // Get pending operations that are ready for sync
+        val pendingOps = pendingOpDao.getOperationsReadyForRetry(backoffThreshold, MAX_BATCH_SIZE)
+
+        // Get minimum lastSyncTimestamp across all entity types
+        val lastSync = getMinimumLastSyncTimestamp()
+
+        MotiumApplication.logger.i(
+            "Atomic sync: ${pendingOps.size} pending operations, lastSync: $lastSync (${java.util.Date(lastSync)})",
+            TAG
+        )
+
+        // Mark all entity types as sync in progress
+        markAllSyncInProgress(true)
+
+        try {
+            // SINGLE RPC CALL - atomic push + pull
+            val result = syncChangesRemoteDataSource.syncChanges(pendingOps, lastSync)
+
+            if (result.isFailure) {
+                val error = result.exceptionOrNull()?.message ?: "Unknown error"
+                MotiumApplication.logger.e("Atomic sync failed: $error", TAG)
+                setAllSyncErrors(error)
+                return false
+            }
+
+            val syncResult = result.getOrNull()!!
+
+            MotiumApplication.logger.i(
+                "Atomic sync RPC completed: ${syncResult.successfulPushCount}/${syncResult.totalPushOperations} pushes, " +
+                        "${syncResult.changes.totalChanges} changes pulled",
+                TAG
+            )
+
+            // Step 1: Process push results
+            processPushResults(syncResult.pushResults, pendingOps, now)
+
+            // Step 2: Process pulled changes
+            var success = true
+            val changes = syncResult.changes
+            success = processTripsChanges(changes.trips.map { it.toOldFormat() }, userId) && success
+            success = processLinkedTripsChanges(changes.linkedTrips.map { it.toOldFormat() }, userId) && success
+            success = processVehiclesChanges(changes.vehicles.map { it.toOldFormat() }, userId) && success
+            success = processExpensesChanges(changes.expenses.map { it.toOldFormat() }, userId) && success
+            success = processUserChanges(changes.users.map { it.toOldFormat() }) && success
+            success = processProAccountChanges(changes.proAccounts.map { it.toOldFormat() }, userId) && success
+            success = processLicenseChanges(changes.licenses.map { it.toOldFormat() }) && success
+            success = processProLicenseChanges(changes.proLicenses.map { it.toOldFormat() }) && success
+            success = processCompanyLinkChanges(changes.companyLinks.map { it.toOldFormat() }, userId) && success
+            success = processConsentChanges(changes.consents.map { it.toOldFormat() }, userId) && success
+            success = processWorkScheduleChanges(changes.workSchedules.map { it.toOldFormat() }, userId) && success
+            success = processAutoTrackingSettingsChanges(changes.autoTrackingSettings.map { it.toOldFormat() }, userId) && success
+
+            // Update sync metadata with max timestamp
+            if (success && changes.totalChanges > 0) {
+                updateAllLastSyncTimestamps(syncResult.maxTimestamp)
+            } else if (success) {
+                // No changes but successful - update timestamps anyway
+                updateAllLastSyncTimestamps(System.currentTimeMillis())
+            }
+
+            return success
+
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Atomic sync failed: ${e.message}", TAG, e)
+            setAllSyncErrors(e.message)
+            return false
+        } finally {
+            markAllSyncInProgress(false)
+        }
+    }
+
+    /**
+     * Process push results from sync_changes() RPC.
+     * Mark successful operations as synced, failed ones are retried.
+     */
+    private suspend fun processPushResults(
+        pushResults: List<SyncChangesRemoteDataSource.PushResult>,
+        pendingOps: List<PendingOperationEntity>,
+        timestamp: Long
+    ) {
+        // Create a map for quick lookup
+        val resultsMap = pushResults.associateBy { "${it.entityType}:${it.entityId}" }
+
+        pendingOps.forEach { op ->
+            val key = "${op.entityType}:${op.entityId}"
+            val result = resultsMap[key]
+
+            if (result == null) {
+                // No result for this operation - might have been deduplicated
+                MotiumApplication.logger.w("No push result for operation $key", TAG)
+                return@forEach
+            }
+
+            if (result.success) {
+                // Success - delete pending operation
+                pendingOpDao.deleteById(op.id)
+                MotiumApplication.logger.d(
+                    "Successfully synced ${op.action} for ${op.entityType}:${op.entityId}",
+                    TAG
+                )
+
+                // Mark entity as synced in local DB
+                markEntityAsSynced(op.entityType, op.entityId, timestamp)
+            } else {
+                // Failed - check error code for retry strategy
+                when (result.errorCode) {
+                    "VERSION_CONFLICT" -> {
+                        // Version conflict - server has newer data
+                        // Don't increment retry, let pull phase handle it
+                        MotiumApplication.logger.w(
+                            "Version conflict for ${op.entityType}:${op.entityId} (server v${result.serverVersion})",
+                            TAG
+                        )
+                    }
+                    "ALREADY_PROCESSED" -> {
+                        // Idempotent - already processed, safe to delete
+                        pendingOpDao.deleteById(op.id)
+                        MotiumApplication.logger.i(
+                            "Operation already processed (idempotent): ${op.idempotencyKey}",
+                            TAG
+                        )
+                    }
+                    else -> {
+                        // Other error - increment retry count
+                        pendingOpDao.markRetried(op.id, timestamp, result.errorMessage)
+                        MotiumApplication.logger.e(
+                            "Push failed for ${op.entityType}:${op.entityId}: ${result.errorCode} - ${result.errorMessage}",
+                            TAG
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Mark an entity as synced in local database after successful push.
+     */
+    private suspend fun markEntityAsSynced(entityType: String, entityId: String, timestamp: Long) {
+        try {
+            when (entityType) {
+                PendingOperationEntity.TYPE_TRIP -> tripDao.markTripAsSynced(entityId, timestamp)
+                PendingOperationEntity.TYPE_VEHICLE -> vehicleDao.markVehicleAsSynced(entityId, timestamp)
+                PendingOperationEntity.TYPE_LICENSE -> licenseDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
+                PendingOperationEntity.TYPE_PRO_ACCOUNT -> proAccountDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
+                PendingOperationEntity.TYPE_USER -> database.userDao().updateSyncStatus(entityId, SyncStatus.SYNCED.name, timestamp)
+                PendingOperationEntity.TYPE_CONSENT -> {
+                    // Consent entityId format: "userId:consentType"
+                    val parts = entityId.split(":")
+                    if (parts.size == 2) {
+                        val consent = consentDao.getConsentByTypeOnce(parts[0], parts[1])
+                        consent?.let { consentDao.markAsSynced(it.id, timestamp) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("Failed to mark $entityType:$entityId as synced: ${e.message}", TAG)
+        }
+    }
+
+    /**
+     * Extension function to convert new ChangeRecord format to old format for backward compatibility.
+     * This allows reusing existing processXxxChanges methods.
+     */
+    private fun SyncChangesRemoteDataSource.ChangeRecord.toOldFormat(): ChangesRemoteDataSource.ChangeRecord {
+        return ChangesRemoteDataSource.ChangeRecord(
+            entityType = this.entityType,
+            entityId = this.entityId,
+            action = this.action,
+            data = this.data,
+            updatedAt = this.updatedAt
+        )
+    }
+
+    // ==================== LEGACY UPLOAD PHASE (deprecated) ====================
+
+    @Deprecated("Use performAtomicSync() instead - kept for reference")
     private suspend fun uploadPendingOperations(userId: String): Boolean {
         // Calculate backoff threshold (operations ready for retry)
         val now = System.currentTimeMillis()
@@ -444,6 +649,10 @@ class DeltaSyncWorker(
         }
     }
 
+    /**
+     * Process license operations with full support for all license state changes.
+     * Handles: assignLicense, unassignLicense, requestUnlink, cancelUnlinkRequest, cancelLicense
+     */
     private suspend fun processLicenseOperation(operation: PendingOperationEntity): Boolean {
         if (operation.action != PendingOperationEntity.ACTION_UPDATE) {
             return true
@@ -455,24 +664,116 @@ class DeltaSyncWorker(
             return true
         }
 
+        // DEBUG: Log full license state BEFORE decision logic
+        MotiumApplication.logger.w(
+            "🔍 DEBUG processLicenseOperation() - License state BEFORE sync decision:\n" +
+            "   licenseId: ${licenseEntity.id}\n" +
+            "   status: ${licenseEntity.status}\n" +
+            "   linkedAccountId: ${licenseEntity.linkedAccountId}\n" +
+            "   unlinkRequestedAt: ${licenseEntity.unlinkRequestedAt}\n" +
+            "   unlinkEffectiveAt: ${licenseEntity.unlinkEffectiveAt}\n" +
+            "   proAccountId: ${licenseEntity.proAccountId}",
+            TAG
+        )
+
         return try {
-            // Sync to Supabase using existing repository
-            if (licenseEntity.linkedAccountId != null) {
-                val result = supabaseLicenseRepository.assignLicense(
-                    licenseEntity.id,
-                    licenseEntity.linkedAccountId
-                )
-                if (result.isFailure) {
-                    MotiumApplication.logger.e(
-                        "Failed to sync license to Supabase: ${result.exceptionOrNull()?.message}",
+            // Determine the operation based on local state and execute
+            val success: Boolean = when {
+                // 1. License canceled - sync cancellation to Supabase
+                licenseEntity.status == "canceled" -> {
+                    MotiumApplication.logger.w(
+                        "🔴 DEBUG BRANCH 1 SELECTED: status='canceled' → calling cancelLicense()",
                         TAG
                     )
-                    return false
+                    supabaseLicenseRepository.cancelLicense(licenseEntity.id).isSuccess
+                }
+
+                // 2. Unlink request in progress (has unlinkRequestedAt AND still assigned)
+                licenseEntity.unlinkRequestedAt != null && licenseEntity.linkedAccountId != null -> {
+                    MotiumApplication.logger.w(
+                        "🟠 DEBUG BRANCH 2 SELECTED: unlinkRequestedAt!=null && linkedAccountId!=null → calling requestUnlink()",
+                        TAG
+                    )
+                    supabaseLicenseRepository.requestUnlink(
+                        licenseEntity.id,
+                        licenseEntity.proAccountId
+                    ).isSuccess
+                }
+
+                // 3. Unlink request was cancelled (no unlinkRequestedAt, still assigned)
+                // This case handles when cancelUnlinkRequest was called locally
+                licenseEntity.unlinkRequestedAt == null
+                    && licenseEntity.unlinkEffectiveAt == null
+                    && licenseEntity.linkedAccountId != null -> {
+                    // Could be either a fresh assignment OR a cancelled unlink request
+                    // In both cases, we need to ensure the license is properly assigned on server
+                    MotiumApplication.logger.w(
+                        "🟢 DEBUG BRANCH 3 SELECTED: unlinkRequestedAt=null && unlinkEffectiveAt=null && linkedAccountId!=null → trying cancelUnlinkRequest/assignLicense",
+                        TAG
+                    )
+                    // First try to cancel any pending unlink request on server
+                    val cancelResult = supabaseLicenseRepository.cancelUnlinkRequest(
+                        licenseEntity.id,
+                        licenseEntity.proAccountId
+                    )
+                    // If cancel failed because there was no unlink request, just assign
+                    if (cancelResult.isFailure && cancelResult.exceptionOrNull()?.message?.contains("Aucune demande") == true) {
+                        supabaseLicenseRepository.assignLicense(
+                            licenseEntity.id,
+                            licenseEntity.linkedAccountId
+                        ).isSuccess
+                    } else {
+                        cancelResult.isSuccess
+                    }
+                }
+
+                // 4. License unassigned (linkedAccountId is null, was previously assigned)
+                licenseEntity.linkedAccountId == null && licenseEntity.status != "canceled" -> {
+                    MotiumApplication.logger.w(
+                        "🟣 DEBUG BRANCH 4 SELECTED: linkedAccountId=null && status!='canceled' → calling unassignLicense() (IMMEDIATE UNLINK)",
+                        TAG
+                    )
+                    supabaseLicenseRepository.unassignLicense(
+                        licenseEntity.id,
+                        licenseEntity.proAccountId
+                    ).isSuccess
+                }
+
+                // 5. Default: license assigned (linkedAccountId is set)
+                licenseEntity.linkedAccountId != null -> {
+                    MotiumApplication.logger.w(
+                        "🔵 DEBUG BRANCH 5 SELECTED: linkedAccountId!=null (fallback) → calling assignLicense()",
+                        TAG
+                    )
+                    supabaseLicenseRepository.assignLicense(
+                        licenseEntity.id,
+                        licenseEntity.linkedAccountId
+                    ).isSuccess
+                }
+
+                else -> {
+                    MotiumApplication.logger.w(
+                        "⚪ DEBUG BRANCH ELSE: No matching condition → no sync action",
+                        TAG
+                    )
+                    true
                 }
             }
-            // If unassigned or success, mark as synced
-            licenseDao.updateSyncStatus(operation.entityId, SyncStatus.SYNCED.name)
-            true
+
+            if (success) {
+                licenseDao.updateSyncStatus(operation.entityId, SyncStatus.SYNCED.name)
+                MotiumApplication.logger.i(
+                    "Successfully synced license ${licenseEntity.id} to Supabase",
+                    TAG
+                )
+                true
+            } else {
+                MotiumApplication.logger.e(
+                    "Failed to sync license to Supabase",
+                    TAG
+                )
+                false
+            }
         } catch (e: Exception) {
             MotiumApplication.logger.e(
                 "Failed to sync license: ${e.message}",
@@ -711,83 +1012,6 @@ class DeltaSyncWorker(
         }
     }
 
-    // ==================== DOWNLOAD PHASE ====================
-
-    /**
-     * Download all changes from server using single RPC call.
-     * Replaces 8+ individual API calls with a single get_changes() RPC.
-     *
-     * Performance improvement:
-     * - Before: 8+ HTTP requests, downloading ALL entities every sync
-     * - After: 1 HTTP request, downloading only changes since lastSync
-     */
-    private suspend fun downloadServerChanges(userId: String): Boolean {
-        // Get minimum lastSyncTimestamp across all entity types
-        val lastSync = getMinimumLastSyncTimestamp()
-
-        MotiumApplication.logger.i(
-            "Downloading all changes via RPC since: $lastSync (${java.util.Date(lastSync)})",
-            TAG
-        )
-
-        // Mark all entity types as sync in progress
-        markAllSyncInProgress(true)
-
-        try {
-            // SINGLE RPC CALL - replaces 8+ individual getAllX() calls
-            val result = changesRemoteDataSource.getChanges(lastSync)
-
-            if (result.isFailure) {
-                val error = result.exceptionOrNull()?.message ?: "Unknown error"
-                MotiumApplication.logger.e("Failed to fetch changes via RPC: $error", TAG)
-                setAllSyncErrors(error)
-                return false
-            }
-
-            val changes = result.getOrNull()!!
-
-            MotiumApplication.logger.i(
-                "RPC returned ${changes.totalChanges} total changes",
-                TAG
-            )
-
-            var success = true
-
-            // Process each entity type
-            success = processTripsChanges(changes.trips, userId) && success
-            success = processLinkedTripsChanges(changes.linkedTrips, userId) && success
-            success = processVehiclesChanges(changes.vehicles, userId) && success
-            success = processExpensesChanges(changes.expenses, userId) && success
-            success = processUserChanges(changes.users) && success
-            success = processProAccountChanges(changes.proAccounts, userId) && success
-            success = processLicenseChanges(changes.licenses) && success
-            success = processProLicenseChanges(changes.proLicenses) && success
-            success = processCompanyLinkChanges(changes.companyLinks, userId) && success
-            success = processConsentChanges(changes.consents, userId) && success
-            success = processWorkScheduleChanges(changes.workSchedules, userId) && success
-            success = processAutoTrackingSettingsChanges(changes.autoTrackingSettings, userId) && success
-
-            // Update sync metadata with max timestamp
-            if (success && changes.totalChanges > 0) {
-                updateAllLastSyncTimestamps(changes.maxTimestamp)
-            } else if (success) {
-                // No changes but successful - update timestamps anyway
-                updateAllLastSyncTimestamps(System.currentTimeMillis())
-            }
-
-            return success
-
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("Failed to download changes: ${e.message}", TAG, e)
-            setAllSyncErrors(e.message)
-            return false
-        } finally {
-            markAllSyncInProgress(false)
-        }
-    }
-
     private suspend fun getMinimumLastSyncTimestamp(): Long {
         val types = listOf(
             SyncMetadataEntity.TYPE_TRIP,
@@ -890,16 +1114,40 @@ class DeltaSyncWorker(
                                 ))
                                 syncedCount++
                             } else {
-                                // Conflict - use last-write-wins
+                                // CONFLICT RESOLUTION: version-based with semantic merge
+                                val serverVersion = entity.version
+                                val localVersion = localTrip.version
                                 val serverTimestamp = entity.serverUpdatedAt ?: 0L
-                                if (serverTimestamp > localTrip.localUpdatedAt) {
-                                    // Server wins
-                                    tripDao.insertTrip(entity.copy(
-                                        matchedRouteCoordinates = localTrip.matchedRouteCoordinates
-                                    ))
-                                    syncedCount++
+
+                                when {
+                                    // Case 1: Server has same or older version - local wins
+                                    serverVersion <= localVersion -> {
+                                        // Local wins - keep local changes, will be uploaded
+                                        MotiumApplication.logger.d(
+                                            "Conflict: Local wins (localVersion=$localVersion >= serverVersion=$serverVersion)",
+                                            TAG
+                                        )
+                                    }
+                                    // Case 2: Server has newer version - merge field-by-field
+                                    serverTimestamp > localTrip.localUpdatedAt -> {
+                                        // Server has genuinely newer data - merge
+                                        val merged = mergeTrips(localTrip, entity)
+                                        tripDao.insertTrip(merged)
+                                        syncedCount++
+                                        MotiumApplication.logger.i(
+                                            "Conflict resolved: Merged local+server for trip ${entity.id}",
+                                            TAG
+                                        )
+                                    }
+                                    // Case 3: Local is newer timestamp-wise - mark as conflict for review
+                                    else -> {
+                                        tripDao.markTripAsConflict(localTrip.id)
+                                        MotiumApplication.logger.w(
+                                            "Conflict detected: Trip ${entity.id} marked for manual review",
+                                            TAG
+                                        )
+                                    }
                                 }
-                                // else: Local wins, will be uploaded in next sync
                             }
                         }
                     }
@@ -974,15 +1222,47 @@ class DeltaSyncWorker(
                         if (entity != null) {
                             val localVehicle = vehicleDao.getVehicleById(entity.id)
 
-                            if (localVehicle == null || localVehicle.syncStatus == SyncStatus.SYNCED.name) {
+                            if (localVehicle == null) {
+                                // New vehicle from server
+                                vehicleDao.insertVehicle(entity)
+                                syncedCount++
+                            } else if (localVehicle.syncStatus == SyncStatus.SYNCED.name) {
+                                // No local changes - update from server
                                 vehicleDao.insertVehicle(entity)
                                 syncedCount++
                             } else {
-                                // Conflict - last-write-wins
+                                // CONFLICT RESOLUTION: version-based with semantic merge
+                                val serverVersion = entity.version
+                                val localVersion = localVehicle.version
                                 val serverTimestamp = entity.serverUpdatedAt ?: 0L
-                                if (serverTimestamp > localVehicle.localUpdatedAt) {
-                                    vehicleDao.insertVehicle(entity)
-                                    syncedCount++
+
+                                when {
+                                    // Case 1: Server has same or older version - local wins
+                                    serverVersion <= localVersion -> {
+                                        // Local wins - keep local changes, will be uploaded
+                                        MotiumApplication.logger.d(
+                                            "Vehicle conflict: Local wins (localVersion=$localVersion >= serverVersion=$serverVersion)",
+                                            TAG
+                                        )
+                                    }
+                                    // Case 2: Server has newer version - merge field-by-field
+                                    serverTimestamp > localVehicle.localUpdatedAt -> {
+                                        // Server has genuinely newer data - merge
+                                        val merged = mergeVehicles(localVehicle, entity)
+                                        vehicleDao.insertVehicle(merged)
+                                        syncedCount++
+                                        MotiumApplication.logger.i(
+                                            "Vehicle conflict resolved: Merged local+server for vehicle ${entity.id}",
+                                            TAG
+                                        )
+                                    }
+                                    // Case 3: Local is newer timestamp-wise - keep local
+                                    else -> {
+                                        MotiumApplication.logger.d(
+                                            "Vehicle conflict: Local wins on timestamp (local=${localVehicle.localUpdatedAt} > server=$serverTimestamp)",
+                                            TAG
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1366,6 +1646,114 @@ class DeltaSyncWorker(
 
         MotiumApplication.logger.i("Processed $syncedCount auto tracking settings changes", TAG)
         return true
+    }
+
+    // ==================== FIELD-LEVEL MERGE HELPERS ====================
+
+    /**
+     * Merge local and server trip data field-by-field.
+     *
+     * Strategy:
+     * - User-editable fields (notes, tripType, vehicleId, isWorkHomeTrip): prefer LOCAL if modified
+     * - Authoritative/system fields (locations, distance, timestamps, addresses): prefer SERVER
+     * - Computed fields (reimbursementAmount): recalculate after merge
+     * - Cache fields (matchedRouteCoordinates): preserve local cache
+     * - Sync metadata: mark as SYNCED with server's version
+     *
+     * @param local The local entity with pending changes
+     * @param server The server entity with newer data
+     * @return Merged entity ready to be saved
+     */
+    private fun mergeTrips(local: TripEntity, server: TripEntity): TripEntity {
+        // Determine if local has user-editable changes by checking if fields differ
+        val localHasNotesChange = local.notes != null && local.notes != server.notes
+        val localHasTripTypeChange = local.tripType != server.tripType
+        val localHasVehicleChange = local.vehicleId != server.vehicleId
+        val localHasWorkHomeFlagChange = local.isWorkHomeTrip != server.isWorkHomeTrip
+
+        // CRITICAL: If we preserved any local changes, mark as PENDING_UPLOAD
+        // so the upload phase will push these merged changes to the server.
+        // Otherwise, local changes would be silently lost.
+        val hasPreservedLocalChanges = localHasNotesChange || localHasTripTypeChange ||
+                localHasVehicleChange || localHasWorkHomeFlagChange
+
+        return server.copy(
+            // ===== USER-EDITABLE FIELDS: Prefer local if changed =====
+            notes = if (localHasNotesChange) local.notes else server.notes,
+            tripType = if (localHasTripTypeChange) local.tripType else server.tripType,
+            vehicleId = if (localHasVehicleChange) local.vehicleId else server.vehicleId,
+            isWorkHomeTrip = if (localHasWorkHomeFlagChange) local.isWorkHomeTrip else server.isWorkHomeTrip,
+
+            // ===== AUTHORITATIVE FIELDS: Always from server =====
+            // (locations, distance, times, addresses are system-generated)
+
+            // ===== COMPUTED FIELDS: Recalculate based on merged data =====
+            // Keep server's reimbursementAmount as it's calculated server-side based on authoritative distance
+            reimbursementAmount = server.reimbursementAmount,
+
+            // ===== CACHE FIELDS: Preserve local cache (avoid re-fetching map-matched route) =====
+            matchedRouteCoordinates = local.matchedRouteCoordinates ?: server.matchedRouteCoordinates,
+
+            // ===== SYNC METADATA =====
+            // If local changes preserved → PENDING_UPLOAD so upload phase syncs them
+            // Otherwise → SYNCED as server and local are now identical
+            syncStatus = if (hasPreservedLocalChanges) SyncStatus.PENDING_UPLOAD.name else SyncStatus.SYNCED.name,
+            serverUpdatedAt = server.serverUpdatedAt,
+            // CRITICAL: Increment version if we have local changes to upload.
+            // This prevents the server from rejecting our upload due to version conflict.
+            // The server expects version > current_server_version for updates.
+            version = if (hasPreservedLocalChanges) server.version + 1 else server.version,
+            localUpdatedAt = System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Merge local and server vehicle data field-by-field.
+     *
+     * Strategy:
+     * - User-editable fields (name, licensePlate, power, fuelType, mileageRate, isDefault): prefer LOCAL
+     * - Mileage counters: prefer SERVER (authoritative cumulative values)
+     * - Sync metadata: mark as SYNCED
+     *
+     * @param local The local entity with pending changes
+     * @param server The server entity with newer data
+     * @return Merged entity ready to be saved
+     */
+    private fun mergeVehicles(local: VehicleEntity, server: VehicleEntity): VehicleEntity {
+        val localHasNameChange = local.name != server.name
+        val localHasPlateChange = local.licensePlate != server.licensePlate
+        val localHasPowerChange = local.power != server.power
+        val localHasFuelChange = local.fuelType != server.fuelType
+        val localHasRateChange = local.mileageRate != server.mileageRate
+        val localHasDefaultChange = local.isDefault != server.isDefault
+
+        // CRITICAL: If we preserved any local changes, mark as PENDING_UPLOAD
+        // so the upload phase will push these merged changes to the server.
+        val hasPreservedLocalChanges = localHasNameChange || localHasPlateChange ||
+                localHasPowerChange || localHasFuelChange ||
+                localHasRateChange || localHasDefaultChange
+
+        return server.copy(
+            // ===== USER-EDITABLE FIELDS: Prefer local if changed =====
+            name = if (localHasNameChange) local.name else server.name,
+            licensePlate = if (localHasPlateChange) local.licensePlate else server.licensePlate,
+            power = if (localHasPowerChange) local.power else server.power,
+            fuelType = if (localHasFuelChange) local.fuelType else server.fuelType,
+            mileageRate = if (localHasRateChange) local.mileageRate else server.mileageRate,
+            isDefault = if (localHasDefaultChange) local.isDefault else server.isDefault,
+
+            // ===== MILEAGE COUNTERS: Server is authoritative =====
+            // (cumulative values calculated from all validated trips)
+
+            // ===== SYNC METADATA =====
+            // If local changes preserved → PENDING_UPLOAD so upload phase syncs them
+            syncStatus = if (hasPreservedLocalChanges) SyncStatus.PENDING_UPLOAD.name else SyncStatus.SYNCED.name,
+            serverUpdatedAt = server.serverUpdatedAt,
+            // CRITICAL: Increment version if we have local changes to upload.
+            // This prevents the server from rejecting our upload due to version conflict.
+            version = if (hasPreservedLocalChanges) server.version + 1 else server.version,
+            localUpdatedAt = System.currentTimeMillis()
+        )
     }
 
     // ==================== LEGACY METHODS (kept for fallback) ====================

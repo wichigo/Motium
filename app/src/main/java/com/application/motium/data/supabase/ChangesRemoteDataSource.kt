@@ -22,7 +22,12 @@ import java.util.TimeZone
  * Performance improvement:
  * - Before: 8+ HTTP requests per sync, downloading ALL entities
  * - After: 1 HTTP request, downloading only changes since lastSync
+ *
+ * @deprecated Use [SyncChangesRemoteDataSource] instead which provides atomic push+pull
+ * via sync_changes() RPC. Using get_changes() separately from push operations causes
+ * race conditions where uploaded data can be overwritten by stale pull data.
  */
+@Deprecated("Use SyncChangesRemoteDataSource for atomic push+pull via sync_changes() RPC")
 class ChangesRemoteDataSource(private val context: Context) {
 
     private val client = SupabaseClient.client
@@ -59,10 +64,20 @@ class ChangesRemoteDataSource(private val context: Context) {
 
     /**
      * Request DTO for get_changes RPC.
+     *
+     * TODO: Add pagination support when RPC is updated:
+     * - p_limit: Maximum number of records to return (default 500)
+     * - p_offset: Number of records to skip (for pagination)
+     *
+     * The RPC function would need to be modified to accept these parameters:
+     * CREATE FUNCTION get_changes(since TIMESTAMPTZ, p_limit INT DEFAULT 500, p_offset INT DEFAULT 0)
      */
     @Serializable
     data class GetChangesRequest(
-        val since: String  // TIMESTAMPTZ formatted string
+        val since: String,  // TIMESTAMPTZ formatted string
+        // Pagination params (for future use when RPC supports them)
+        // val limit: Int = 500,
+        // val offset: Int = 0
     )
 
     /**

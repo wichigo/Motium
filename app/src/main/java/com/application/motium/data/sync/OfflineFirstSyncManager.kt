@@ -61,6 +61,8 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
     private val database = MotiumDatabase.getInstance(context)
     private val pendingOpDao = database.pendingOperationDao()
     private val syncMetadataDao = database.syncMetadataDao()
+    private val tripDao = database.tripDao()
+    private val vehicleDao = database.vehicleDao()
     private val networkManager = NetworkConnectionManager.getInstance(context)
     private val workManager = WorkManager.getInstance(context)
 
@@ -72,6 +74,12 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
      * Flow of pending operations count for UI display.
      */
     val pendingOperationsCount: Flow<Int> = pendingOpDao.getCountFlow()
+
+    /**
+     * Flow of failed operations count for UI display.
+     * Operations fail when they exceed MAX_RETRY_COUNT.
+     */
+    val failedOperationsCount: Flow<Int> = pendingOpDao.getFailedCountFlow()
 
     /**
      * StateFlow of network connectivity status.
@@ -104,7 +112,8 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
 
     /**
      * Queue an operation for background sync.
-     * Removes any existing operation for the same entity to prevent duplicates.
+     * Atomically replaces any existing operation for the same entity to prevent duplicates.
+     * Uses @Transaction in the DAO to prevent race conditions between delete and insert.
      *
      * @param entityType Entity type (TRIP, VEHICLE, EXPENSE, USER)
      * @param entityId ID of the entity
@@ -119,23 +128,31 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
         payload: String? = null,
         priority: Int = 0
     ) {
-        // Remove any existing operation for same entity to prevent duplicates
-        pendingOpDao.deleteByEntity(entityId, entityType)
+        val createdAt = System.currentTimeMillis()
+        val idempotencyKey = PendingOperationEntity.generateIdempotencyKey(
+            entityType = entityType,
+            entityId = entityId,
+            action = action,
+            createdAt = createdAt
+        )
 
         val operation = PendingOperationEntity(
             id = UUID.randomUUID().toString(),
+            idempotencyKey = idempotencyKey,
             entityType = entityType,
             entityId = entityId,
             action = action,
             payload = payload,
-            createdAt = System.currentTimeMillis(),
+            createdAt = createdAt,
             priority = priority
         )
 
-        pendingOpDao.insert(operation)
+        // Atomically replace any existing operation for same entity
+        // Uses @Transaction to prevent race conditions
+        pendingOpDao.replaceOperation(entityId, entityType, operation)
 
         MotiumApplication.logger.i(
-            "Queued $action operation for $entityType:$entityId (priority=$priority)",
+            "Queued $action operation for $entityType:$entityId (priority=$priority, idempotencyKey=$idempotencyKey)",
             TAG
         )
 
@@ -229,6 +246,30 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
     }
 
     /**
+     * Force a full re-sync by resetting all sync metadata timestamps to epoch (0).
+     * This will cause the next delta sync to fetch ALL data from the server.
+     *
+     * Use cases:
+     * - After a major server migration
+     * - When local data is suspected to be corrupted
+     * - When the user explicitly requests a full refresh
+     *
+     * Note: This does NOT delete local data. It just resets the "lastSyncTimestamp"
+     * so the delta sync will re-download everything. Local changes marked as
+     * PENDING_UPLOAD will still be uploaded normally.
+     */
+    suspend fun forceFullSync() {
+        // Reset all sync metadata timestamps to 0 (epoch)
+        syncMetadataDao.resetAllTimestamps()
+        MotiumApplication.logger.i("Reset all sync timestamps for full re-sync", TAG)
+
+        // Trigger immediate sync if online
+        if (networkManager.isConnected.value) {
+            triggerImmediateSync()
+        }
+    }
+
+    /**
      * Get the last sync timestamp for an entity type.
      */
     suspend fun getLastSyncTimestamp(entityType: String): Long {
@@ -295,6 +336,63 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
     suspend fun clearAllPendingOperations() {
         pendingOpDao.deleteAll()
         MotiumApplication.logger.i("Cleared all pending operations", TAG)
+    }
+
+    // ==================== CONFLICT MANAGEMENT ====================
+
+    /**
+     * Get Flow of conflict trips count for a user.
+     * Used to show badge/indicator in UI when conflicts need resolution.
+     */
+    fun getConflictTripsCountFlow(userId: String): Flow<Int> {
+        return tripDao.getConflictTripsCountFlow(userId)
+    }
+
+    /**
+     * Get Flow of conflict vehicles count for a user.
+     */
+    fun getConflictVehiclesCountFlow(userId: String): Flow<Int> {
+        return vehicleDao.getConflictVehiclesCountFlow(userId)
+    }
+
+    /**
+     * Resolve a trip conflict by keeping local changes.
+     * The trip will be marked PENDING_UPLOAD and synced to server.
+     */
+    suspend fun resolveConflictKeepLocalTrip(tripId: String) {
+        tripDao.resolveConflictKeepLocal(tripId)
+        MotiumApplication.logger.i("Resolved trip conflict - kept local: $tripId", TAG)
+        if (networkManager.isConnected.value) {
+            triggerImmediateSync()
+        }
+    }
+
+    /**
+     * Resolve a trip conflict by accepting server version.
+     * Local changes will be discarded.
+     */
+    suspend fun resolveConflictKeepServerTrip(tripId: String) {
+        tripDao.resolveConflictKeepServer(tripId)
+        MotiumApplication.logger.i("Resolved trip conflict - kept server: $tripId", TAG)
+    }
+
+    /**
+     * Resolve a vehicle conflict by keeping local changes.
+     */
+    suspend fun resolveConflictKeepLocalVehicle(vehicleId: String) {
+        vehicleDao.resolveConflictKeepLocal(vehicleId)
+        MotiumApplication.logger.i("Resolved vehicle conflict - kept local: $vehicleId", TAG)
+        if (networkManager.isConnected.value) {
+            triggerImmediateSync()
+        }
+    }
+
+    /**
+     * Resolve a vehicle conflict by accepting server version.
+     */
+    suspend fun resolveConflictKeepServerVehicle(vehicleId: String) {
+        vehicleDao.resolveConflictKeepServer(vehicleId)
+        MotiumApplication.logger.i("Resolved vehicle conflict - kept server: $vehicleId", TAG)
     }
 
     // ==================== DATA CLASSES ====================
