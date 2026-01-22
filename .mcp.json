@@ -17,12 +17,21 @@
       }
     },
     "appium-lite": {
-          "command": "python",
-          "args": ["-m", "mcp_appium_lite"],
-       "cwd": "E:\\Professionnel\\mcp-appium-lite-project",
-        "env": {
-          "MCP_APPIUM_API_KEY": "dev_premium_2025"
-        }
+        "command": "python",
+        "args": ["-m", "mcp_appium_lite"],
+      "cwd": "E:\\Professionnel\\mcp-appium-lite-project",
+      "env": {
+        "MCP_APPIUM_API_KEY": "dev_premium_2025"
       }
+    },
+    "resend": {
+      "command": "node",
+      "args": [
+        "E:/Professionnel/mcp-servers/mcp-send-email/build/index.js"
+      ],
+      "env": {
+        "RESEND_API_KEY": "re_HcZpATAg_HnAbkGTGUnpmGjkbeZja2JSC"
+      }
+    }
   }
 }

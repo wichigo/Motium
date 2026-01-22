@@ -450,7 +450,7 @@ class LinkedAccountsViewModel(
                 result.fold(
                     onSuccess = {
                         val message = if (license != null) {
-                            "Compte supprimé. La licence sera libérée après la période de préavis."
+                            "Compte supprimé. La licence sera libérée à la date de renouvellement."
                         } else {
                             "Compte supprimé"
                         }

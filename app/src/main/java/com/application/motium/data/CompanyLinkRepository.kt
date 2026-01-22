@@ -269,14 +269,17 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             // 1. Create a pending operation for this activation
             val operationId = UUID.randomUUID().toString()
             val payload = Json.encodeToString(ActivationPayload(token, userId))
+            val createdAt = System.currentTimeMillis()
+            val idempotencyKey = "${PendingOperationEntity.TYPE_COMPANY_LINK}:$token:ACTIVATE:$createdAt"
 
             val pendingOp = PendingOperationEntity(
                 id = operationId,
+                idempotencyKey = idempotencyKey,
                 entityType = PendingOperationEntity.TYPE_COMPANY_LINK,
                 entityId = token, // Use token as entity ID for activation operations
                 action = "ACTIVATE", // Custom action for company link activation
                 payload = payload,
-                createdAt = System.currentTimeMillis(),
+                createdAt = createdAt,
                 priority = 1 // High priority for activation
             )
 
@@ -458,14 +461,17 @@ class CompanyLinkRepository private constructor(private val context: Context) {
                 initiatedBy = "employee",
                 initiatorEmail = email
             ))
+            val createdAt = System.currentTimeMillis()
+            val idempotencyKey = "${PendingOperationEntity.TYPE_COMPANY_LINK}:$linkId:REQUEST_UNLINK:$createdAt"
 
             val pendingOp = PendingOperationEntity(
                 id = operationId,
+                idempotencyKey = idempotencyKey,
                 entityType = PendingOperationEntity.TYPE_COMPANY_LINK,
                 entityId = linkId,
                 action = "REQUEST_UNLINK", // Custom action for unlink confirmation request
                 payload = payload,
-                createdAt = System.currentTimeMillis(),
+                createdAt = createdAt,
                 priority = 1 // High priority
             )
 

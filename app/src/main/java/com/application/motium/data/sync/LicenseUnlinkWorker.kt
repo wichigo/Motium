@@ -15,9 +15,10 @@ import kotlinx.coroutines.withContext
  * 1. Find all licenses with expired unlink_effective_at dates
  * 2. Return those licenses to the pool (clear linked_account_id)
  *
- * The 30-day unlink notice period is enforced by this worker.
- * When a Pro user requests to unlink a license, unlink_effective_at is set
- * to 30 days in the future. This worker processes those requests when they expire.
+ * When a Pro user requests to unlink/cancel a license:
+ * - Lifetime: unlink_effective_at = now (immediate)
+ * - Mensuelle: unlink_effective_at = endDate (date de renouvellement)
+ * This worker processes those requests when they expire.
  */
 class LicenseUnlinkWorker(
     appContext: Context,

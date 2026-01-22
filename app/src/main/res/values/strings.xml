@@ -6,6 +6,9 @@
 
     <!-- Sync Status Indicator -->
     <string name="sync_status_offline">Mode hors-ligne</string>
+    <string name="sync_status_needs_relogin">Reconnexion requise</string>
     <string name="sync_status_pending">%1$d en attente</string>
+    <string name="sync_status_failed">%1$d échec(s)</string>
+    <string name="sync_status_conflict">%1$d conflit(s)</string>
     <string name="sync_status_synced">Synchronisé</string>
 </resources>

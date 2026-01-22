@@ -10,9 +10,16 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
 
 /**
- * Gestionnaire de synchronisation Supabase
- * Gère la synchronisation automatique périodique et les retry d'opérations échouées
+ * @deprecated OBSOLÈTE (2026-01) - Utiliser OfflineFirstSyncManager à la place.
+ *
+ * Ce gestionnaire de synchronisation legacy est remplacé par OfflineFirstSyncManager
+ * qui utilise WorkManager (plus respectueux de la batterie) et l'approche delta sync
+ * via sync_changes() RPC.
+ *
+ * Les méthodes de ce manager ne font plus rien pour éviter les duplications de sync
+ * et économiser la batterie.
  */
+@Deprecated("Use OfflineFirstSyncManager instead - this manager is now a no-op stub for backwards compatibility")
 class SupabaseSyncManager private constructor(private val context: Context) {
 
     companion object {
@@ -45,69 +52,37 @@ class SupabaseSyncManager private constructor(private val context: Context) {
     private var lastSuccessfulSync: Long = 0
 
     /**
-     * Démarre la synchronisation automatique périodique
+     * @deprecated NO-OP - Sync is now handled by OfflineFirstSyncManager via WorkManager
      */
+    @Deprecated("Use OfflineFirstSyncManager.startPeriodicSync() instead")
     fun startPeriodicSync() {
-        MotiumApplication.logger.i("🔄 Starting periodic sync", "SyncManager")
-
-        periodicSyncJob?.cancel()
-        periodicSyncJob = syncScope.launch {
-            while (isActive) {
-                // Attendre l'intervalle de synchronisation
-                val interval = if (pendingQueue.getPendingCount() > 0) {
-                    QUICK_SYNC_INTERVAL_MS // Sync plus fréquent s'il y a des opérations en attente
-                } else {
-                    SYNC_INTERVAL_MS // Sync normal
-                }
-
-                delay(interval)
-
-                // Synchroniser si réseau disponible et utilisateur connecté
-                if (networkManager.isConnected.value && authRepository.isUserAuthenticated()) {
-                    performSync()
-                } else {
-                    MotiumApplication.logger.d(
-                        "Skipping sync - network: ${networkManager.isConnected.value}, " +
-                        "auth: ${authRepository.isUserAuthenticated()}",
-                        "SyncManager"
-                    )
-                }
-            }
-        }
-
-        // Observer les changements de réseau pour sync immédiat
-        syncScope.launch {
-            networkManager.isConnected.collectLatest { isConnected ->
-                if (isConnected && !isSyncing) {
-                    // Réseau restauré - tenter sync immédiat
-                    val timeSinceLastSync = System.currentTimeMillis() - lastSuccessfulSync
-                    if (timeSinceLastSync > 60_000 || pendingQueue.getPendingCount() > 0) {
-                        MotiumApplication.logger.i(
-                            "🌐 Network restored - triggering immediate sync",
-                            "SyncManager"
-                        )
-                        delay(2000) // Attendre 2s pour stabilisation réseau
-                        performSync()
-                    }
-                }
-            }
-        }
+        MotiumApplication.logger.i(
+            "⚠️ SupabaseSyncManager.startPeriodicSync() is deprecated - sync now handled by WorkManager",
+            "SyncManager"
+        )
+        // NO-OP: Don't start any background tasks to save battery
     }
 
     /**
-     * Arrête la synchronisation périodique
+     * @deprecated NO-OP
      */
+    @Deprecated("No longer needed")
     fun stopPeriodicSync() {
-        MotiumApplication.logger.i("🛑 Stopping periodic sync", "SyncManager")
+        MotiumApplication.logger.d("SupabaseSyncManager.stopPeriodicSync() is deprecated", "SyncManager")
         periodicSyncJob?.cancel()
         periodicSyncJob = null
     }
 
     /**
-     * Force une synchronisation immédiate
+     * @deprecated NO-OP - Use OfflineFirstSyncManager.triggerImmediateSync() instead
      */
+    @Deprecated("Use OfflineFirstSyncManager.triggerImmediateSync() instead")
     suspend fun forceSyncNow(): Boolean {
-        return performSync()
+        MotiumApplication.logger.d(
+            "SupabaseSyncManager.forceSyncNow() is deprecated - use OfflineFirstSyncManager",
+            "SyncManager"
+        )
+        return true // Return success but don't do anything
     }
 
     /**

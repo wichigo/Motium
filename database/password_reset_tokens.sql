@@ -47,6 +47,7 @@ END;
 $$;
 
 -- Function to create a password reset token
+-- Returns NULL if user not found (no exception raised for security)
 CREATE OR REPLACE FUNCTION public.create_password_reset_token(
   p_email TEXT,
   p_token TEXT,
@@ -60,13 +61,14 @@ DECLARE
   v_user_id UUID;
   v_token_id UUID;
 BEGIN
-  -- Find user by email
+  -- Find user by email (case-insensitive)
   SELECT id INTO v_user_id
   FROM auth.users
-  WHERE email = p_email;
+  WHERE LOWER(email) = LOWER(p_email);
 
+  -- Return NULL if user not found (don't raise exception - let Edge Function handle gracefully)
   IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'User not found with email: %', p_email;
+    RETURN NULL;
   END IF;
 
   -- Invalidate any existing unused tokens for this user

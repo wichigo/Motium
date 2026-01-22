@@ -15,6 +15,7 @@ import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicensesSummary
 import com.stripe.android.paymentsheet.PaymentSheetResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -71,9 +72,8 @@ data class LicensesUiState(
         availableLicenses = 0,
         assignedLicenses = 0,
         pendingUnlinkLicenses = 0,
-        pendingPaymentLicenses = 0,
-        expiredLicenses = 0,
-        pausedLicenses = 0,
+        suspendedLicenses = 0,
+        canceledLicenses = 0,
         lifetimeLicenses = 0,
         monthlyLicenses = 0,
         monthlyTotalHT = 0.0,
@@ -248,6 +248,9 @@ class LicensesViewModel(
                     )}
                     MotiumApplication.logger.d("Billing anchor day loaded: ${proAccountDto?.billingAnchorDay}", TAG)
                 }
+            } catch (e: CancellationException) {
+                // Expected during scope cleanup/navigation - don't log as error
+                MotiumApplication.logger.d("Billing anchor day loading cancelled", TAG)
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error loading billing anchor day: ${e.message}", TAG, e)
             }
@@ -327,10 +330,24 @@ class LicensesViewModel(
 
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Purchase error: ${e.message}", TAG, e)
+                // Provide actionable error message based on error type
+                val errorMessage = when {
+                    e.message?.contains("network", ignoreCase = true) == true ||
+                    e.message?.contains("timeout", ignoreCase = true) == true ||
+                    e.message?.contains("connect", ignoreCase = true) == true ->
+                        "Erreur de connexion. Verifiez votre connexion internet et reessayez."
+                    e.message?.contains("unauthorized", ignoreCase = true) == true ||
+                    e.message?.contains("auth", ignoreCase = true) == true ->
+                        "Session expiree. Veuillez vous reconnecter et reessayer."
+                    e.message?.contains("stripe", ignoreCase = true) == true ->
+                        "Erreur de paiement. Reessayez ou contactez support@motium.fr"
+                    else ->
+                        "Erreur inattendue: ${e.message}. Si le probleme persiste, contactez support@motium.fr"
+                }
                 _dialogState.update { it.copy(
                     isPurchasing = false,
                     pendingPurchase = null,
-                    error = "Erreur: ${e.message}"
+                    error = errorMessage
                 )}
             }
         }
@@ -379,11 +396,25 @@ class LicensesViewModel(
                 MotiumApplication.logger.i("Payment was canceled", TAG)
             }
             is PaymentSheetResult.Failed -> {
+                // Provide actionable error message based on Stripe error
+                val errorMessage = when {
+                    result.error.message?.contains("declined", ignoreCase = true) == true ->
+                        "Carte refusee. Verifiez vos informations bancaires ou utilisez une autre carte."
+                    result.error.message?.contains("expired", ignoreCase = true) == true ->
+                        "Carte expiree. Veuillez utiliser une carte valide."
+                    result.error.message?.contains("insufficient", ignoreCase = true) == true ->
+                        "Fonds insuffisants. Veuillez utiliser une autre carte."
+                    result.error.message?.contains("network", ignoreCase = true) == true ||
+                    result.error.message?.contains("timeout", ignoreCase = true) == true ->
+                        "Erreur de connexion. Verifiez votre internet et reessayez."
+                    else ->
+                        "Paiement echoue: ${result.error.message ?: "Erreur inconnue"}. Reessayez ou contactez support@motium.fr"
+                }
                 _dialogState.update { it.copy(
                     paymentReady = null,
                     deferredPaymentReady = null,
                     pendingPurchase = null,
-                    error = result.error.message ?: "Le paiement a echoue"
+                    error = errorMessage
                 )}
                 MotiumApplication.logger.e("Payment failed: ${result.error.message}", TAG, result.error)
             }
@@ -445,25 +476,32 @@ class LicensesViewModel(
                 }
             }
 
-            // After max attempts, show generic success message
+            // After max attempts, show actionable success message
+            // Fix P2: Message plus actionnable pour guider l'utilisateur
             _dialogState.update { it.copy(
                 isRefreshingAfterPayment = false,
                 pendingPurchase = null,
-                successMessage = "Paiement reussi. Vos licences seront disponibles sous peu."
+                successMessage = "Paiement reussi ! Si vos licences n'apparaissent pas, tirez vers le bas pour rafraichir ou contactez support@motium.fr"
             )}
             MotiumApplication.logger.w("License refresh timed out, may need manual refresh", TAG)
         }
     }
 
     /**
-     * Cancel a license (monthly only) - offline-first with sync
+     * Cancel a license (résiliation) - offline-first with sync.
+     * Sets status to 'canceled' but user KEEPS access until end_date.
+     * The actual unlinking happens automatically when end_date is reached.
      */
     fun cancelLicense(licenseId: String) {
         viewModelScope.launch {
             try {
+                MotiumApplication.logger.i(
+                    "cancelLicense() called - licenseId: $licenseId - Setting status='canceled' (user keeps access until end_date)",
+                    TAG
+                )
                 offlineFirstLicenseRepo.cancelLicense(licenseId)
                 _dialogState.update { it.copy(
-                    successMessage = "Licence annulee"
+                    successMessage = "Licence resiliee (acces maintenu jusqu'a la fin de periode)"
                 )}
                 // Flow will auto-update when local DB changes
             } catch (e: Exception) {
@@ -575,7 +613,7 @@ class LicensesViewModel(
     }
 
     // ========================================
-    // Unlink Methods (30-day notice period)
+    // Unlink/Cancel Methods (effective at renewal date or immediate for lifetime)
     // ========================================
 
     /**
@@ -599,7 +637,9 @@ class LicensesViewModel(
     }
 
     /**
-     * Request to unlink a license (starts 30-day notice period) - offline-first with sync
+     * Request to unlink/cancel a license - offline-first with sync
+     * - Lifetime: déliaison immédiate
+     * - Mensuelle: effective à la date de renouvellement
      */
     fun confirmUnlinkRequest() {
         val license = _dialogState.value.licenseToUnlink ?: return
@@ -617,16 +657,30 @@ class LicensesViewModel(
                     return@launch
                 }
 
+                // DEBUG: Log action for tracing
+                val effectiveType = if (license.isLifetime) "immédiat (lifetime)" else "date de renouvellement"
+                MotiumApplication.logger.w(
+                    "🟠 DEBUG confirmUnlinkRequest() called - licenseId: ${license.id}, linkedAccountId: ${license.linkedAccountId} - Type: $effectiveType",
+                    TAG
+                )
+
                 offlineFirstLicenseRepo.requestUnlink(
                     licenseId = license.id,
                     proAccountId = proAccountId
                 )
 
+                // Message différent selon le type de licence
+                val successMsg = if (license.isLifetime) {
+                    "Licence déliée avec succès."
+                } else {
+                    "Résiliation enregistrée. La licence sera libérée à la date de renouvellement."
+                }
+
                 _dialogState.update { it.copy(
                     isUnlinking = false,
                     showUnlinkConfirmDialog = false,
                     licenseToUnlink = null,
-                    successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
+                    successMessage = successMsg
                 )}
                 // Flow will auto-update when local DB changes
             } catch (e: Exception) {
@@ -666,69 +720,12 @@ class LicensesViewModel(
     }
 
     // ========================================
-    // Pause/Resume License Methods
+    // Delete License Methods
     // ========================================
 
     /**
-     * Pause a license (suspend billing for unused license).
-     * Only unassigned, active, monthly licenses can be paused.
-     */
-    fun pauseLicense(licenseId: String) {
-        viewModelScope.launch {
-            try {
-                val proAccountId = _proAccountId.value
-                if (proAccountId == null) {
-                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
-                    return@launch
-                }
-
-                val result = licenseRemoteDataSource.pauseLicense(licenseId, proAccountId)
-                result.onSuccess {
-                    _dialogState.update { it.copy(
-                        successMessage = "Licence mise en pause. La facturation est suspendue."
-                    )}
-                    // Force refresh to update the Flow
-                    refreshLicenses()
-                }.onFailure { e ->
-                    _dialogState.update { it.copy(error = e.message ?: "Erreur lors de la mise en pause") }
-                }
-            } catch (e: Exception) {
-                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
-            }
-        }
-    }
-
-    /**
-     * Resume a paused license (reactivate billing).
-     */
-    fun resumeLicense(licenseId: String) {
-        viewModelScope.launch {
-            try {
-                val proAccountId = _proAccountId.value
-                if (proAccountId == null) {
-                    _dialogState.update { it.copy(error = "Compte Pro non trouve") }
-                    return@launch
-                }
-
-                val result = licenseRemoteDataSource.resumeLicense(licenseId, proAccountId)
-                result.onSuccess {
-                    _dialogState.update { it.copy(
-                        successMessage = "Licence reactifee. La facturation reprend."
-                    )}
-                    // Force refresh to update the Flow
-                    refreshLicenses()
-                }.onFailure { e ->
-                    _dialogState.update { it.copy(error = e.message ?: "Erreur lors de la reactivation") }
-                }
-            } catch (e: Exception) {
-                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
-            }
-        }
-    }
-
-    /**
      * Delete a license permanently.
-     * Only unassigned licenses (available or paused) can be deleted.
+     * Only unassigned monthly licenses can be deleted.
      */
     fun deleteLicense(licenseId: String) {
         viewModelScope.launch {
@@ -738,6 +735,12 @@ class LicensesViewModel(
                     _dialogState.update { it.copy(error = "Compte Pro non trouve") }
                     return@launch
                 }
+
+                // DEBUG: Log action for tracing
+                MotiumApplication.logger.w(
+                    "🔵 DEBUG deleteLicense() called - licenseId: $licenseId - This DELETES the license from DB (only works if unassigned)",
+                    TAG
+                )
 
                 val result = licenseRemoteDataSource.deleteLicense(licenseId, proAccountId)
                 result.onSuccess {

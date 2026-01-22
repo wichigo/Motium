@@ -44,19 +44,19 @@ serve(async (req) => {
       })
 
     if (tokenError) {
-      // Check if user not found - return success anyway to prevent email enumeration
-      if (tokenError.message?.includes('User not found')) {
-        console.log(`Password reset requested for unknown email: ${email}`)
-        return new Response(
-          JSON.stringify({ success: true, message: 'If an account exists, an email will be sent' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-      }
-
       console.error('Error creating token:', tokenError)
       return new Response(
         JSON.stringify({ error: 'Failed to process request' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // If tokenId is null, user was not found - return success anyway to prevent email enumeration
+    if (!tokenId) {
+      console.log(`Password reset requested for unknown email: ${email}`)
+      return new Response(
+        JSON.stringify({ success: true, message: 'If an account exists, an email will be sent' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 

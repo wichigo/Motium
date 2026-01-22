@@ -1,0 +1,386 @@
+{
+  "version": "1.0",
+  "project": "motium-subscription-tests",
+  
+  "stripe_test_mode": {
+    "use_test_clocks": true,
+    "max_test_clocks": 3,
+    "webhook_wait_ms": 3000,
+    "test_cards": {
+      "success": "4242424242424242",
+      "decline_after_attach": "4000000000000341",
+      "insufficient_funds": "4000000000009995",
+      "generic_decline": "4000000000000002"
+    }
+  },
+  
+  "test_data_prefix": "test_",
+  "cleanup_after_tests": true,
+  
+  "supabase_rpc_functions": {
+    "assign_license": "assign_license_to_collaborator",
+    "finalize_assignment": "finalize_license_assignment",
+    "cancel_license": "cancel_license",
+    "unlink_collaborator": "unlink_collaborator",
+    "check_access": "check_premium_access"
+  },
+  
+  "test_suites": {
+    "individual": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "1.1",
+          "name": "Inscription → TRIAL",
+          "setup": {
+            "create_user": { "subscription_type": "TRIAL", "trial_ends_at": "+7d" }
+          },
+          "actions": [],
+          "assertions": [
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "TRIAL" },
+            { "type": "rpc", "function": "check_premium_access", "expected": { "has_access": true, "type": "TRIAL" } }
+          ]
+        },
+        {
+          "id": "1.2",
+          "name": "TRIAL expiré → Accès bloqué",
+          "setup": {
+            "create_user": { "subscription_type": "TRIAL", "trial_ends_at": "-1d" }
+          },
+          "actions": [],
+          "assertions": [
+            { "type": "rpc", "function": "check_premium_access", "expected": { "has_access": false, "reason": "TRIAL_EXPIRED" } }
+          ]
+        },
+        {
+          "id": "1.3",
+          "name": "Paiement mensuel → PREMIUM",
+          "setup": {
+            "create_test_clock": true,
+            "create_user": { "subscription_type": "TRIAL" },
+            "create_stripe_customer": { "attach_to_clock": true }
+          },
+          "actions": [
+            { "type": "stripe_checkout", "metadata": { "type": "individual", "plan": "monthly" } },
+            { "type": "wait_webhook", "event": "checkout.session.completed" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "PREMIUM" },
+            { "type": "db_field_not_null", "table": "users", "field": "stripe_subscription_id" },
+            { "type": "rpc", "function": "check_premium_access", "expected": { "has_access": true, "type": "PREMIUM" } }
+          ]
+        },
+        {
+          "id": "1.4",
+          "name": "Paiement lifetime → LIFETIME",
+          "setup": {
+            "create_user": { "subscription_type": "TRIAL" }
+          },
+          "actions": [
+            { "type": "stripe_checkout", "metadata": { "type": "individual", "plan": "lifetime" } },
+            { "type": "wait_webhook", "event": "checkout.session.completed" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "LIFETIME" },
+            { "type": "db_field_null", "table": "users", "field": "subscription_expires_at" }
+          ]
+        },
+        {
+          "id": "1.5",
+          "name": "Renouvellement mensuel réussi",
+          "setup": {
+            "create_test_clock": true,
+            "create_user": { "subscription_type": "PREMIUM" },
+            "create_stripe_subscription": { "attach_to_clock": true }
+          },
+          "actions": [
+            { "type": "advance_clock", "days": 31 },
+            { "type": "wait_webhook", "event": "invoice.paid" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "PREMIUM" },
+            { "type": "db_field_updated", "table": "users", "field": "subscription_expires_at" }
+          ]
+        },
+        {
+          "id": "1.6",
+          "name": "Échec paiement → EXPIRED immédiat",
+          "setup": {
+            "create_test_clock": true,
+            "create_user": { "subscription_type": "PREMIUM" },
+            "create_stripe_subscription": { "attach_to_clock": true, "card": "decline_after_attach" }
+          },
+          "actions": [
+            { "type": "advance_clock", "days": 31 },
+            { "type": "wait_webhook", "event": "invoice.payment_failed" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "EXPIRED" }
+          ]
+        },
+        {
+          "id": "1.7",
+          "name": "Résiliation volontaire",
+          "setup": {
+            "create_test_clock": true,
+            "create_user": { "subscription_type": "PREMIUM" },
+            "create_stripe_subscription": { "attach_to_clock": true }
+          },
+          "actions": [
+            { "type": "stripe_cancel_at_period_end", "value": true },
+            { "type": "wait_webhook", "event": "customer.subscription.updated" },
+            { "type": "assert", "db_field": "subscription_type", "expected": "PREMIUM" },
+            { "type": "advance_clock", "days": 31 },
+            { "type": "wait_webhook", "event": "customer.subscription.deleted" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "EXPIRED" }
+          ]
+        }
+      ]
+    },
+    
+    "pro": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "2.1",
+          "name": "Création compte pro → trial",
+          "setup": {
+            "create_pro_account": {}
+          },
+          "actions": [],
+          "assertions": [
+            { "type": "db_field", "table": "pro_accounts", "field": "status", "expected": "trial" },
+            { "type": "db_field_null", "table": "pro_accounts", "field": "billing_anchor_day" }
+          ]
+        },
+        {
+          "id": "2.2",
+          "name": "Achat 1ère licence mensuelle → active + billing_anchor",
+          "setup": {
+            "create_test_clock": true,
+            "create_pro_account": { "status": "trial" },
+            "create_stripe_customer": { "attach_to_clock": true, "for": "pro" }
+          },
+          "actions": [
+            { "type": "stripe_subscription", "metadata": { "type": "pro" }, "quantity": 1 },
+            { "type": "wait_webhook", "event": "invoice.paid" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "pro_accounts", "field": "status", "expected": "active" },
+            { "type": "db_field_not_null", "table": "pro_accounts", "field": "billing_anchor_day" },
+            { "type": "db_count", "table": "licenses", "filter": { "status": "available" }, "expected": 1 }
+          ]
+        },
+        {
+          "id": "2.3",
+          "name": "Achat licence lifetime → paiement immédiat",
+          "setup": {
+            "create_pro_account": { "status": "active" }
+          },
+          "actions": [
+            { "type": "stripe_checkout", "metadata": { "type": "pro_license_lifetime", "quantity": "2" } },
+            { "type": "wait_webhook", "event": "checkout.session.completed" }
+          ],
+          "assertions": [
+            { "type": "db_count", "table": "licenses", "filter": { "is_lifetime": true, "status": "available" }, "expected_min": 2 }
+          ]
+        }
+      ]
+    },
+    
+    "attribution": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "3.1",
+          "name": "Attribution à TRIAL → LICENSED",
+          "setup": {
+            "create_pro_account": { "status": "active" },
+            "create_license": { "status": "available" },
+            "create_user": { "subscription_type": "TRIAL", "role": "collaborator" }
+          },
+          "actions": [
+            { "type": "rpc_call", "function": "assign_license_to_collaborator" }
+          ],
+          "assertions": [
+            { "type": "rpc_result", "field": "success", "expected": true },
+            { "type": "rpc_result", "field": "action", "expected": "ASSIGNED" },
+            { "type": "db_field", "table": "licenses", "field": "status", "expected": "active" },
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "LICENSED" }
+          ]
+        },
+        {
+          "id": "3.2",
+          "name": "Attribution à PREMIUM → CANCEL_EXISTING_SUB",
+          "setup": {
+            "create_pro_account": { "status": "active" },
+            "create_license": { "status": "available" },
+            "create_user": { "subscription_type": "PREMIUM", "has_stripe_subscription": true }
+          },
+          "actions": [
+            { "type": "rpc_call", "function": "assign_license_to_collaborator" }
+          ],
+          "assertions": [
+            { "type": "rpc_result", "field": "success", "expected": true },
+            { "type": "rpc_result", "field": "action", "expected": "CANCEL_EXISTING_SUB" },
+            { "type": "rpc_result_not_null", "field": "stripe_subscription_id" },
+            { "type": "db_field", "table": "licenses", "field": "status", "expected": "available" }
+          ]
+        },
+        {
+          "id": "3.3",
+          "name": "Attribution à LIFETIME → BLOCAGE",
+          "setup": {
+            "create_pro_account": { "status": "active" },
+            "create_license": { "status": "available" },
+            "create_user": { "subscription_type": "LIFETIME" }
+          },
+          "actions": [
+            { "type": "rpc_call", "function": "assign_license_to_collaborator" }
+          ],
+          "assertions": [
+            { "type": "rpc_result", "field": "success", "expected": false },
+            { "type": "rpc_result", "field": "error", "expected": "COLLABORATOR_HAS_LIFETIME" }
+          ]
+        },
+        {
+          "id": "3.4",
+          "name": "Attribution à LICENSED → BLOCAGE",
+          "setup": {
+            "create_pro_account": { "status": "active" },
+            "create_license": { "status": "available" },
+            "create_user": { "subscription_type": "LICENSED" }
+          },
+          "actions": [
+            { "type": "rpc_call", "function": "assign_license_to_collaborator" }
+          ],
+          "assertions": [
+            { "type": "rpc_result", "field": "success", "expected": false },
+            { "type": "rpc_result", "field": "error", "expected": "ALREADY_LICENSED" }
+          ]
+        }
+      ]
+    },
+    
+    "cancellation": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "4.1",
+          "name": "Résiliation licence mensuelle active",
+          "setup": {
+            "create_pro_account": { "status": "active" },
+            "create_license": { "status": "active", "is_lifetime": false, "linked": true },
+            "create_user": { "subscription_type": "LICENSED" }
+          },
+          "actions": [
+            { "type": "rpc_call", "function": "cancel_license" }
+          ],
+          "assertions": [
+            { "type": "rpc_result", "field": "success", "expected": true },
+            { "type": "rpc_result", "field": "is_lifetime", "expected": false },
+            { "type": "db_field", "table": "licenses", "field": "status", "expected": "canceled" },
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "LICENSED" }
+          ]
+        },
+        {
+          "id": "4.3",
+          "name": "Date groupée - mensuelle canceled → supprimée",
+          "setup": {
+            "create_test_clock": true,
+            "create_pro_account": { "status": "active", "billing_anchor_day": 15 },
+            "create_license": { "status": "canceled", "is_lifetime": false, "linked": true },
+            "create_user": { "subscription_type": "LICENSED" },
+            "create_stripe_subscription": { "for": "pro", "attach_to_clock": true }
+          },
+          "actions": [
+            { "type": "advance_clock_to_day", "day": 15 },
+            { "type": "wait_webhook", "event": "invoice.paid" }
+          ],
+          "assertions": [
+            { "type": "db_not_exists", "table": "licenses", "id": "created_license_id" },
+            { "type": "db_field", "table": "users", "field": "subscription_type", "expected": "EXPIRED" }
+          ]
+        }
+      ]
+    },
+    
+    "unlinking": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "5.1",
+          "name": "Délinkage → unlinked + effective_at",
+          "setup": {
+            "create_pro_account": { "status": "active", "billing_anchor_day": 15 },
+            "create_license": { "status": "active", "linked": true },
+            "create_user": { "subscription_type": "LICENSED" }
+          },
+          "actions": [
+            { "type": "rpc_call", "function": "unlink_collaborator" }
+          ],
+          "assertions": [
+            { "type": "rpc_result", "field": "success", "expected": true },
+            { "type": "rpc_result_not_null", "field": "effective_at" },
+            { "type": "db_field", "table": "licenses", "field": "status", "expected": "unlinked" },
+            { "type": "db_field_not_null", "table": "licenses", "field": "unlink_effective_at" }
+          ]
+        }
+      ]
+    },
+    
+    "renewal": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "6.2",
+          "name": "Échec paiement pro → suspended",
+          "setup": {
+            "create_test_clock": true,
+            "create_pro_account": { "status": "active" },
+            "create_license": { "status": "active", "is_lifetime": false },
+            "create_license": { "status": "active", "is_lifetime": true },
+            "create_stripe_subscription": { "for": "pro", "card": "decline_after_attach" }
+          },
+          "actions": [
+            { "type": "advance_clock", "days": 31 },
+            { "type": "wait_webhook", "event": "invoice.payment_failed" }
+          ],
+          "assertions": [
+            { "type": "db_field", "table": "licenses", "filter": { "is_lifetime": false }, "field": "status", "expected": "suspended" },
+            { "type": "db_field", "table": "licenses", "filter": { "is_lifetime": true }, "field": "status", "expected": "active" },
+            { "type": "db_field", "table": "pro_accounts", "field": "status", "expected": "suspended" }
+          ]
+        }
+      ]
+    },
+    
+    "edge_cases": {
+      "enabled": true,
+      "tests": [
+        {
+          "id": "7.1",
+          "name": "Webhook idempotence",
+          "setup": {
+            "create_user": { "subscription_type": "TRIAL" }
+          },
+          "actions": [
+            { "type": "trigger_webhook", "event": "invoice.paid", "times": 2 }
+          ],
+          "assertions": [
+            { "type": "db_count", "table": "stripe_payments", "expected": 1 }
+          ]
+        }
+      ]
+    }
+  },
+  
+  "reporting": {
+    "format": "detailed",
+    "output_file": "test-results.json",
+    "console_output": true,
+    "fail_fast": false
+  }
+}

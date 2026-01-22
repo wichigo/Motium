@@ -3,10 +3,16 @@ package com.application.motium
 import android.app.Application
 import com.application.motium.data.TripRepository
 import com.application.motium.data.supabase.SupabaseClient
+import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.data.sync.LicenseScheduler
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.data.sync.SyncScheduler
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.utils.AppLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 import org.maplibre.android.module.http.HttpRequestUtil
 import okhttp3.OkHttpClient
@@ -23,6 +29,9 @@ class MotiumApplication : Application() {
         lateinit var logger: AppLogger
             private set
     }
+
+    // Application-scoped coroutine scope for background tasks
+    private val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onCreate() {
         super.onCreate()
@@ -145,6 +154,20 @@ class MotiumApplication : Application() {
             logger.e("Failed to initialize SupabaseClient: ${e.message}", "Application", e)
         }
 
+        // Vérifier et mettre à jour l'expiration du trial au démarrage
+        // Fix P0: Empêche les utilisateurs avec trialEndsAt expiré de garder l'accès
+        applicationScope.launch {
+            try {
+                val subscriptionManager = SubscriptionManager.getInstance(this@MotiumApplication)
+                val wasExpired = subscriptionManager.checkAndUpdateTrialExpiration()
+                if (wasExpired) {
+                    logger.i("Trial expired and marked as EXPIRED at startup", "Application")
+                }
+            } catch (e: Exception) {
+                logger.e("Failed to check trial expiration: ${e.message}", "Application", e)
+            }
+        }
+
         // Planifier la synchronisation périodique de session en arrière-plan
         // WorkManager va rafraîchir automatiquement la session toutes les 20 minutes
         try {
@@ -155,12 +178,21 @@ class MotiumApplication : Application() {
         }
 
         // Planifier le traitement des déliaisons de licences expirées
-        // WorkManager va traiter les licences avec préavis de 30 jours expiré
+        // WorkManager va traiter les licences dont la date effective de déliaison est passée
         try {
             LicenseScheduler.scheduleLicenseProcessing(this)
             logger.i("License processing scheduled successfully with WorkManager", "Application")
         } catch (e: Exception) {
             logger.e("Failed to schedule license processing: ${e.message}", "Application", e)
+        }
+
+        // Planifier la synchronisation périodique des données (trips, vehicles, etc.)
+        // WorkManager va exécuter DeltaSyncWorker toutes les 30 minutes avec sync_changes() RPC
+        try {
+            OfflineFirstSyncManager.getInstance(this).startPeriodicSync()
+            logger.i("Data sync scheduled successfully with WorkManager (DeltaSyncWorker)", "Application")
+        } catch (e: Exception) {
+            logger.e("Failed to schedule data sync: ${e.message}", "Application", e)
         }
 
         // Log des informations système

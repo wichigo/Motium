@@ -25,6 +25,7 @@ import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.exceptions.RestException
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -70,6 +71,30 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
     private val sessionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val sessionMutex = Mutex()
+
+    // BATTERY OPTIMIZATION: Rate-limiting for session refresh to prevent excessive API calls
+    private var lastRefreshTimestamp: Long = 0L
+    private val MIN_REFRESH_INTERVAL_MS = 30_000L // Minimum 30 seconds between refreshes
+
+    /**
+     * Response from check_trial_abuse() RPC function
+     */
+    @Serializable
+    data class TrialAbuseCheckResult(
+        val allowed: Boolean,
+        val reason: String? = null,
+        val message: String? = null,
+        val existing_email: String? = null
+    )
+
+    /**
+     * Request parameters for check_trial_abuse() RPC function
+     */
+    @Serializable
+    data class TrialAbuseCheckRequest(
+        val p_email: String,
+        val p_device_fingerprint: String
+    )
 
     @Serializable
     data class UserProfile(
@@ -129,6 +154,19 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     private suspend fun initializeAndRestoreSession() {
         sessionMutex.withLock {
             MotiumApplication.logger.i("🚀 Initializing offline-first session...", "SupabaseAuth")
+
+            // ÉTAPE 0: CRITIQUE - Attendre que le SDK Supabase ait fini de charger la session depuis SecureSessionManager
+            // Sans cela, auth.refreshSession() échoue avec "Session not found" car le SDK n'a pas encore chargé la session
+            try {
+                withTimeout(5_000L) {
+                    auth.awaitInitialization()
+                }
+                MotiumApplication.logger.i("✅ Supabase Auth SDK initialized", "SupabaseAuth")
+            } catch (e: TimeoutCancellationException) {
+                MotiumApplication.logger.w("⚠️ Supabase Auth SDK initialization timeout - continuing with local data", "SupabaseAuth")
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("⚠️ Supabase Auth SDK initialization error: ${e.message}", "SupabaseAuth")
+            }
 
             // ÉTAPE 1: Charger l'utilisateur depuis la base de données locale (Room)
             val localUser = localUserRepository.getLoggedInUser()
@@ -197,17 +235,42 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
      * SÉCURITÉ: Rafraîchit la session de manière sûre sans race condition.
      * Cette fonction s'exécute dans le sessionMutex lock.
      *
+     * IMPORTANT: Cette méthode suppose que auth.awaitInitialization() a déjà été appelée
+     * pour que le SDK ait chargé la session depuis SecureSessionManager.
+     *
      * Si le refresh échoue (ex: migration JWT HS256 -> ES256), tente une reconnexion silencieuse.
      */
     private suspend fun refreshSessionSafe() {
+        // Vérifier d'abord si le SDK a une session chargée
+        val currentSession = auth.currentSessionOrNull()
+
+        if (currentSession != null) {
+            // Cas idéal: Le SDK a déjà une session - utiliser refreshCurrentSession()
+            try {
+                MotiumApplication.logger.i("🔄 Refreshing session via SDK (session loaded)...", "SupabaseAuth")
+                auth.refreshCurrentSession()
+                saveCurrentSessionSecurely()
+                syncUserProfileFromSupabase()
+                MotiumApplication.logger.i("✅ Session refreshed successfully via SDK", "SupabaseAuth")
+                return
+            } catch (e: Exception) {
+                MotiumApplication.logger.w(
+                    "⚠️ SDK session refresh failed: ${e.message}. Trying with stored refresh token...",
+                    "SupabaseAuth"
+                )
+                // Fallback vers la méthode manuelle
+            }
+        }
+
+        // Fallback: Utiliser le refresh token stocké manuellement
         val refreshToken = secureSessionStorage.getRefreshToken()
         if (refreshToken != null) {
             try {
-                MotiumApplication.logger.i("🔄 Refreshing session safely...", "SupabaseAuth")
+                MotiumApplication.logger.i("🔄 Refreshing session with stored token...", "SupabaseAuth")
                 auth.refreshSession(refreshToken)
                 saveCurrentSessionSecurely()
                 syncUserProfileFromSupabase()
-                MotiumApplication.logger.i("✅ Session refreshed successfully", "SupabaseAuth")
+                MotiumApplication.logger.i("✅ Session refreshed successfully with stored token", "SupabaseAuth")
             } catch (e: Exception) {
                 // Refresh failed - could be network or auth error
                 MotiumApplication.logger.w(
@@ -218,10 +281,17 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 // OFFLINE-FIRST: Do NOT trigger silent re-authentication here as it causes
                 // Samsung Pass/Password Manager loops on some devices.
                 // We trust the local user data (Room) which is already loaded.
-                
-                // If it's a permanent error (invalid grant/token), the next explicit action 
+
+                // If it's a permanent error (invalid grant/token), the next explicit action
                 // by the user will fail and trigger a clean logout/login flow.
             }
+        } else {
+            // Pas de refresh token - signaler que l'utilisateur doit se reconnecter
+            MotiumApplication.logger.w(
+                "⚠️ No session in SDK and no stored refresh token - user needs to re-login (needsRelogin=true)",
+                "SupabaseAuth"
+            )
+            _authState.value = _authState.value.copy(needsRelogin = true)
         }
     }
 
@@ -411,24 +481,60 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     }
 
     suspend fun refreshSession() {
+        // BATTERY OPTIMIZATION: Rate-limit refresh calls to prevent excessive API usage
+        val now = System.currentTimeMillis()
+        val timeSinceLastRefresh = now - lastRefreshTimestamp
+        if (timeSinceLastRefresh < MIN_REFRESH_INTERVAL_MS) {
+            MotiumApplication.logger.d(
+                "⏳ Session refresh skipped (rate-limited, ${timeSinceLastRefresh}ms since last refresh)",
+                "SupabaseAuth"
+            )
+            return
+        }
+        lastRefreshTimestamp = now
+
         try {
+            // Priorité 1: Utiliser la session SDK si disponible (méthode recommandée)
+            val currentSession = auth.currentSessionOrNull()
+            if (currentSession != null) {
+                MotiumApplication.logger.i("🔄 Refreshing session via SDK...", "SupabaseAuth")
+                auth.refreshCurrentSession()
+                saveCurrentSessionSecurely()
+                updateAuthState()
+                MotiumApplication.logger.i("✅ Session refreshed via SDK successfully.", "SupabaseAuth")
+                return
+            }
+
+            // Priorité 2: Utiliser le refresh token stocké manuellement
             val refreshToken = secureSessionStorage.getRefreshToken()
             if (refreshToken != null) {
-                MotiumApplication.logger.i("🔄 Attempting to refresh session in background...", "SupabaseAuth")
+                MotiumApplication.logger.i("🔄 Refreshing session with stored token...", "SupabaseAuth")
                 auth.refreshSession(refreshToken)
                 saveCurrentSessionSecurely()
                 updateAuthState()
-                MotiumApplication.logger.i("✅ Session refreshed and validated successfully.", "SupabaseAuth")
+                MotiumApplication.logger.i("✅ Session refreshed with stored token successfully.", "SupabaseAuth")
             } else {
-                // OFFLINE-FIRST: Pas de refresh token MAIS utilisateur local ?
-                // Ne PAS déconnecter, garder la session locale
+                // OFFLINE-FIRST: Pas de refresh token - tenter une reconnexion silencieuse
+                MotiumApplication.logger.w(
+                    "⚠️ No refresh token - attempting silent re-authentication...",
+                    "SupabaseAuth"
+                )
+                val reAuthSuccess = trySilentReAuthentication()
+                if (reAuthSuccess) {
+                    MotiumApplication.logger.i("✅ Silent re-authentication successful", "SupabaseAuth")
+                    return
+                }
+
+                // Échec de la réauth silencieuse - vérifier si utilisateur local existe
                 val localUser = localUserRepository.getLoggedInUser()
                 if (localUser != null) {
                     MotiumApplication.logger.w(
-                        "⚠️ No refresh token but local user exists - keeping session (offline mode)",
+                        "⚠️ Silent re-auth failed but local user exists - keeping session (offline mode, needsRelogin=true)",
                         "SupabaseAuth"
                     )
-                    // Garder l'utilisateur connecté avec les données locales
+                    // Garder l'utilisateur connecté avec les données locales MAIS signaler qu'il doit se reconnecter
+                    // pour activer le sync (typiquement: utilisateur Google sans refresh token)
+                    _authState.value = _authState.value.copy(needsRelogin = true)
                     return
                 }
                 // Pas de token ET pas d'utilisateur local = vraiment déconnecté
@@ -480,35 +586,104 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
      */
     suspend fun refreshSessionForSync(): Boolean {
         return try {
+            // Priorité 1: Utiliser la session SDK si disponible (méthode recommandée)
+            val currentSession = auth.currentSessionOrNull()
+            if (currentSession != null) {
+                MotiumApplication.logger.i("🔄 Refreshing session for sync via SDK...", "SupabaseAuth")
+                auth.refreshCurrentSession()
+                saveCurrentSessionSecurely()
+
+                val refreshedSession = auth.currentSessionOrNull()
+                if (refreshedSession?.user != null) {
+                    MotiumApplication.logger.i("✅ Session refreshed for sync via SDK - user: ${refreshedSession.user?.email}", "SupabaseAuth")
+                    return true
+                }
+            }
+
+            // Priorité 2: Utiliser le refresh token stocké manuellement
             val refreshToken = secureSessionStorage.getRefreshToken()
             if (refreshToken == null) {
-                MotiumApplication.logger.w("⚠️ No refresh token for sync", "SupabaseAuth")
+                MotiumApplication.logger.w("⚠️ No refresh token for sync - trying silent re-authentication...", "SupabaseAuth")
+                // Priorité 3: Tenter une reconnexion silencieuse avec les credentials stockés
+                val reAuthSuccess = trySilentReAuthentication()
+                if (reAuthSuccess) {
+                    MotiumApplication.logger.i("✅ Silent re-authentication successful for sync", "SupabaseAuth")
+                    return true
+                }
+                MotiumApplication.logger.w("⚠️ Silent re-authentication failed - no refresh token and no valid credentials", "SupabaseAuth")
                 return false
             }
 
-            MotiumApplication.logger.i("🔄 Refreshing session before sync...", "SupabaseAuth")
+            MotiumApplication.logger.i("🔄 Refreshing session for sync with stored token...", "SupabaseAuth")
             auth.refreshSession(refreshToken)
+
+            // CRITICAL FIX: After auth.refreshSession(), the SDK should have the session in memory.
+            // If auth.currentSessionOrNull() returns null, the SDK didn't properly load the session.
+            // In this case, we need to wait for the SDK to process the refresh and try again.
+            var refreshedSession = auth.currentSessionOrNull()
+            if (refreshedSession == null) {
+                MotiumApplication.logger.w("⚠️ SDK session is null after refresh - waiting and retrying...", "SupabaseAuth")
+                // Give the SDK time to propagate the session (race condition workaround)
+                kotlinx.coroutines.delay(100)
+                refreshedSession = auth.currentSessionOrNull()
+            }
+
+            // Save session to secure storage regardless of SDK state
             saveCurrentSessionSecurely()
 
             // Verify we got a valid user session (not just anon key)
-            val currentSession = auth.currentSessionOrNull()
-            if (currentSession?.user == null) {
-                // FIX: Even if SDK returns null, check secure storage which we just saved
-                // This handles race condition where SDK auth state hasn't propagated yet
-                val hasValidStoredSession = secureSessionStorage.hasValidSession()
-                if (hasValidStoredSession) {
-                    MotiumApplication.logger.w(
-                        "⚠️ SDK session user is null but secure storage has valid session - proceeding with sync",
-                        "SupabaseAuth"
-                    )
+            if (refreshedSession?.accessToken != null && refreshedSession.accessToken.isNotBlank()) {
+                // Check if it's a real user token (not the anon key)
+                val isRealUserToken = !refreshedSession.accessToken.contains("\"role\": \"anon\"") &&
+                    !refreshedSession.accessToken.contains("\"role\":\"anon\"")
+                if (isRealUserToken) {
+                    MotiumApplication.logger.i("✅ Session refreshed for sync - SDK has valid user token", "SupabaseAuth")
                     return true
                 }
-                MotiumApplication.logger.w("⚠️ Session refresh succeeded but no user in session", "SupabaseAuth")
-                return false
             }
 
-            MotiumApplication.logger.i("✅ Session refreshed for sync - user: ${currentSession.user?.email}", "SupabaseAuth")
-            true
+            // SDK doesn't have valid session - check secure storage as fallback
+            val storedSession = secureSessionStorage.restoreSession()
+            if (storedSession != null && storedSession.accessToken.isNotBlank()) {
+                // Verify the stored token is a user token (not anon key by checking for 'sub' claim)
+                try {
+                    val parts = storedSession.accessToken.split(".")
+                    if (parts.size == 3) {
+                        val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP))
+                        val hasUserSub = payload.contains("\"sub\"") && !payload.contains("\"role\":\"anon\"")
+                        if (hasUserSub) {
+                            MotiumApplication.logger.w(
+                                "⚠️ SDK session invalid but secure storage has valid user token - forcing SDK to use stored session",
+                                "SupabaseAuth"
+                            )
+                            // Force the SDK to use our stored session by importing it
+                            try {
+                                val userSession = io.github.jan.supabase.auth.user.UserSession(
+                                    accessToken = storedSession.accessToken,
+                                    refreshToken = storedSession.refreshToken,
+                                    expiresIn = ((storedSession.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0),
+                                    tokenType = storedSession.tokenType,
+                                    user = null
+                                )
+                                auth.importSession(userSession)
+                                MotiumApplication.logger.i("✅ Imported stored session into SDK - sync can proceed", "SupabaseAuth")
+                                return true
+                            } catch (importError: Exception) {
+                                MotiumApplication.logger.w(
+                                    "⚠️ Failed to import session into SDK: ${importError.message} - sync may fail",
+                                    "SupabaseAuth"
+                                )
+                            }
+                            return true // Proceed anyway, SDK might use the session
+                        }
+                    }
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Failed to decode stored token: ${e.message}", "SupabaseAuth")
+                }
+            }
+
+            MotiumApplication.logger.w("⚠️ Session refresh succeeded but no valid user token available", "SupabaseAuth")
+            false
         } catch (e: Exception) {
             // Don't sign out on network errors - just return false to skip sync
             MotiumApplication.logger.w(
@@ -670,19 +845,42 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val currentSession = auth.currentSessionOrNull()
         val currentUser = auth.currentUserOrNull()
 
-        if (currentSession != null && currentUser != null && currentSession.refreshToken != null) {
+        if (currentSession == null) {
+            MotiumApplication.logger.w("⚠️ saveCurrentSessionSecurely: No current session from SDK", "SupabaseAuth")
+            return
+        }
+        if (currentUser == null) {
+            MotiumApplication.logger.w("⚠️ saveCurrentSessionSecurely: No current user from SDK", "SupabaseAuth")
+            return
+        }
+        if (currentSession.refreshToken == null) {
+            MotiumApplication.logger.w("⚠️ saveCurrentSessionSecurely: Session has no refresh token! User: ${currentUser.email}", "SupabaseAuth")
+            // Toujours sauvegarder le access token même sans refresh token
+            // Cela permet au moins de faire des appels tant que le token est valide
             val expiresInSeconds = currentSession.expiresIn
             val expiresAt = System.currentTimeMillis() + (expiresInSeconds * 1000L)
-
             val sessionData = SecureSessionStorage.SessionData(
                 accessToken = currentSession.accessToken,
-                refreshToken = currentSession.refreshToken!!,
+                refreshToken = "", // Pas de refresh token - sera détecté au prochain refresh
                 expiresAt = expiresAt,
                 userId = currentUser.id,
                 userEmail = currentUser.email ?: ""
             )
             secureSessionStorage.saveSession(sessionData)
+            return
         }
+
+        val expiresInSeconds = currentSession.expiresIn
+        val expiresAt = System.currentTimeMillis() + (expiresInSeconds * 1000L)
+
+        val sessionData = SecureSessionStorage.SessionData(
+            accessToken = currentSession.accessToken,
+            refreshToken = currentSession.refreshToken!!,
+            expiresAt = expiresAt,
+            userId = currentUser.id,
+            userEmail = currentUser.email ?: ""
+        )
+        secureSessionStorage.saveSession(sessionData)
     }
 
     override suspend fun signInWithGoogle(idToken: String): AuthResult<AuthUser> {
@@ -714,6 +912,15 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             val authUser = getCurrentAuthUser()
                 ?: throw Exception("Failed to get user info after Google sign-in")
+
+            // DEBUG: Log session state after Google Sign-In
+            val sessionAfterGoogle = auth.currentSessionOrNull()
+            MotiumApplication.logger.i(
+                "🔍 After Google Sign-In: hasSession=${sessionAfterGoogle != null}, " +
+                "hasRefreshToken=${sessionAfterGoogle?.refreshToken != null}, " +
+                "expiresIn=${sessionAfterGoogle?.expiresIn}",
+                "SupabaseAuth"
+            )
 
             saveCurrentSessionSecurely()
 
@@ -942,16 +1149,79 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         deviceFingerprintId: String?
     ): AuthResult<User> {
         return try {
+            // Get current auth user email
+            val authUser = auth.currentUserOrNull()
+            val email = authUser?.email ?: ""
+
+            // SECURITY FIX: Check for trial abuse BEFORE creating profile
+            // This prevents: Gmail aliases, device fingerprint reuse, disposable emails
+            try {
+                val abuseCheckResult = postgres.rpc(
+                    "check_trial_abuse",
+                    TrialAbuseCheckRequest(
+                        p_email = email,
+                        p_device_fingerprint = deviceFingerprintId ?: ""
+                    )
+                ).decodeSingleOrNull<TrialAbuseCheckResult>()
+
+                // SECURITY: Fail-secure if null response
+                if (abuseCheckResult == null) {
+                    MotiumApplication.logger.w(
+                        "Trial abuse check returned null for $email. Blocking registration (fail-secure).",
+                        "SupabaseAuth"
+                    )
+                    return AuthResult.Error(
+                        "Impossible de vérifier votre éligibilité. Veuillez réessayer."
+                    )
+                }
+
+                if (!abuseCheckResult.allowed) {
+                    val reason = abuseCheckResult.reason ?: "UNKNOWN"
+                    val message = abuseCheckResult.message ?: "Trial abuse detected"
+                    MotiumApplication.logger.w(
+                        "Trial abuse detected for $email: $reason - $message",
+                        "SupabaseAuth"
+                    )
+                    return AuthResult.Error("$message (code: $reason)")
+                }
+            } catch (e: Exception) {
+                // SECURITY FIX: Fail-secure instead of fail-open
+                // If we can't verify trial abuse, we MUST block registration to prevent abuse
+                // The only exception is temporary network errors which may be retried
+                val isNetworkError = e.message?.contains("timeout", ignoreCase = true) == true ||
+                        e.message?.contains("network", ignoreCase = true) == true ||
+                        e.message?.contains("connect", ignoreCase = true) == true ||
+                        e.message?.contains("unreachable", ignoreCase = true) == true
+
+                if (isNetworkError) {
+                    // Network error - block registration but with a user-friendly message
+                    MotiumApplication.logger.w(
+                        "Trial abuse check failed due to network error: ${e.message}. Blocking registration (fail-secure).",
+                        "SupabaseAuth"
+                    )
+                    return AuthResult.Error(
+                        "Impossible de vérifier votre éligibilité à l'essai gratuit. " +
+                        "Veuillez vérifier votre connexion internet et réessayer."
+                    )
+                } else {
+                    // Server error or other error - block registration
+                    MotiumApplication.logger.e(
+                        "Trial abuse check RPC failed: ${e.message}. Blocking registration (fail-secure).",
+                        "SupabaseAuth",
+                        e
+                    )
+                    return AuthResult.Error(
+                        "Une erreur est survenue lors de la vérification. Veuillez réessayer dans quelques instants."
+                    )
+                }
+            }
+
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
             val trialEnds = now.plus(7.days)
             val nowString = now.toString()
             val trialEndsString = trialEnds.toString()
 
             val role = if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
-
-            // Get current auth user email
-            val authUser = auth.currentUserOrNull()
-            val email = authUser?.email ?: ""
 
             val userProfile = UserProfile(
                 auth_id = userId,
@@ -1022,6 +1292,13 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
     override suspend fun updateUserProfile(user: User): AuthResult<User> {
         return try {
+            // Check if user is authenticated before making the request
+            val currentUser = auth.currentUserOrNull()
+            if (currentUser == null) {
+                MotiumApplication.logger.w("No authenticated user, skipping users update", "SupabaseAuth")
+                return AuthResult.Error("User not authenticated")
+            }
+
             // Mettre à jour dans Supabase
             // IMPORTANT: Utiliser UserProfileUpdate (sans id/auth_id) pour éviter de corrompre auth_id
             // La RLS policy vérifie auth.uid() = auth_id, donc on ne doit PAS modifier auth_id
@@ -1251,6 +1528,13 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
         // Not in cache - try to fetch from Supabase
         MotiumApplication.logger.d("🔍 Pro account not in cache, fetching from Supabase for user: ${currentUser.id}", "SupabaseAuth")
+
+        // Check if user is authenticated before making the request
+        val authUser = auth.currentUserOrNull()
+        if (authUser == null) {
+            MotiumApplication.logger.w("No authenticated user, skipping pro_accounts fetch", "SupabaseAuth")
+            return null
+        }
 
         return try {
             val proAccounts = postgres.from("pro_accounts")

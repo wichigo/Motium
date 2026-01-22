@@ -1,0 +1,70 @@
+ACTIVITY MANAGER SERVICES (dumpsys activity services)
+  User 0 active services:
+  * ServiceRecord{d4b3a90 u0 com.application.motium/.service.SupabaseConnectionService c:com.application.motium}
+    intent={cmp=com.application.motium/.service.SupabaseConnectionService}
+    packageName=com.application.motium
+    processName=com.application.motium
+    targetSdkVersion=34
+    baseDir=/data/app/~~l1BOXb3H8RFnsOIMa6hw0Q==/com.application.motium-F4sqRxn7YpWvrUmqDqWq1g==/base.apk
+    dataDir=/data/user/0/com.application.motium
+    app=ProcessRecord{cb748a5 7709:com.application.motium/u0a473}
+    useNewWiuLogic_forCapabilities()=false
+    useNewWiuLogic_forStart()=false
+    useNewBfslLogic()=false
+    mAllowWiu_noBinding=PROC_STATE_TOP
+    mAllowWiu_inBindService=DENIED
+    mAllowWiu_byBindings=DENIED
+    getFgsAllowWiu_legacy=PROC_STATE_TOP
+    getFgsAllowWiu_new=PROC_STATE_TOP
+    getFgsAllowWiu_forStart=PROC_STATE_TOP
+    getFgsAllowWiu_forCapabilities=PROC_STATE_TOP
+    allowUiJobScheduling=false
+    recentCallingPackage=com.application.motium
+    recentCallingUid=10473
+    mAllowStart_noBinding=PROC_STATE_TOP
+    mAllowStart_inBindService=DENIED
+    mAllowStart_byBindings=DENIED
+    getFgsAllowStart_legacy=PROC_STATE_TOP
+    getFgsAllowStart_new=PROC_STATE_TOP
+    getFgsAllowStart=PROC_STATE_TOP
+    startForegroundCount=0
+    infoAllowStartForeground=[callingPackage: com.application.motium; callingUid: 10473; uidState: TOP ; uidBFSL: [BFSL]; intent: Intent { xflg=0x4 cmp=com.application.motium/.service.SupabaseConnectionService }; code:PROC_STATE_TOP; tempAllowListReason:<,reasonCode:SYSTEM_ALLOW_LISTED,duration:9223372036854775807,callingUid:-1>; allowWiu:12; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+    createTime=-10m45s431ms startingBgTimeout=--
+    lastActivity=-10m43s502ms restartTime=-10m45s431ms createdFromFg=true
+    startRequested=true delayedStop=false stopIfKilled=false callStart=true lastStartId=2
+ startCommandResult=1
+
+  * ServiceRecord{9a026af u0 com.application.motium/.service.ActivityRecognitionService c:com.application.motium}
+    intent={cmp=com.application.motium/.service.ActivityRecognitionService}
+    packageName=com.application.motium
+    processName=com.application.motium
+    targetSdkVersion=34
+    baseDir=/data/app/~~l1BOXb3H8RFnsOIMa6hw0Q==/com.application.motium-F4sqRxn7YpWvrUmqDqWq1g==/base.apk
+    dataDir=/data/user/0/com.application.motium
+    app=ProcessRecord{cb748a5 7709:com.application.motium/u0a473}
+    useNewWiuLogic_forCapabilities()=false
+    useNewWiuLogic_forStart()=false
+    useNewBfslLogic()=false
+    mAllowWiu_noBinding=PROC_STATE_TOP
+    mAllowWiu_inBindService=DENIED
+    mAllowWiu_byBindings=DENIED
+    getFgsAllowWiu_legacy=PROC_STATE_TOP
+    getFgsAllowWiu_new=PROC_STATE_TOP
+    getFgsAllowWiu_forStart=PROC_STATE_TOP
+    getFgsAllowWiu_forCapabilities=PROC_STATE_TOP
+    allowUiJobScheduling=true
+    recentCallingPackage=com.application.motium
+    recentCallingUid=10473
+    mAllowStart_noBinding=PROC_STATE_TOP
+    mAllowStart_inBindService=DENIED
+    mAllowStart_byBindings=DENIED
+    getFgsAllowStart_legacy=PROC_STATE_TOP
+    getFgsAllowStart_new=PROC_STATE_TOP
+    getFgsAllowStart=PROC_STATE_TOP
+    startForegroundCount=1
+    infoAllowStartForeground=[callingPackage: com.application.motium; callingUid: 10473; uidState: TOP ; uidBFSL: [BFSL]; intent: Intent { xflg=0x4 cmp=com.application.motium/.service.ActivityRecognitionService }; code:PROC_STATE_TOP; tempAllowListReason:<,reasonCode:SYSTEM_ALLOW_LISTED,duration:9223372036854775807,callingUid:-1>; allowWiu:12; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+    isForeground=true foregroundId=1002 types=0x00000008 foregroundNoti=Notification(channel=ActivityRecognitionChannel shortcut=null contentView=null vibrate=null sound=null defaults=0 flags=ONGOING_EVENT|ONLY_ALERT_ONCE|NO_CLEAR|FOREGROUND_SERVICE|LOCAL_ONLY|SILENT color=0x00000000 category=service vis=PUBLIC semFlags=0x0 semPriority=0 semMissedCount=0)
+    createTime=-11m47s931ms startingBgTimeout=--
+    lastActivity=-10m28s793ms restartTime=-11m47s930ms createdFromFg=true
+    startRequested=true delayedStop=false stopIfKilled=false callStart=true lastStartId=7
+ startCommandResult=1

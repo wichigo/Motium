@@ -5,6 +5,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.application.motium.domain.model.LegalForm
 import com.application.motium.domain.model.ProAccount
+import com.application.motium.domain.model.ProAccountStatus
 import kotlinx.datetime.Instant
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -26,6 +27,10 @@ data class ProAccountEntity(
     val billingAddress: String? = null,
     val billingEmail: String? = null,
     val billingDay: Int = 5,
+    val billingAnchorDay: Int? = null,
+    val status: String = "trial",  // trial, active, expired, suspended
+    val trialEndsAt: Long? = null,
+    val stripeSubscriptionId: String? = null, // ID subscription Stripe principale
     val departments: String = "[]",
     val createdAt: Long,
     val updatedAt: Long,
@@ -46,6 +51,10 @@ data class ProAccountEntity(
         billingAddress = billingAddress,
         billingEmail = billingEmail,
         billingDay = billingDay,
+        billingAnchorDay = billingAnchorDay,
+        status = ProAccountStatus.fromDbValue(status),
+        trialEndsAt = trialEndsAt?.let { Instant.fromEpochMilliseconds(it) },
+        stripeSubscriptionId = stripeSubscriptionId,
         departments = try {
             Json.decodeFromString<List<String>>(departments)
         } catch (e: Exception) {
@@ -71,6 +80,10 @@ fun ProAccount.toEntity(
     billingAddress = billingAddress,
     billingEmail = billingEmail,
     billingDay = billingDay,
+    billingAnchorDay = billingAnchorDay,
+    status = status.name.lowercase(),
+    trialEndsAt = trialEndsAt?.toEpochMilliseconds(),
+    stripeSubscriptionId = stripeSubscriptionId,
     departments = Json.encodeToString(departments),
     createdAt = createdAt?.toEpochMilliseconds() ?: System.currentTimeMillis(),
     updatedAt = updatedAt?.toEpochMilliseconds() ?: System.currentTimeMillis(),

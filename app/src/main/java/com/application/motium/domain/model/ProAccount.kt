@@ -32,6 +32,21 @@ data class ProAccount(
     @SerialName("billing_anchor_day")
     val billingAnchorDay: Int? = null,
 
+    // Statut du compte Pro (conformément aux specs)
+    // trial: Période d'essai 7 jours
+    // active: Au moins 1 licence achetée
+    // expired: Essai terminé sans achat
+    // suspended: Impayé
+    val status: ProAccountStatus = ProAccountStatus.TRIAL,
+
+    // Date de fin de période d'essai
+    @SerialName("trial_ends_at")
+    val trialEndsAt: Instant? = null,
+
+    // ID subscription Stripe principale (pour la gestion des licences)
+    @SerialName("stripe_subscription_id")
+    val stripeSubscriptionId: String? = null,
+
     // Départements/services de l'entreprise
     val departments: List<String> = emptyList(),
 
@@ -109,4 +124,37 @@ enum class LegalForm(val displayName: String, val shortName: String) {
 
     @SerialName("OTHER")
     OTHER("Autre", "AUTRE")
+}
+
+/**
+ * Statut d'un compte Pro
+ * Conformément aux spécifications:
+ * - trial: Période d'essai 7 jours
+ * - active: Au moins 1 licence achetée
+ * - expired: Essai terminé sans achat
+ * - suspended: Impayé
+ */
+@Serializable
+enum class ProAccountStatus {
+    @SerialName("trial")
+    TRIAL,      // Période d'essai 7 jours
+
+    @SerialName("active")
+    ACTIVE,     // Au moins 1 licence achetée
+
+    @SerialName("expired")
+    EXPIRED,    // Essai terminé sans achat
+
+    @SerialName("suspended")
+    SUSPENDED;  // Impayé
+
+    companion object {
+        fun fromDbValue(value: String): ProAccountStatus = when (value.lowercase()) {
+            "trial" -> TRIAL
+            "active" -> ACTIVE
+            "expired" -> EXPIRED
+            "suspended" -> SUSPENDED
+            else -> TRIAL
+        }
+    }
 }

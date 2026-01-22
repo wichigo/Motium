@@ -47,14 +47,32 @@ data class Subscription(
     /**
      * Check if subscription/trial is active (not expired)
      *
+     * ⚠️ SECURITY WARNING: This method uses System.currentTimeMillis() which can be
+     * manipulated by the user. For security-critical operations, use [isActiveWithTrustedTime]
+     * with a timestamp from TrustedTimeProvider instead.
+     *
      * IMPORTANT: This uses ONLY these fields for expiration checks:
      * - TRIAL: uses trialEndsAt (from users.trial_ends_at)
      * - PREMIUM/LICENSED: uses expiresAt (from users.subscription_expires_at)
      * - LIFETIME: never expires (expiresAt ignored)
      */
     fun isActive(): Boolean {
-        val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+        return isActiveAt(Instant.fromEpochMilliseconds(System.currentTimeMillis()))
+    }
+
+    /**
+     * Check if subscription/trial is active at the given time.
+     * Use this with TrustedTimeProvider for security-critical checks.
+     *
+     * @param now The current time to check against (should come from TrustedTimeProvider)
+     * @return true if subscription is active at the given time
+     */
+    fun isActiveAt(now: Instant): Boolean {
         return when (type) {
+            // TRIAL: SECURITY FIX - Si trialEndsAt est null, on considère le trial comme expiré
+            // Cela force une vérification serveur pour définir la date de fin
+            // Avant: null -> true (vulnérabilité: trial infini)
+            // Après: null -> false (fail-secure)
             SubscriptionType.TRIAL -> trialEndsAt?.let { now < it } ?: false
             SubscriptionType.EXPIRED -> false
             SubscriptionType.LIFETIME -> true
@@ -63,6 +81,34 @@ data class Subscription(
             SubscriptionType.LICENSED -> expiresAt?.let { now < it } ?: true
             SubscriptionType.PREMIUM -> expiresAt?.let { now < it } ?: false
         }
+    }
+
+    /**
+     * SECURE version: Check if subscription is active using trusted time.
+     * Returns null if time cannot be trusted (requires network sync).
+     *
+     * @param trustedTimeMs Trusted time in milliseconds from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if active, false if expired, null if time is untrusted
+     */
+    fun isActiveWithTrustedTime(trustedTimeMs: Long?): Boolean? {
+        if (trustedTimeMs == null) {
+            // Time is not trusted - caller should force network sync
+            return null
+        }
+        return isActiveAt(Instant.fromEpochMilliseconds(trustedTimeMs))
+    }
+
+    /**
+     * FAIL-SECURE version: Check if subscription is active.
+     * If time cannot be trusted, returns false (denies access).
+     *
+     * Use this for security-critical gates where denying access is safer than granting it.
+     *
+     * @param trustedTimeMs Trusted time in milliseconds from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true only if active AND time is trusted, false otherwise
+     */
+    fun isActiveFailSecure(trustedTimeMs: Long?): Boolean {
+        return isActiveWithTrustedTime(trustedTimeMs) ?: false
     }
 
     /**
@@ -82,18 +128,69 @@ data class Subscription(
 
     /**
      * Check if user has valid access (active trial or subscription)
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [hasValidAccessSecure].
      */
     fun hasValidAccess(): Boolean = isActive()
 
     /**
+     * SECURE version: Check if user has valid access using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if access is valid, false if not, null if time not trusted
+     */
+    fun hasValidAccessWithTrustedTime(trustedTimeMs: Long?): Boolean? {
+        return isActiveWithTrustedTime(trustedTimeMs)
+    }
+
+    /**
+     * FAIL-SECURE version: Returns false if time is not trusted.
+     * Use this for security gates where denying access is safer.
+     */
+    fun hasValidAccessSecure(trustedTimeMs: Long?): Boolean {
+        return isActiveFailSecure(trustedTimeMs)
+    }
+
+    /**
      * Check if user can export data (all active subscriptions can export)
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [canExportSecure].
      */
     fun canExport(): Boolean = isActive()
 
     /**
+     * SECURE version: Check if user can export using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if can export, false if not, null if time not trusted
+     */
+    fun canExportWithTrustedTime(trustedTimeMs: Long?): Boolean? {
+        return isActiveWithTrustedTime(trustedTimeMs)
+    }
+
+    /**
+     * FAIL-SECURE version: Returns false if time is not trusted.
+     * Use this for security gates where denying access is safer.
+     */
+    fun canExportSecure(trustedTimeMs: Long?): Boolean {
+        return isActiveFailSecure(trustedTimeMs)
+    }
+
+    /**
      * Check if user has unlimited trips (all active subscriptions have unlimited)
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [hasUnlimitedTripsSecure].
      */
     fun hasUnlimitedTrips(): Boolean = isActive()
+
+    /**
+     * FAIL-SECURE version: Returns false if time is not trusted.
+     * Use this for security gates where denying access is safer.
+     */
+    fun hasUnlimitedTripsSecure(trustedTimeMs: Long?): Boolean {
+        return isActiveFailSecure(trustedTimeMs)
+    }
 }
 
 enum class UserRole(val displayName: String) {
@@ -110,28 +207,40 @@ enum class SubscriptionType(val displayName: String) {
 
     companion object {
         /**
-         * Parse subscription type from string, with fallback for legacy FREE type
+         * Parse subscription type from string, with fallback for legacy FREE type.
+         * Logs unknown values for monitoring data inconsistencies.
          */
         fun fromString(value: String): SubscriptionType {
             // Normalize: remove whitespace and uppercase
             val normalized = value.trim().uppercase()
-            
+
             return when (normalized) {
-                "FREE" -> TRIAL
+                "FREE" -> {
+                    // Log legacy FREE usage - should have been migrated to TRIAL
+                    android.util.Log.w("SubscriptionType", "Legacy 'FREE' type encountered, mapping to TRIAL")
+                    TRIAL
+                }
                 "TRIAL" -> TRIAL
+                "EXPIRED" -> EXPIRED
                 // Stripe identifiers
                 "INDIVIDUAL_MONTHLY" -> PREMIUM
                 "INDIVIDUAL_LIFETIME" -> LIFETIME
                 "PRO_LICENSE_MONTHLY" -> LICENSED
                 "PRO_LICENSE_LIFETIME" -> LICENSED
                 // French/User variants
-                "MENSUEL" -> PREMIUM 
+                "MENSUEL" -> PREMIUM
                 "LICENSED" -> LICENSED
                 "PREMIUM" -> PREMIUM
                 "LIFETIME" -> LIFETIME
                 else -> try {
                     valueOf(normalized)
                 } catch (e: IllegalArgumentException) {
+                    // Log unknown type - helps identify data corruption or new types
+                    android.util.Log.e(
+                        "SubscriptionType",
+                        "Unknown subscription type '$value' encountered - defaulting to EXPIRED. " +
+                        "This may indicate data corruption or a new type not handled by the app."
+                    )
                     EXPIRED
                 }
             }

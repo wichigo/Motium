@@ -97,6 +97,16 @@ interface SyncMetadataDao {
     @Query("SELECT syncInProgress FROM sync_metadata WHERE entityType = :entityType")
     suspend fun isSyncInProgress(entityType: String): Boolean?
 
+    // ==================== RESET ====================
+
+    /**
+     * Reset all sync timestamps to 0 (epoch).
+     * This forces the next delta sync to fetch ALL data from the server.
+     * Used for forceFullSync() when user wants a complete re-download.
+     */
+    @Query("UPDATE sync_metadata SET lastSyncTimestamp = 0, lastFullSyncTimestamp = 0")
+    suspend fun resetAllTimestamps()
+
     // ==================== DELETE ====================
 
     @Query("DELETE FROM sync_metadata WHERE entityType = :entityType")

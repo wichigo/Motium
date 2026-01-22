@@ -12,6 +12,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.datetime.Instant
 import java.text.SimpleDateFormat
 import java.util.*
@@ -28,12 +32,21 @@ class TripRemoteDataSource(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
 
+    /**
+     * GPS point for trace_gps JSON parsing.
+     * Uses @SerialName to map abbreviated keys (lat, lon, ts, acc) from TripRepository payload
+     * to full property names for code readability.
+     */
     @Serializable
     data class GpsPoint(
+        @kotlinx.serialization.SerialName("lat")
         val latitude: Double,
+        @kotlinx.serialization.SerialName("lon")
         val longitude: Double,
+        @kotlinx.serialization.SerialName("ts")
         val timestamp: Long, // Epoch milliseconds
-        val accuracy: Float?
+        @kotlinx.serialization.SerialName("acc")
+        val accuracy: Float? = null
     )
 
     @Serializable
@@ -56,7 +69,7 @@ class TripRemoteDataSource(private val context: Context) {
         val cost: Double = 0.0,
         val reimbursement_amount: Double? = null, // Stored mileage reimbursement (optional for old trips)
         val is_work_home_trip: Boolean, // Trajet travail-maison - NO DEFAULT to force serialization
-        val trace_gps: String? = null, // JSONB as JSON string for manual trips
+        val trace_gps: JsonElement? = null, // JSONB - can be array or string
         val notes: String? = null,
         val matched_route_coordinates: String? = null,
         val created_at: String,
@@ -87,7 +100,7 @@ class TripRemoteDataSource(private val context: Context) {
         val cost: Double = 0.0,
         val reimbursement_amount: Double? = null,
         val is_work_home_trip: Boolean, // NO DEFAULT to force serialization
-        val trace_gps: String? = null,
+        val trace_gps: JsonElement? = null, // JSONB - can be array or string
         val notes: String? = null,
         val matched_route_coordinates: String? = null,
         val created_at: String,
@@ -123,7 +136,7 @@ class TripRemoteDataSource(private val context: Context) {
         val cost: Double,
         val reimbursement_amount: Double?, // Stored mileage reimbursement
         val is_work_home_trip: Boolean, // NO DEFAULT to force serialization
-        val trace_gps: String?,
+        val trace_gps: JsonElement?, // JSONB - can be array or string
         val notes: String?,
         val matched_route_coordinates: String?,
         val updated_at: String
@@ -183,11 +196,11 @@ class TripRemoteDataSource(private val context: Context) {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date(trip.createdAt.toEpochMilliseconds()))
 
-            val traceGpsJson = trip.tracePoints?.let {
-                if (it.isEmpty()) "{}" else json.encodeToString(it.map { point ->
+            val traceGpsJsonElement: JsonElement? = trip.tracePoints?.let {
+                if (it.isEmpty()) null else json.parseToJsonElement(json.encodeToString(it.map { point ->
                     GpsPoint(point.latitude, point.longitude, point.timestamp.toEpochMilliseconds(), point.accuracy)
-                })
-            } ?: "{}"
+                }))
+            }
 
 
             val existingTrip = try {
@@ -215,7 +228,7 @@ class TripRemoteDataSource(private val context: Context) {
                 cost = 0.0,
                 reimbursement_amount = trip.reimbursementAmount,
                 is_work_home_trip = trip.isWorkHomeTrip,
-                trace_gps = traceGpsJson,
+                trace_gps = traceGpsJsonElement,
                 notes = trip.notes,
                 matched_route_coordinates = trip.matchedRouteCoordinates,
                 created_at = existingTrip?.created_at ?: createdAtFormatted,
@@ -279,11 +292,11 @@ class TripRemoteDataSource(private val context: Context) {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date())
 
-            val traceGpsJson = trip.tracePoints?.let {
-                if (it.isEmpty()) "{}" else json.encodeToString(it.map { point ->
+            val traceGpsJsonElement: JsonElement? = trip.tracePoints?.let {
+                if (it.isEmpty()) null else json.parseToJsonElement(json.encodeToString(it.map { point ->
                     GpsPoint(point.latitude, point.longitude, point.timestamp.toEpochMilliseconds(), point.accuracy)
-                })
-            } ?: "{}"
+                }))
+            }
 
             val updateData = TripUpdate(
                 start_time = startTimeFormatted,
@@ -302,7 +315,7 @@ class TripRemoteDataSource(private val context: Context) {
                 cost = 0.0,
                 reimbursement_amount = trip.reimbursementAmount,
                 is_work_home_trip = trip.isWorkHomeTrip,
-                trace_gps = traceGpsJson,
+                trace_gps = traceGpsJsonElement,
                 notes = trip.notes,
                 matched_route_coordinates = trip.matchedRouteCoordinates,
                 updated_at = now
@@ -494,16 +507,33 @@ class TripRemoteDataSource(private val context: Context) {
         }
 
         val tracePoints = try {
-            if (trace_gps.isNullOrBlank() || trace_gps == "{}") emptyList()
-            else {
-                json.decodeFromString<List<GpsPoint>>(trace_gps).map { point ->
-                    com.application.motium.domain.model.LocationPoint(
-                        point.latitude,
-                        point.longitude,
-                        Instant.fromEpochMilliseconds(point.timestamp),
-                        point.accuracy
-                    )
+            when {
+                trace_gps == null -> emptyList()
+                trace_gps is JsonArray -> {
+                    json.decodeFromString<List<GpsPoint>>(trace_gps.toString()).map { point ->
+                        com.application.motium.domain.model.LocationPoint(
+                            point.latitude,
+                            point.longitude,
+                            Instant.fromEpochMilliseconds(point.timestamp),
+                            point.accuracy
+                        )
+                    }
                 }
+                trace_gps is JsonPrimitive -> {
+                    val content = trace_gps.jsonPrimitive.content
+                    if (content.isBlank() || content == "{}") emptyList()
+                    else {
+                        json.decodeFromString<List<GpsPoint>>(content).map { point ->
+                            com.application.motium.domain.model.LocationPoint(
+                                point.latitude,
+                                point.longitude,
+                                Instant.fromEpochMilliseconds(point.timestamp),
+                                point.accuracy
+                            )
+                        }
+                    }
+                }
+                else -> emptyList()
             }
         } catch (e: Exception) {
             MotiumApplication.logger.w("Failed to deserialize trace_gps for trip $id: ${e.message}", "SupabaseTripRepository")
@@ -736,16 +766,33 @@ class TripRemoteDataSource(private val context: Context) {
         }
 
         val tracePoints = try {
-            if (trace_gps.isNullOrBlank() || trace_gps == "{}") emptyList()
-            else {
-                json.decodeFromString<List<GpsPoint>>(trace_gps).map { point ->
-                    com.application.motium.domain.model.LocationPoint(
-                        point.latitude,
-                        point.longitude,
-                        Instant.fromEpochMilliseconds(point.timestamp),
-                        point.accuracy
-                    )
+            when {
+                trace_gps == null -> emptyList()
+                trace_gps is JsonArray -> {
+                    json.decodeFromString<List<GpsPoint>>(trace_gps.toString()).map { point ->
+                        com.application.motium.domain.model.LocationPoint(
+                            point.latitude,
+                            point.longitude,
+                            Instant.fromEpochMilliseconds(point.timestamp),
+                            point.accuracy
+                        )
+                    }
                 }
+                trace_gps is JsonPrimitive -> {
+                    val content = trace_gps.jsonPrimitive.content
+                    if (content.isBlank() || content == "{}") emptyList()
+                    else {
+                        json.decodeFromString<List<GpsPoint>>(content).map { point ->
+                            com.application.motium.domain.model.LocationPoint(
+                                point.latitude,
+                                point.longitude,
+                                Instant.fromEpochMilliseconds(point.timestamp),
+                                point.accuracy
+                            )
+                        }
+                    }
+                }
+                else -> emptyList()
             }
         } catch (e: Exception) {
             MotiumApplication.logger.w("Failed to deserialize trace_gps for trip $id: ${e.message}", "SupabaseTripRepository")

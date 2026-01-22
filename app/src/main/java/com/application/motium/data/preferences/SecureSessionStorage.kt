@@ -154,7 +154,11 @@ class SecureSessionStorage(context: Context) {
         }
     }
 
-    fun getRefreshToken(): String? = encryptedPrefs.getString(KEY_REFRESH_TOKEN, null)
+    fun getRefreshToken(): String? {
+        val token = encryptedPrefs.getString(KEY_REFRESH_TOKEN, null)
+        // Retourner null si le token est vide (stocké sans refresh token valide)
+        return if (token.isNullOrBlank()) null else token
+    }
     fun getUserId(): String? = encryptedPrefs.getString(KEY_USER_ID, null)
     fun getUserEmail(): String? = encryptedPrefs.getString(KEY_USER_EMAIL, null)
     fun getExpiresAt(): Long? {

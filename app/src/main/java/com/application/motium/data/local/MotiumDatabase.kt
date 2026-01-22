@@ -66,8 +66,8 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         ConsentEntity::class,
         LinkedUserEntity::class
     ],
-    version = 22,  // v22: Add LinkedUserEntity for offline-first Pro linked users
-    exportSchema = false
+    version = 26,  // v26: Battery optimization indexes for delta sync queries
+    exportSchema = true  // Export schema JSON for CI validation of migrations
 )
 @TypeConverters(TripConverters::class)
 abstract class MotiumDatabase : RoomDatabase() {
@@ -122,6 +122,17 @@ abstract class MotiumDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE users ADD COLUMN favoriteColors TEXT NOT NULL DEFAULT '[]'")
                 // Add invitationToken to company_links
                 db.execSQL("ALTER TABLE company_links ADD COLUMN invitationToken TEXT DEFAULT NULL")
+            }
+        }
+
+        /**
+         * Migration from v13 to v14: No-op migration (bridge)
+         * This migration exists to ensure a smooth upgrade path from v13 to v14.
+         * Version 14 was originally skipped in development, so this bridges the gap.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // No-op: This migration exists to bridge v13 -> v14 for users on v13
             }
         }
 
@@ -758,6 +769,79 @@ abstract class MotiumDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from v22 to v23: Add Pro Account enhancements
+         * - Add billingAnchorDay to pro_accounts (unified renewal date)
+         * - Add status to pro_accounts (trial, active, expired, suspended)
+         * - Add trialEndsAt to pro_accounts
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add new columns to pro_accounts
+                db.execSQL("ALTER TABLE pro_accounts ADD COLUMN billingAnchorDay INTEGER")
+                db.execSQL("ALTER TABLE pro_accounts ADD COLUMN status TEXT NOT NULL DEFAULT 'trial'")
+                db.execSQL("ALTER TABLE pro_accounts ADD COLUMN trialEndsAt INTEGER")
+            }
+        }
+
+        /**
+         * Migration from v23 to v24: Supabase schema parity for licenses and pro_accounts
+         * - Add stripeSubscriptionRef to licenses (FK to stripe_subscriptions.id)
+         * - Add stripePaymentIntentId to licenses (for lifetime payments)
+         * - Add pausedAt to licenses (DEPRECATED - column kept for backward compatibility but no longer used)
+         * - Add stripeSubscriptionId to pro_accounts (main Stripe subscription ID)
+         */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add Stripe reference fields to licenses
+                db.execSQL("ALTER TABLE licenses ADD COLUMN stripeSubscriptionRef TEXT")
+                db.execSQL("ALTER TABLE licenses ADD COLUMN stripePaymentIntentId TEXT")
+                db.execSQL("ALTER TABLE licenses ADD COLUMN pausedAt INTEGER")
+                // Add Stripe subscription ID to pro_accounts
+                db.execSQL("ALTER TABLE pro_accounts ADD COLUMN stripeSubscriptionId TEXT")
+            }
+        }
+
+        /**
+         * Migration from v24 to v25: Idempotency key for sync operations
+         * - Add idempotencyKey column to pending_operations for server-side deduplication
+         * - Enables safe retry of sync operations without duplicate effects
+         * - Generate idempotency keys for existing operations using entityType:entityId:action:createdAt
+         */
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add idempotencyKey column with default empty string (will be populated next)
+                db.execSQL("ALTER TABLE pending_operations ADD COLUMN idempotencyKey TEXT NOT NULL DEFAULT ''")
+
+                // Populate idempotencyKey for any existing operations
+                // Format: "entityType:entityId:action:createdAt"
+                db.execSQL("""
+                    UPDATE pending_operations
+                    SET idempotencyKey = entityType || ':' || entityId || ':' || action || ':' || createdAt
+                    WHERE idempotencyKey = ''
+                """)
+
+                // Create unique index on idempotencyKey
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_pending_operations_idempotencyKey ON pending_operations(idempotencyKey)")
+            }
+        }
+
+        /**
+         * Migration from v25 to v26: Battery optimization indexes
+         * - Add indexes on localUpdatedAt for efficient delta sync queries
+         * - Add index on trips.vehicleId for annual mileage calculations
+         * - These indexes reduce full table scans during sync operations
+         */
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add localUpdatedAt indexes for delta sync queries
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_trips_localUpdatedAt ON trips(localUpdatedAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_trips_vehicleId ON trips(vehicleId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_vehicles_localUpdatedAt ON vehicles(localUpdatedAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_licenses_localUpdatedAt ON licenses(localUpdatedAt)")
+            }
+        }
+
+        /**
          * Get singleton instance of the database.
          * Uses double-check locking for thread safety.
          */
@@ -774,9 +858,12 @@ abstract class MotiumDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 // Add migrations for smooth schema updates
+                // IMPORTANT: All migrations must be present for production builds
+                // Never use fallbackToDestructiveMigration() as it destroys user data
                 .addMigrations(
                     MIGRATION_11_12,
                     MIGRATION_12_13,
+                    MIGRATION_13_14,  // Bridge migration (no-op)
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
@@ -784,12 +871,12 @@ abstract class MotiumDatabase : RoomDatabase() {
                     MIGRATION_18_19,
                     MIGRATION_19_20,
                     MIGRATION_20_21,
-                    MIGRATION_21_22
+                    MIGRATION_21_22,
+                    MIGRATION_22_23,
+                    MIGRATION_23_24,
+                    MIGRATION_24_25,
+                    MIGRATION_25_26
                 )
-                // NOTE: fallbackToDestructiveMigration() est OK en développement
-                // Cela permet à Room de recréer la base si le schéma change
-                // ⚠️ AVANT LA PRODUCTION: Retirer cette ligne et écrire des migrations propres
-                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
         }
 

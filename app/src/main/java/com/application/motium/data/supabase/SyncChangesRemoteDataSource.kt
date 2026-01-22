@@ -150,9 +150,9 @@ class SyncChangesRemoteDataSource(private val context: Context) {
      */
     @Serializable
     data class SyncChangesRequest(
-        @SerialName("p_operations")
+        @SerialName("operations")
         val operations: JsonArray,
-        @SerialName("p_since")
+        @SerialName("since")
         val since: String
     )
 
@@ -221,12 +221,21 @@ class SyncChangesRemoteDataSource(private val context: Context) {
                         put("entity_id", op.entityId)
                         put("action", op.action)
                         put("idempotency_key", op.idempotencyKey)
-                        // Parse payload if present
+                        // Parse payload if present - IMPORTANT: key must be "payload" to match server's op->'payload'
                         if (op.payload != null) {
                             try {
                                 val dataObj = kotlinx.serialization.json.Json.parseToJsonElement(op.payload)
                                 if (dataObj is JsonObject) {
-                                    put("data", dataObj)
+                                    put("payload", dataObj)
+                                    // Extract version from payload and add as client_version at operation level
+                                    // The SQL expects op->>'client_version' for versioned entities (TRIP, VEHICLE, USER)
+                                    val versionElement = dataObj["version"]
+                                    if (versionElement != null) {
+                                        val versionValue = versionElement.toString().trim('"').toIntOrNull()
+                                        if (versionValue != null) {
+                                            put("client_version", versionValue)
+                                        }
+                                    }
                                 }
                             } catch (e: Exception) {
                                 MotiumApplication.logger.w(
@@ -243,6 +252,14 @@ class SyncChangesRemoteDataSource(private val context: Context) {
                 "Calling sync_changes() with ${operations.size} operations, since: $sinceFormatted",
                 TAG
             )
+
+            // DEBUG: Log LICENSE operations specifically for troubleshooting
+            operations.filter { it.entityType == "LICENSE" }.forEach { licenseOp ->
+                MotiumApplication.logger.w(
+                    "🔵 DEBUG sync LICENSE op: id=${licenseOp.entityId}, action=${licenseOp.action}, payload=${licenseOp.payload}",
+                    TAG
+                )
+            }
 
             // Call RPC
             val response = postgres.rpc(
@@ -288,6 +305,15 @@ class SyncChangesRemoteDataSource(private val context: Context) {
                 MotiumApplication.logger.w(
                     "Push failed: ${failure.entityType}:${failure.entityId} - " +
                             "${failure.errorCode}: ${failure.errorMessage}",
+                    TAG
+                )
+            }
+
+            // DEBUG: Log ALL LICENSE push results (success or failure) for troubleshooting
+            response.pushResults.filter { it.entityType == "LICENSE" }.forEach { result ->
+                MotiumApplication.logger.w(
+                    "🔵 DEBUG LICENSE push result: id=${result.entityId}, success=${result.success}, " +
+                            "error=${result.errorMessage ?: "none"}, alreadyProcessed=${result.alreadyProcessed}",
                     TAG
                 )
             }

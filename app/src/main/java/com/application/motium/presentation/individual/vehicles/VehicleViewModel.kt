@@ -78,18 +78,9 @@ class VehicleViewModel(
                 MotiumApplication.logger.i("Loaded ${vehicleList.size} vehicles for user: $userId", "VehicleViewModel")
                 _uiState.value = _uiState.value.copy(isLoading = false)
 
-                // SYNC: Tenter de synchroniser avec Supabase en arrière-plan (non bloquant)
-                viewModelScope.launch {
-                    try {
-                        vehicleRepository.syncVehiclesFromSupabase()
-                        // Recharger après la sync pour afficher les données Supabase
-                        val updatedList = vehicleRepository.getAllVehiclesForUser(userId)
-                        _vehicles.value = updatedList
-                    } catch (e: Exception) {
-                        // Ne pas afficher d'erreur si la sync échoue (mode offline)
-                        MotiumApplication.logger.w("Background vehicle sync failed: ${e.message}", "VehicleViewModel")
-                    }
-                }
+                // BATTERY OPTIMIZATION (2026-01): Removed legacy syncVehiclesFromSupabase() call
+                // Sync is now handled by WorkManager DeltaSyncWorker via sync_changes() RPC
+                // The data from Room is already up-to-date thanks to the offline-first architecture
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error loading vehicles: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(

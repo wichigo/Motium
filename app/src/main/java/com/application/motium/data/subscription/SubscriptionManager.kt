@@ -7,6 +7,7 @@ import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.domain.model.Subscription
 import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
+import com.application.motium.utils.TrustedTimeProvider
 import com.stripe.android.PaymentConfiguration
 import com.stripe.android.paymentsheet.PaymentSheetResult
 import kotlinx.coroutines.Dispatchers
@@ -215,11 +216,13 @@ class SubscriptionManager private constructor(private val context: Context) {
             }
 
             val subscription = user.subscription
+            // SECURITY FIX: Use trusted time for security-critical access checks
+            val trustedTimeMs = TrustedTimeProvider.getInstance(context).getTrustedTimeMs()
             val state = SubscriptionState.Active(
                 type = subscription.type,
                 expiresAt = subscription.expiresAt ?: subscription.trialEndsAt,
-                canExport = subscription.canExport(),
-                hasAccess = subscription.hasValidAccess()
+                canExport = subscription.canExportSecure(trustedTimeMs),
+                hasAccess = subscription.hasValidAccessSecure(trustedTimeMs)
             )
             _subscriptionState.value = state
             state
@@ -262,11 +265,16 @@ class SubscriptionManager private constructor(private val context: Context) {
 
     /**
      * Check if user has valid access (trial active or subscribed)
+     *
+     * SECURITY: Uses TrustedTimeProvider and fail-secure behavior.
+     * Returns false if time is not trusted.
      */
     suspend fun hasValidAccess(): Boolean = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser() ?: return@withContext false
-            user.subscription.hasValidAccess()
+            // SECURITY FIX: Use trusted time for access checks
+            val trustedTimeMs = TrustedTimeProvider.getInstance(context).getTrustedTimeMs()
+            user.subscription.hasValidAccessSecure(trustedTimeMs)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error checking valid access: ${e.message}", TAG, e)
             false
@@ -275,6 +283,9 @@ class SubscriptionManager private constructor(private val context: Context) {
 
     /**
      * Check if user can create trips (has valid access)
+     *
+     * SECURITY: Uses TrustedTimeProvider and fail-secure behavior.
+     * Denies access if time is not trusted.
      */
     suspend fun canCreateTrip(): TripAccessResult = withContext(Dispatchers.IO) {
         try {
@@ -282,21 +293,25 @@ class SubscriptionManager private constructor(private val context: Context) {
                 ?: return@withContext TripAccessResult.Error("Utilisateur non connecté")
 
             val subscription = user.subscription
+            // SECURITY FIX: Use trusted time for access checks
+            val trustedTimeMs = TrustedTimeProvider.getInstance(context).getTrustedTimeMs()
 
-            if (subscription.hasValidAccess()) {
+            if (subscription.hasValidAccessSecure(trustedTimeMs)) {
                 val daysLeft = subscription.daysLeftInTrial()
                 TripAccessResult.Allowed(
                     isInTrial = subscription.isInTrial(),
                     trialDaysRemaining = daysLeft
                 )
             } else {
-                TripAccessResult.AccessDenied(
-                    reason = if (subscription.type == SubscriptionType.EXPIRED) {
-                        "Votre essai gratuit est terminé"
-                    } else {
-                        "Abonnement requis"
-                    }
-                )
+                // Check if denial is due to untrusted time
+                val reason = if (trustedTimeMs == null) {
+                    "Veuillez vous connecter à Internet pour vérifier votre abonnement"
+                } else if (subscription.type == SubscriptionType.EXPIRED) {
+                    "Votre essai gratuit est terminé"
+                } else {
+                    "Abonnement requis"
+                }
+                TripAccessResult.AccessDenied(reason = reason)
             }
         } catch (e: Exception) {
             TripAccessResult.Error("Erreur: ${e.message}")
@@ -305,11 +320,16 @@ class SubscriptionManager private constructor(private val context: Context) {
 
     /**
      * Check if user can export data
+     *
+     * SECURITY: Uses TrustedTimeProvider and fail-secure behavior.
+     * Returns false if time is not trusted.
      */
     suspend fun canExport(): Boolean = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser() ?: return@withContext false
-            user.subscription.canExport()
+            // SECURITY FIX: Use trusted time for export checks
+            val trustedTimeMs = TrustedTimeProvider.getInstance(context).getTrustedTimeMs()
+            user.subscription.canExportSecure(trustedTimeMs)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error checking export permission: ${e.message}", TAG, e)
             false
@@ -368,6 +388,10 @@ class SubscriptionManager private constructor(private val context: Context) {
 
     /**
      * Initialize payment for Individual user subscription
+     *
+     * ARBRE 1 INDIVIDUEL: Validates that the user is not LICENSED before allowing payment.
+     * A LICENSED user must first unlink from their Pro account before subscribing individually.
+     *
      * @param userId The user ID
      * @param email The user's email
      * @param isLifetime True for lifetime purchase, false for monthly subscription
@@ -379,6 +403,47 @@ class SubscriptionManager private constructor(private val context: Context) {
     ): Result<PaymentIntentResponse> = withContext(Dispatchers.IO) {
         try {
             _paymentState.value = PaymentState.Loading
+
+            // ARBRE 1 INDIVIDUEL - Client-side validation
+            val user = localUserRepository.getLoggedInUser()
+
+            // Block LICENSED users (must unlink from Pro first)
+            if (user?.subscription?.type == SubscriptionType.LICENSED) {
+                val errorMsg = "Vous êtes actuellement lié à un compte Pro. Veuillez d'abord vous délier avant de souscrire un abonnement individuel."
+                MotiumApplication.logger.e("❌ BLOCKED: User is LICENSED, cannot purchase Individual subscription", TAG)
+                _paymentState.value = PaymentState.Error(errorMsg)
+                return@withContext Result.failure(Exception(errorMsg))
+            }
+
+            // Block LIFETIME users trying to "downgrade" to PREMIUM (they already have the best plan)
+            if (user?.subscription?.type == SubscriptionType.LIFETIME && !isLifetime) {
+                val errorMsg = "Vous avez déjà un accès à vie. Pas besoin de souscrire un abonnement mensuel !"
+                MotiumApplication.logger.i("ℹ️ User already has LIFETIME, no need for monthly subscription", TAG)
+                _paymentState.value = PaymentState.Error(errorMsg)
+                return@withContext Result.failure(Exception(errorMsg))
+            }
+
+            // Block double LIFETIME purchase
+            if (user?.subscription?.type == SubscriptionType.LIFETIME && isLifetime) {
+                val errorMsg = "Vous avez déjà un accès à vie."
+                MotiumApplication.logger.i("ℹ️ User already has LIFETIME, cannot purchase again", TAG)
+                _paymentState.value = PaymentState.Error(errorMsg)
+                return@withContext Result.failure(Exception(errorMsg))
+            }
+
+            // Block PREMIUM users trying to purchase another PREMIUM (would cause double billing)
+            if (user?.subscription?.type == SubscriptionType.PREMIUM && !isLifetime) {
+                val errorMsg = "Vous avez déjà un abonnement Premium actif. Pour modifier votre abonnement, annulez d'abord l'abonnement actuel."
+                MotiumApplication.logger.e("❌ BLOCKED: User already has active PREMIUM, cannot purchase another", TAG)
+                _paymentState.value = PaymentState.Error(errorMsg)
+                return@withContext Result.failure(Exception(errorMsg))
+            }
+
+            // Allow PREMIUM→LIFETIME upgrade (valid upgrade path)
+            if (user?.subscription?.type == SubscriptionType.PREMIUM && isLifetime) {
+                MotiumApplication.logger.i("⬆️ User upgrading from PREMIUM to LIFETIME", TAG)
+                // Continue - the user will get LIFETIME and should cancel PREMIUM separately
+            }
 
             val priceType = if (isLifetime) "individual_lifetime" else "individual_monthly"
             val price = if (isLifetime) INDIVIDUAL_LIFETIME_PRICE else INDIVIDUAL_MONTHLY_PRICE
@@ -529,9 +594,13 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
-     * Mark trial as expired (when trial period ends)
+     * Mark subscription as expired (when trial or premium period ends).
+     * Works for both TRIAL and PREMIUM subscription types.
+     *
+     * @param userId The user ID to mark as expired
+     * @return Result containing the updated user or an error
      */
-    suspend fun markTrialExpired(userId: String): Result<User> = withContext(Dispatchers.IO) {
+    suspend fun markSubscriptionExpired(userId: String): Result<User> = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser()
                 ?: return@withContext Result.failure(Exception("Utilisateur non trouvé"))
@@ -552,7 +621,7 @@ class SubscriptionManager private constructor(private val context: Context) {
             localUserRepository.updateUser(updatedUser)
             checkSubscriptionStatus()
 
-            MotiumApplication.logger.i("Trial marked as expired for user $userId", TAG)
+            MotiumApplication.logger.i("Subscription marked as expired for user $userId", TAG)
             Result.success(updatedUser)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Failed to mark trial as expired: ${e.message}", TAG, e)
@@ -561,24 +630,69 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
-     * Check and update subscription status if trial has expired
-     * Call this on app start and periodically
+     * Check and update subscription status if trial or premium subscription has expired.
+     * Call this on app start and periodically.
+     *
+     * SECURITY: This method checks BOTH trial AND premium expiration to ensure
+     * users don't retain access after their subscription ends.
+     *
+     * SECURITY FIX: Uses TrustedTimeProvider instead of System.currentTimeMillis()
+     * to prevent clock manipulation attacks.
      */
     suspend fun checkAndUpdateTrialExpiration(): Boolean = withContext(Dispatchers.IO) {
         try {
             val user = localUserRepository.getLoggedInUser() ?: return@withContext false
+            val subscription = user.subscription
 
-            if (user.subscription.type == SubscriptionType.TRIAL) {
-                val daysLeft = user.subscription.daysLeftInTrial()
-                if (daysLeft == null || daysLeft <= 0) {
-                    // Trial has expired
-                    markTrialExpired(user.id)
-                    return@withContext true
+            // SECURITY FIX: Use TrustedTimeProvider to prevent clock manipulation
+            val trustedTimeMs = TrustedTimeProvider.getInstance(context).getTrustedTimeMs()
+
+            // If time is not trusted, DO NOT expire anyone - require network sync first
+            // This prevents both false positives (expiring valid users) and false negatives
+            // (not expiring when clock is manipulated backward)
+            if (trustedTimeMs == null) {
+                MotiumApplication.logger.w(
+                    "Cannot verify subscription expiration: time not trusted (possible clock manipulation). " +
+                    "Skipping expiration check until network sync.",
+                    TAG
+                )
+                return@withContext false
+            }
+
+            val now = Instant.fromEpochMilliseconds(trustedTimeMs)
+
+            when (subscription.type) {
+                SubscriptionType.TRIAL -> {
+                    // SECURITY FIX: trialEndsAt null is now treated as expired (fail-secure)
+                    val trialEndsAt = subscription.trialEndsAt
+                    if (trialEndsAt == null || now >= trialEndsAt) {
+                        // Trial has expired or never had a valid end date
+                        MotiumApplication.logger.i("Trial expired for user ${user.id}", TAG)
+                        markSubscriptionExpired(user.id)
+                        return@withContext true
+                    }
+                }
+                SubscriptionType.PREMIUM -> {
+                    // SECURITY FIX: Also check PREMIUM subscription expiration
+                    val expiresAt = subscription.expiresAt
+                    if (expiresAt != null && now >= expiresAt) {
+                        // Premium subscription has expired
+                        MotiumApplication.logger.i("Premium subscription expired for user ${user.id}", TAG)
+                        markSubscriptionExpired(user.id) // Reuse existing method to mark as EXPIRED
+                        return@withContext true
+                    }
+                }
+                SubscriptionType.LICENSED -> {
+                    // LICENSED expiration is handled by LicenseCacheManager
+                    // which checks licenses.end_date with TrustedTimeProvider
+                }
+                SubscriptionType.LIFETIME, SubscriptionType.EXPIRED -> {
+                    // No expiration check needed
                 }
             }
             false
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Error checking trial expiration: ${e.message}", TAG, e)
+            MotiumApplication.logger.e("Error checking subscription expiration: ${e.message}", TAG, e)
             false
         }
     }

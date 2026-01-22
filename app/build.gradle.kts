@@ -74,6 +74,11 @@ android {
     }
 }
 
+// Room schema export configuration for migration validation
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

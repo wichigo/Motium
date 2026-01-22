@@ -17,7 +17,10 @@ import kotlinx.serialization.json.Json
     tableName = "trips",
     indices = [
         androidx.room.Index(value = ["syncStatus"]),
-        androidx.room.Index(value = ["userId", "startTime"])
+        androidx.room.Index(value = ["userId", "startTime"]),
+        // BATTERY OPTIMIZATION (2026-01): Index ajoutés pour éviter full table scans
+        androidx.room.Index(value = ["vehicleId"]), // Calculs kilométrage annuel
+        androidx.room.Index(value = ["localUpdatedAt"]) // Delta sync queries
     ]
 )
 @TypeConverters(TripConverters::class)

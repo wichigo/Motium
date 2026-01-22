@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.preferences.ProLicenseCache
+import com.application.motium.data.repository.LicenseCacheManager
 import com.application.motium.data.security.DeviceFingerprintManager
 import com.application.motium.data.supabase.DeviceFingerprintRepository
 import com.application.motium.data.supabase.EmailRepository
@@ -69,9 +70,25 @@ class AuthViewModel(
      */
     fun checkProLicense(userId: String) {
         viewModelScope.launch {
+            // DEBUG: Log entry with full details
+            MotiumApplication.logger.w(
+                "🔍 DEBUG checkProLicense() START - userId: $userId",
+                TAG
+            )
+
             // === STEP 1: CACHE-FIRST - Check cache IMMEDIATELY before any loading ===
             val cachedState = proLicenseCache.getCachedState(userId)
             val cacheValid = cachedState?.isValid() == true
+
+            // DEBUG: Log cache state details
+            MotiumApplication.logger.w(
+                "🔍 DEBUG checkProLicense() - Cache state:\n" +
+                "   cachedState: ${cachedState}\n" +
+                "   cacheValid: $cacheValid\n" +
+                "   isLicensed: ${cachedState?.isLicensed}\n" +
+                "   proAccountId: ${cachedState?.proAccountId}",
+                TAG
+            )
 
             if (cacheValid && cachedState.isLicensed && cachedState.proAccountId != null) {
                 // Cache says Licensed - navigate immediately, no Loading state shown
@@ -101,9 +118,16 @@ class AuthViewModel(
                 null
             }
 
+            // DEBUG: Log network result
+            MotiumApplication.logger.w(
+                "🔍 DEBUG checkProLicense() - Network result: $networkResult",
+                TAG
+            )
+
             when (networkResult) {
                 is LicenseCheckResult.Licensed -> {
                     // Cache and return success
+                    MotiumApplication.logger.w("🟢 DEBUG: Network says LICENSED → setting ProLicenseState.Licensed", TAG)
                     proLicenseCache.saveLicenseState(
                         userId = userId,
                         isLicensed = true,
@@ -113,6 +137,7 @@ class AuthViewModel(
                 }
                 is LicenseCheckResult.NotLicensed -> {
                     // Network confirms not licensed - update cache and state
+                    MotiumApplication.logger.w("🔴 DEBUG: Network says NOT_LICENSED → setting ProLicenseState.NotLicensed", TAG)
                     proLicenseCache.saveLicenseState(
                         userId = userId,
                         isLicensed = false,
@@ -123,6 +148,10 @@ class AuthViewModel(
                 is LicenseCheckResult.NoProAccount -> {
                     // No pro account found - BUT check if we have a stale cache first
                     // This handles the case where network sync is incomplete
+                    MotiumApplication.logger.w(
+                        "🟠 DEBUG: Network says NO_PRO_ACCOUNT - checking cached state...",
+                        TAG
+                    )
                     if (cachedState != null && cachedState.isLicensed) {
                         // We had a Licensed cache but network says no account - trust cache temporarily
                         MotiumApplication.logger.w(
@@ -133,6 +162,10 @@ class AuthViewModel(
                         // Don't update cache - let it expire naturally or be updated by successful network call
                     } else {
                         // No cache or cache says not licensed - trust network
+                        MotiumApplication.logger.w(
+                            "🔴 DEBUG: No cache or cache not licensed → setting ProLicenseState.NoProAccount",
+                            TAG
+                        )
                         proLicenseCache.saveLicenseState(
                             userId = userId,
                             isLicensed = false
@@ -142,6 +175,10 @@ class AuthViewModel(
                 }
                 null -> {
                     // Network failed or timed out - try cache (even stale cache is better than error)
+                    MotiumApplication.logger.w(
+                        "🟠 DEBUG: Network result is NULL (timeout/failure) → calling handleNetworkFailure()",
+                        TAG
+                    )
                     handleNetworkFailure(userId)
                 }
             }
@@ -570,6 +607,9 @@ class AuthViewModel(
             // Arrêter le service de connexion permanente avant déconnexion
             MotiumApplication.logger.i("🔌 Stopping connection service before sign out", "AuthViewModel")
             SupabaseConnectionService.stopService(context)
+
+            // BATTERY OPTIMIZATION: Cleanup LicenseCacheManager background tasks
+            LicenseCacheManager.getInstance(context).cleanup()
 
             // Clear credential state to signal logout to password managers
             CredentialManagerHelper.getInstance(context).clearCredentialState()

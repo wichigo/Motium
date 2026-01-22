@@ -12,7 +12,9 @@ import kotlinx.datetime.Instant
     indices = [
         Index(value = ["proAccountId"]),
         Index(value = ["linkedAccountId"]),
-        Index(value = ["syncStatus"])
+        Index(value = ["syncStatus"]),
+        // BATTERY OPTIMIZATION (2026-01): Index pour delta sync queries
+        Index(value = ["localUpdatedAt"])
     ]
 )
 data class LicenseEntity(
@@ -23,7 +25,7 @@ data class LicenseEntity(
     val isLifetime: Boolean = false,
     val priceMonthlyHt: Double = 5.0,
     val vatRate: Double = 0.20,
-    val status: String = "pending",
+    val status: String = "available",  // Conformément aux specs: available, active, canceled (3 statuts seulement)
     val startDate: Long? = null,
     val endDate: Long? = null,
     val unlinkRequestedAt: Long? = null,
@@ -32,6 +34,10 @@ data class LicenseEntity(
     val stripeSubscriptionId: String? = null,
     val stripeSubscriptionItemId: String? = null,
     val stripePriceId: String? = null,
+    val stripeSubscriptionRef: String? = null, // FK vers stripe_subscriptions.id (UUID)
+    val stripePaymentIntentId: String? = null, // Pour les paiements lifetime
+    @Deprecated("Pause functionality removed - kept for DB schema compatibility only")
+    val pausedAt: Long? = null, // DEPRECATED: Column kept for backward compatibility, no longer used
     val createdAt: Long,
     val updatedAt: Long,
     val syncStatus: String = SyncStatus.SYNCED.name,
@@ -48,7 +54,7 @@ data class LicenseEntity(
         isLifetime = isLifetime,
         priceMonthlyHT = priceMonthlyHt,
         vatRate = vatRate,
-        status = try { LicenseStatus.valueOf(status.uppercase()) } catch (e: Exception) { LicenseStatus.PENDING },
+        status = LicenseStatus.fromDbValue(status),  // Utilise le mapping avec gestion legacy
         startDate = startDate?.let { Instant.fromEpochMilliseconds(it) },
         endDate = endDate?.let { Instant.fromEpochMilliseconds(it) },
         unlinkRequestedAt = unlinkRequestedAt?.let { Instant.fromEpochMilliseconds(it) },
@@ -57,6 +63,8 @@ data class LicenseEntity(
         stripeSubscriptionId = stripeSubscriptionId,
         stripeSubscriptionItemId = stripeSubscriptionItemId,
         stripePriceId = stripePriceId,
+        stripeSubscriptionRef = stripeSubscriptionRef,
+        stripePaymentIntentId = stripePaymentIntentId,
         createdAt = Instant.fromEpochMilliseconds(createdAt),
         updatedAt = Instant.fromEpochMilliseconds(updatedAt)
     )
@@ -84,6 +92,8 @@ fun License.toEntity(
     stripeSubscriptionId = stripeSubscriptionId,
     stripeSubscriptionItemId = stripeSubscriptionItemId,
     stripePriceId = stripePriceId,
+    stripeSubscriptionRef = stripeSubscriptionRef,
+    stripePaymentIntentId = stripePaymentIntentId,
     createdAt = createdAt.toEpochMilliseconds(),
     updatedAt = updatedAt.toEpochMilliseconds(),
     syncStatus = syncStatus,

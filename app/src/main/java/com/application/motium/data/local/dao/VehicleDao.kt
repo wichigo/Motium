@@ -79,9 +79,9 @@ interface VehicleDao {
     suspend fun markVehicleAsSynced(vehicleId: String, timestamp: Long)
 
     /**
-     * Mark a vehicle as needing sync.
+     * Mark a vehicle as needing sync and increment version for optimistic locking.
      */
-    @Query("UPDATE vehicles SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :vehicleId")
+    @Query("UPDATE vehicles SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp, version = version + 1 WHERE id = :vehicleId")
     suspend fun markVehicleAsNeedingSync(vehicleId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
@@ -113,4 +113,31 @@ interface VehicleDao {
      */
     @Query("UPDATE vehicles SET totalMileagePerso = :perso, totalMileagePro = :pro, totalMileageWorkHome = :workHome WHERE id = :vehicleId")
     suspend fun updateVehicleMileage(vehicleId: String, perso: Double, pro: Double, workHome: Double)
+
+    /**
+     * Get vehicles with CONFLICT status that require user resolution.
+     * These are vehicles where both local and server had changes that couldn't be auto-merged.
+     */
+    @Query("SELECT * FROM vehicles WHERE userId = :userId AND syncStatus = 'CONFLICT' ORDER BY name ASC")
+    fun getConflictVehiclesFlow(userId: String): Flow<List<VehicleEntity>>
+
+    /**
+     * Get count of vehicles with CONFLICT status.
+     */
+    @Query("SELECT COUNT(*) FROM vehicles WHERE userId = :userId AND syncStatus = 'CONFLICT'")
+    fun getConflictVehiclesCountFlow(userId: String): Flow<Int>
+
+    /**
+     * Resolve a conflict by accepting the local version.
+     * Marks the vehicle as PENDING_UPLOAD to sync local changes to server.
+     */
+    @Query("UPDATE vehicles SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :vehicleId AND syncStatus = 'CONFLICT'")
+    suspend fun resolveConflictKeepLocal(vehicleId: String, timestamp: Long = System.currentTimeMillis())
+
+    /**
+     * Resolve a conflict by accepting the server version.
+     * Marks the vehicle as SYNCED (no upload needed).
+     */
+    @Query("UPDATE vehicles SET syncStatus = 'SYNCED', localUpdatedAt = :timestamp WHERE id = :vehicleId AND syncStatus = 'CONFLICT'")
+    suspend fun resolveConflictKeepServer(vehicleId: String, timestamp: Long = System.currentTimeMillis())
 }

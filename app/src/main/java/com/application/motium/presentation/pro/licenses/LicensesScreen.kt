@@ -33,6 +33,9 @@ import com.application.motium.presentation.components.StripePaymentSheet
 import com.application.motium.presentation.components.createLicenseButtonLabel
 import com.application.motium.presentation.theme.*
 import com.application.motium.utils.ThemeManager
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Screen for managing licenses (Pro feature)
@@ -231,8 +234,6 @@ fun LicensesScreen(
                                             onRequestUnlink = { viewModel.showUnlinkConfirmDialog(license) },
                                             onCancelUnlink = { viewModel.cancelUnlinkRequest(license.id) },
                                             onCancel = { viewModel.cancelLicense(license.id) },
-                                            onPause = { viewModel.pauseLicense(license.id) },
-                                            onResume = { viewModel.resumeLicense(license.id) },
                                             onDelete = { viewModel.deleteLicense(license.id) }
                                         )
                                         if (index < uiState.licenses.size - 1) {
@@ -408,14 +409,8 @@ private fun LicensesSummaryCard(
                     textSecondaryColor = textSecondaryColor
                 )
                 StatItem(
-                    value = summary.pausedLicenses.toString(),
-                    label = "En pause",
-                    color = textSecondaryColor,
-                    textSecondaryColor = textSecondaryColor
-                )
-                StatItem(
-                    value = summary.expiredLicenses.toString(),
-                    label = "Expirées",
+                    value = summary.suspendedLicenses.toString(),
+                    label = "Suspendues",
                     color = ErrorRed,
                     textSecondaryColor = textSecondaryColor
                 )
@@ -652,21 +647,19 @@ private fun LicenseRow(
     onRequestUnlink: () -> Unit,
     onCancelUnlink: () -> Unit,
     onCancel: () -> Unit,
-    onPause: () -> Unit,
-    onResume: () -> Unit,
     onDelete: () -> Unit
 ) {
     val effectiveStatus = license.effectiveStatus
-    val isClickable = effectiveStatus == LicenseEffectiveStatus.AVAILABLE || effectiveStatus == LicenseEffectiveStatus.PAUSED
+    val isClickable = effectiveStatus == LicenseEffectiveStatus.AVAILABLE
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                when {
-                    effectiveStatus == LicenseEffectiveStatus.AVAILABLE -> Modifier.clickable(onClick = onAssign)
-                    effectiveStatus == LicenseEffectiveStatus.PAUSED -> Modifier.clickable(onClick = onResume)
-                    else -> Modifier
+                if (effectiveStatus == LicenseEffectiveStatus.AVAILABLE) {
+                    Modifier.clickable(onClick = onAssign)
+                } else {
+                    Modifier
                 }
             )
             .padding(16.dp),
@@ -682,8 +675,7 @@ private fun LicenseRow(
                         LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary.copy(alpha = 0.1f)
                         LicenseEffectiveStatus.ACTIVE -> ValidatedGreen.copy(alpha = 0.1f)
                         LicenseEffectiveStatus.PENDING_UNLINK -> PendingOrange.copy(alpha = 0.1f)
-                        LicenseEffectiveStatus.PENDING_PAYMENT -> PendingOrange.copy(alpha = 0.1f)
-                        LicenseEffectiveStatus.PAUSED -> textSecondaryColor.copy(alpha = 0.1f)
+                        LicenseEffectiveStatus.SUSPENDED -> PendingOrange.copy(alpha = 0.1f)
                         else -> ErrorRed.copy(alpha = 0.1f)
                     }
                 ),
@@ -694,8 +686,7 @@ private fun LicenseRow(
                     LicenseEffectiveStatus.AVAILABLE -> Icons.Default.AddCircle
                     LicenseEffectiveStatus.ACTIVE -> Icons.Default.CheckCircle
                     LicenseEffectiveStatus.PENDING_UNLINK -> Icons.Default.Schedule
-                    LicenseEffectiveStatus.PENDING_PAYMENT -> Icons.Default.Payment
-                    LicenseEffectiveStatus.PAUSED -> Icons.Default.PauseCircle
+                    LicenseEffectiveStatus.SUSPENDED -> Icons.Default.Payment
                     else -> Icons.Default.Cancel
                 },
                 contentDescription = null,
@@ -703,8 +694,7 @@ private fun LicenseRow(
                     LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary
                     LicenseEffectiveStatus.ACTIVE -> ValidatedGreen
                     LicenseEffectiveStatus.PENDING_UNLINK -> PendingOrange
-                    LicenseEffectiveStatus.PENDING_PAYMENT -> PendingOrange
-                    LicenseEffectiveStatus.PAUSED -> textSecondaryColor
+                    LicenseEffectiveStatus.SUSPENDED -> PendingOrange
                     else -> ErrorRed
                 },
                 modifier = Modifier.size(24.dp)
@@ -745,18 +735,12 @@ private fun LicenseRow(
                     LicenseEffectiveStatus.AVAILABLE -> "Disponible - cliquez pour assigner"
                     LicenseEffectiveStatus.ACTIVE -> "Active"
                     LicenseEffectiveStatus.PENDING_UNLINK -> "Deliaison en cours"
-                    LicenseEffectiveStatus.PENDING_PAYMENT -> "En attente de paiement"
-                    LicenseEffectiveStatus.PAUSED -> "En pause - cliquez pour reactiver"
-                    LicenseEffectiveStatus.EXPIRED -> "Expiree"
+                    LicenseEffectiveStatus.SUSPENDED -> "Suspendue - paiement en attente"
                     LicenseEffectiveStatus.CANCELLED -> "Annulee"
                     LicenseEffectiveStatus.INACTIVE -> "Inactive"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = when (effectiveStatus) {
-                    LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary
-                    LicenseEffectiveStatus.PAUSED -> textSecondaryColor
-                    else -> textSecondaryColor
-                }
+                color = if (effectiveStatus == LicenseEffectiveStatus.AVAILABLE) MotiumPrimary else textSecondaryColor
             )
 
             // Show linked account info
@@ -768,16 +752,21 @@ private fun LicenseRow(
                 )
             }
 
-            // Show pending unlink countdown
+            // Show pending unlink/cancellation info
             if (effectiveStatus == LicenseEffectiveStatus.PENDING_UNLINK) {
-                license.daysUntilUnlinkEffective?.let { days ->
-                    Text(
-                        text = "Liberation dans $days jour${if (days > 1) "s" else ""}",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = PendingOrange
-                    )
+                // Format the effective date for display
+                val dateText = license.unlinkEffectiveAt?.let { effectiveAt ->
+                    val dateFormat = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+                    val date = Date(effectiveAt.toEpochMilliseconds())
+                    dateFormat.format(date)
                 }
+
+                Text(
+                    text = if (dateText != null) "Résiliation le $dateText" else "Résiliation en cours",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = PendingOrange
+                )
             }
 
             // Expiry warning for monthly licenses
@@ -808,20 +797,6 @@ private fun LicenseRow(
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Medium,
                             color = MotiumPrimary
-                        )
-                    }
-                }
-                LicenseEffectiveStatus.PAUSED -> {
-                    Surface(
-                        color = textSecondaryColor.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            "En pause",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Medium,
-                            color = textSecondaryColor
                         )
                     }
                 }
@@ -866,7 +841,7 @@ private fun LicenseRow(
 
         // Options menu for licenses with actions
         if ((license.status == LicenseStatus.ACTIVE && license.isAssigned) ||
-            license.canPause() || license.canDelete()) {
+            license.canDelete()) {
             var showMenu by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { showMenu = true }) {
@@ -922,46 +897,12 @@ private fun LicenseRow(
                             )
                         }
 
-                        // Cancel option (only for monthly licenses)
-                        if (!license.isLifetime) {
-                            DropdownMenuItem(
-                                text = { Text("Annuler la licence", color = ErrorRed) },
-                                onClick = {
-                                    showMenu = false
-                                    onCancel()
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.Cancel,
-                                        contentDescription = null,
-                                        tint = ErrorRed
-                                    )
-                                },
-                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                            )
-                        }
+                        // NOTE: "Annuler la licence" option removed for assigned licenses
+                        // User must use "Délier/Résilier la licence" (effective at renewal date)
+                        // Direct cancel was causing broken state (canceled but still linked)
                     }
 
-                    // Pause option for available (unassigned) monthly licenses
-                    if (license.canPause()) {
-                        DropdownMenuItem(
-                            text = { Text("Mettre en pause", color = textSecondaryColor) },
-                            onClick = {
-                                showMenu = false
-                                onPause()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Outlined.Pause,
-                                    contentDescription = null,
-                                    tint = textSecondaryColor
-                                )
-                            },
-                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                        )
-                    }
-
-                    // Delete option for available (unassigned) licenses
+                    // Delete option for available (unassigned) monthly licenses
                     if (license.canDelete()) {
                         DropdownMenuItem(
                             text = { Text("Supprimer", color = ErrorRed) },

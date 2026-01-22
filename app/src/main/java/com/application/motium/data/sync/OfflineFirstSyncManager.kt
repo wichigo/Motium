@@ -22,6 +22,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -44,8 +48,13 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
         private const val IMMEDIATE_SYNC_WORK_NAME = "delta_sync_immediate"
 
         // Sync intervals
-        private const val PERIODIC_SYNC_INTERVAL_MINUTES = 15L
-        private const val PERIODIC_SYNC_FLEX_MINUTES = 5L
+        // BATTERY OPTIMIZATION (2026-01-22): Increased from 30min to 60min (1 hour)
+        // Rationale: Trips/vehicles rarely change after creation. Critical operations
+        // (deletes, high-priority updates) still trigger immediate sync via queueOperation.
+        // WorkManager handles Doze mode and network constraints automatically.
+        // Mobile radio was consuming 15.9 mAh - reducing sync frequency to save battery.
+        private const val PERIODIC_SYNC_INTERVAL_MINUTES = 60L
+        private const val PERIODIC_SYNC_FLEX_MINUTES = 15L
         private const val NETWORK_RESTORE_DELAY_MS = 2000L
 
         @Volatile
@@ -86,34 +95,27 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
      */
     val isOnline: StateFlow<Boolean> = networkManager.isConnected
 
+    // BATTERY OPTIMIZATION: Track last sync time to prevent excessive syncs
+    private var lastImmediateSyncTriggerTime: Long = 0
+    private val MIN_SYNC_INTERVAL_MS = 60_000L // Minimum 1 minute between immediate syncs
+
     // ==================== INITIALIZATION ====================
 
     init {
-        // Observe network changes and trigger sync on reconnection
-        scope.launch {
-            networkManager.isConnected.collectLatest { isConnected ->
-                if (isConnected) {
-                    val pendingCount = pendingOpDao.getCount()
-                    if (pendingCount > 0) {
-                        MotiumApplication.logger.i(
-                            "Network restored - $pendingCount operations pending, triggering sync after ${NETWORK_RESTORE_DELAY_MS}ms",
-                            TAG
-                        )
-                        // Wait for network stabilization
-                        delay(NETWORK_RESTORE_DELAY_MS)
-                        triggerImmediateSync()
-                    }
-                }
-            }
-        }
+        // BATTERY OPTIMIZATION: Don't observe network in init to avoid excessive syncs
+        // The periodic WorkManager sync will handle network restoration naturally
+        // Only critical operations (queueOperation with priority > 0) will trigger immediate sync
+        MotiumApplication.logger.i("OfflineFirstSyncManager initialized (battery optimized)", TAG)
     }
 
     // ==================== OPERATION QUEUING ====================
 
     /**
      * Queue an operation for background sync.
-     * Atomically replaces any existing operation for the same entity to prevent duplicates.
-     * Uses @Transaction in the DAO to prevent race conditions between delete and insert.
+     * Intelligently merges operations to prevent data loss:
+     * - CREATE + UPDATE → Merge payloads, keep as CREATE (server needs CREATE first)
+     * - CREATE + DELETE → Cancel both (entity never existed on server)
+     * - Otherwise → Replace existing operation
      *
      * @param entityType Entity type (TRIP, VEHICLE, EXPENSE, USER)
      * @param entityId ID of the entity
@@ -128,6 +130,58 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
         payload: String? = null,
         priority: Int = 0
     ) {
+        // Check for existing pending operation for this entity
+        val existingOps = pendingOpDao.getByEntity(entityId, entityType)
+        val existingOp = existingOps.firstOrNull()
+
+        // CRITICAL FIX: Handle CREATE→UPDATE and CREATE→DELETE intelligently
+        // This prevents the bug where UPDATE replaces CREATE, causing "Trip not found" errors
+        if (existingOp != null) {
+            when {
+                // CREATE + UPDATE = Merge payloads, keep CREATE
+                // The server needs the CREATE first, but we want the latest data from UPDATE
+                existingOp.action == PendingOperationEntity.ACTION_CREATE &&
+                action == PendingOperationEntity.ACTION_UPDATE -> {
+                    val mergedPayload = mergePayloads(existingOp.payload, payload)
+                    val mergedOp = existingOp.copy(
+                        payload = mergedPayload,
+                        // Keep original idempotencyKey (stable for retries)
+                        // Update priority if new one is higher
+                        priority = maxOf(existingOp.priority, priority)
+                    )
+                    pendingOpDao.deleteByEntity(entityId, entityType)
+                    pendingOpDao.insert(mergedOp)
+                    MotiumApplication.logger.i(
+                        "Merged UPDATE into existing CREATE for $entityType:$entityId",
+                        TAG
+                    )
+                    // Trigger sync if needed
+                    if (priority > 0 && networkManager.isConnected.value) {
+                        triggerImmediateSync()
+                    }
+                    return
+                }
+
+                // CREATE + DELETE = Cancel both (entity never synced to server)
+                // No need to create then delete - just forget about it
+                existingOp.action == PendingOperationEntity.ACTION_CREATE &&
+                action == PendingOperationEntity.ACTION_DELETE -> {
+                    pendingOpDao.deleteByEntity(entityId, entityType)
+                    MotiumApplication.logger.i(
+                        "Cancelled CREATE+DELETE for $entityType:$entityId (never synced)",
+                        TAG
+                    )
+                    return
+                }
+
+                // All other cases: replace existing operation
+                else -> {
+                    // Fall through to normal replacement logic
+                }
+            }
+        }
+
+        // Normal case: create new operation and replace any existing
         val createdAt = System.currentTimeMillis()
         val idempotencyKey = PendingOperationEntity.generateIdempotencyKey(
             entityType = entityType,
@@ -148,7 +202,7 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
         )
 
         // Atomically replace any existing operation for same entity
-        // Uses @Transaction to prevent race conditions
+        // Uses @Transaction in DAO to prevent race conditions
         pendingOpDao.replaceOperation(entityId, entityType, operation)
 
         MotiumApplication.logger.i(
@@ -156,9 +210,48 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
             TAG
         )
 
-        // Trigger immediate sync if online
-        if (networkManager.isConnected.value) {
+        // BATTERY OPTIMIZATION: Only trigger immediate sync for high-priority operations
+        // Normal operations will be synced by the periodic WorkManager task
+        if (priority > 0 && networkManager.isConnected.value) {
             triggerImmediateSync()
+        }
+    }
+
+    /**
+     * Merge two JSON payloads, with newer values taking precedence.
+     * Used when merging CREATE + UPDATE operations.
+     *
+     * @param basePayload Original CREATE payload (may be null)
+     * @param updatePayload New UPDATE payload with updated fields (may be null)
+     * @return Merged JSON string, or updatePayload if merge fails
+     */
+    private fun mergePayloads(basePayload: String?, updatePayload: String?): String? {
+        if (basePayload == null) return updatePayload
+        if (updatePayload == null) return basePayload
+
+        return try {
+            val baseJson = Json.parseToJsonElement(basePayload).jsonObject
+            val updateJson = Json.parseToJsonElement(updatePayload).jsonObject
+
+            // Merge: start with base, override with update values
+            val merged = buildJsonObject {
+                // Add all base fields
+                baseJson.forEach { (key, value) ->
+                    put(key, value)
+                }
+                // Override with update fields (newer values win)
+                updateJson.forEach { (key, value) ->
+                    put(key, value)
+                }
+            }
+
+            merged.toString()
+        } catch (e: Exception) {
+            MotiumApplication.logger.w(
+                "Failed to merge payloads, using update payload: ${e.message}",
+                TAG
+            )
+            updatePayload
         }
     }
 
@@ -179,8 +272,24 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
     /**
      * Trigger immediate sync via WorkManager.
      * Uses a one-time work request with network constraint.
+     *
+     * BATTERY OPTIMIZATION: Rate-limited to at most once per minute to prevent battery drain.
      */
     fun triggerImmediateSync() {
+        val now = System.currentTimeMillis()
+        val timeSinceLastSync = now - lastImmediateSyncTriggerTime
+
+        // BATTERY OPTIMIZATION: Rate limit immediate syncs to once per minute
+        if (timeSinceLastSync < MIN_SYNC_INTERVAL_MS) {
+            MotiumApplication.logger.d(
+                "Skipping immediate sync - last trigger was ${timeSinceLastSync / 1000}s ago (min ${MIN_SYNC_INTERVAL_MS / 1000}s)",
+                TAG
+            )
+            return
+        }
+
+        lastImmediateSyncTriggerTime = now
+
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
@@ -192,11 +301,11 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
 
         workManager.enqueueUniqueWork(
             IMMEDIATE_SYNC_WORK_NAME,
-            ExistingWorkPolicy.REPLACE, // Replace any pending immediate sync
+            ExistingWorkPolicy.KEEP, // Keep existing if already pending (don't replace)
             request
         )
 
-        MotiumApplication.logger.i("Triggered immediate sync", TAG)
+        MotiumApplication.logger.i("Triggered immediate sync (rate-limited)", TAG)
     }
 
     /**

@@ -172,9 +172,24 @@ object TripCalculator {
     /**
      * Check if user has valid access (trial active or subscribed)
      * Returns true if user CANNOT create trips (no valid access)
+     *
+     * ⚠️ SECURITY WARNING: This method uses System.currentTimeMillis() which can be
+     * manipulated. Only use this for UI display purposes.
+     * For security-critical checks, use [hasNoValidAccessSecure] with TrustedTimeProvider.
      */
     fun hasNoValidAccess(user: User): Boolean {
         return !user.subscription.hasValidAccess()
+    }
+
+    /**
+     * SECURE version: Check if user has NO valid access using trusted time.
+     * Returns true if user CANNOT create trips (fail-secure: also returns true if time is untrusted)
+     * @param user The user to check
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if user has NO valid access or time is not trusted
+     */
+    fun hasNoValidAccessSecure(user: User, trustedTimeMs: Long?): Boolean {
+        return !user.subscription.hasValidAccessSecure(trustedTimeMs)
     }
 
     /**

@@ -5,9 +5,11 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.local.dao.WorkScheduleDao
 import com.application.motium.data.local.entities.AutoTrackingSettingsEntity
+import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.WorkScheduleEntity
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.WorkSchedule
 import com.application.motium.domain.model.AutoTrackingSettings
@@ -16,11 +18,14 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Repository for work schedules and auto-tracking settings.
@@ -32,6 +37,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     private val postgres = client.postgrest
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
     private val rpcCacheManager by lazy { RpcCacheManager.getInstance(context) }
+    private val syncManager by lazy { OfflineFirstSyncManager.getInstance(context) }
 
     // Room database for offline-first caching
     private val database = MotiumDatabase.getInstance(context)
@@ -104,6 +110,10 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             }
 
             schedules
+        } catch (e: CancellationException) {
+            // Re-throw cancellation to respect cooperative cancellation
+            MotiumApplication.logger.w("Work schedules fetch cancelled (scope left composition)", "WorkScheduleRepository")
+            throw e
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading work schedules: ${e.message}", "WorkScheduleRepository", e)
             // Fallback to local cache even on error
@@ -150,6 +160,10 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             }
             MotiumApplication.logger.e("Error fetching from Supabase: ${e.message}", "WorkScheduleRepository", e)
             emptyList()
+        } catch (e: CancellationException) {
+            // Re-throw cancellation to respect cooperative cancellation
+            MotiumApplication.logger.w("Supabase fetch cancelled (scope left composition)", "WorkScheduleRepository")
+            throw e
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error fetching from Supabase: ${e.message}", "WorkScheduleRepository", e)
             emptyList()
@@ -345,6 +359,10 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                 MotiumApplication.logger.i("No auto-tracking settings found, using default", "WorkScheduleRepository")
             }
             settings
+        } catch (e: CancellationException) {
+            // Re-throw cancellation to respect cooperative cancellation
+            MotiumApplication.logger.w("Auto-tracking settings fetch cancelled (scope left composition)", "WorkScheduleRepository")
+            throw e
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading auto-tracking settings: ${e.message}", "WorkScheduleRepository", e)
             // Fallback vers cache local
@@ -357,7 +375,8 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Sauvegarde les paramètres d'auto-tracking localement et synchronise avec Supabase.
+     * Sauvegarde les paramètres d'auto-tracking localement et queue pour sync via sync_changes().
+     * Utilise le pattern offline-first avec queueOperation() pour garantir la synchronisation.
      */
     suspend fun saveAutoTrackingSettings(settings: AutoTrackingSettings): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -368,26 +387,26 @@ class WorkScheduleRepository private constructor(private val context: Context) {
             workScheduleDao.insertAutoTrackingSettings(entity)
             MotiumApplication.logger.i("✅ Auto-tracking settings saved locally", "WorkScheduleRepository")
 
-            // Essayer de synchroniser avec Supabase
-            try {
-                val dto = AutoTrackingSettingsDto(
-                    id = settings.id.ifEmpty { null },
-                    user_id = settings.userId,
-                    tracking_mode = settings.trackingMode.name,
-                    min_trip_distance_meters = settings.minTripDistanceMeters,
-                    min_trip_duration_seconds = settings.minTripDurationSeconds
-                )
+            // Build payload for server sync (matches sync_changes RPC structure)
+            val payload = buildJsonObject {
+                put("tracking_mode", settings.trackingMode.name)
+                put("min_trip_distance_meters", settings.minTripDistanceMeters)
+                put("min_trip_duration_seconds", settings.minTripDurationSeconds)
+            }.toString()
 
-                postgres.from("auto_tracking_settings")
-                    .upsert(dto) {
-                        onConflict = "user_id"
-                    }
+            // Queue for sync via sync_changes() RPC
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_AUTO_TRACKING_SETTINGS,
+                entityId = settings.userId, // Use userId as entityId since it's unique per user
+                action = PendingOperationEntity.ACTION_UPDATE,
+                payload = payload,
+                priority = 1 // High priority for settings changes
+            )
 
-                workScheduleDao.markAutoTrackingSettingsAsSynced(settings.userId, System.currentTimeMillis())
-                MotiumApplication.logger.i("✅ Auto-tracking settings synced to Supabase", "WorkScheduleRepository")
-            } catch (e: Exception) {
-                MotiumApplication.logger.w("⚠️ Auto-tracking settings saved locally, will sync later: ${e.message}", "WorkScheduleRepository")
-            }
+            MotiumApplication.logger.i(
+                "✅ Auto-tracking settings queued for sync (payload=$payload)",
+                "WorkScheduleRepository"
+            )
 
             true
         } catch (e: Exception) {

@@ -15,11 +15,17 @@ import com.application.motium.domain.model.TrackingMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.text.SimpleDateFormat
 import java.util.*
 import com.application.motium.data.local.LocalUserRepository
@@ -27,13 +33,17 @@ import com.application.motium.data.preferences.ProLicenseCache
 import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.UserRole
 import com.application.motium.utils.TripCalculator
+import com.application.motium.utils.TrustedTimeProvider
 
 @Serializable
 data class TripLocation(
     val latitude: Double,
     val longitude: Double,
     val accuracy: Float,
-    val timestamp: Long
+    val timestamp: Long,
+    val speed: Float = 0f,
+    val bearing: Float = 0f,
+    val altitude: Double = 0.0
 )
 
 @Serializable
@@ -121,10 +131,20 @@ class TripRepository private constructor(context: Context) {
     private val vehicleRepository = VehicleRepository.getInstance(context)
     private val proLicenseCache = ProLicenseCache.getInstance(context)
 
+    // BATTERY OPTIMIZATION: Use supervised scope with timeout for init migration
+    private val initScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val MIGRATION_TIMEOUT_MS = 30_000L // 30 seconds max for migration
+
     // Migration automatique au premier lancement
     init {
-        CoroutineScope(Dispatchers.IO).launch {
-            migrateFromPrefsIfNeeded()
+        initScope.launch {
+            try {
+                withTimeout(MIGRATION_TIMEOUT_MS) {
+                    migrateFromPrefsIfNeeded()
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Migration timeout or failed: ${e.message}", "TripRepository")
+            }
         }
     }
 
@@ -311,6 +331,69 @@ class TripRepository private constructor(context: Context) {
                 // OFFLINE-FIRST: Queue operation for background sync instead of direct Supabase call
                 try {
                     val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+
+                    // Build payload with all trip fields for sync_changes() RPC
+                    val isoDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                        timeZone = TimeZone.getTimeZone("UTC")
+                    }
+
+                    // Extract start/end coordinates from locations
+                    val startLoc = tripWithUserId.locations.firstOrNull()
+                    val endLoc = tripWithUserId.locations.lastOrNull()
+
+                    val tripPayload = buildJsonObject {
+                        put("start_time", isoDateFormat.format(Date(tripWithUserId.startTime)))
+                        tripWithUserId.endTime?.let { put("end_time", isoDateFormat.format(Date(it))) }
+
+                        // Coordinates
+                        startLoc?.let {
+                            put("start_latitude", it.latitude)
+                            put("start_longitude", it.longitude)
+                        }
+                        endLoc?.let {
+                            put("end_latitude", it.latitude)
+                            put("end_longitude", it.longitude)
+                        }
+
+                        // Addresses
+                        tripWithUserId.startAddress?.let { put("start_address", it) }
+                        tripWithUserId.endAddress?.let { put("end_address", it) }
+
+                        // Distance and duration
+                        put("distance_km", tripWithUserId.totalDistance / 1000.0)
+                        val durationMs = (tripWithUserId.endTime ?: System.currentTimeMillis()) - tripWithUserId.startTime
+                        put("duration_ms", durationMs)
+
+                        // Trip metadata
+                        put("type", tripWithUserId.tripType ?: "PERSONAL")
+                        put("is_validated", tripWithUserId.isValidated)
+                        put("is_work_home_trip", tripWithUserId.isWorkHomeTrip)
+                        tripWithUserId.vehicleId?.let { put("vehicle_id", it) }
+                        tripWithUserId.reimbursementAmount?.let { put("reimbursement_amount", it) }
+                        tripWithUserId.notes?.let { put("notes", it) }
+                        tripWithUserId.matchedRouteCoordinates?.let { put("matched_route_coordinates", it) }
+
+                        // Timestamps
+                        put("created_at", isoDateFormat.format(Date(tripWithUserId.createdAt)))
+
+                        // GPS trace as JSON array
+                        if (tripWithUserId.locations.isNotEmpty()) {
+                            putJsonArray("trace_gps") {
+                                tripWithUserId.locations.forEach { loc ->
+                                    add(buildJsonObject {
+                                        put("lat", loc.latitude)
+                                        put("lon", loc.longitude)
+                                        put("ts", loc.timestamp)
+                                        put("acc", loc.accuracy.toDouble())
+                                        if (loc.speed > 0) put("spd", loc.speed.toDouble())
+                                        if (loc.bearing > 0) put("brg", loc.bearing.toDouble())
+                                        if (loc.altitude != 0.0) put("alt", loc.altitude)
+                                    })
+                                }
+                            }
+                        }
+                    }.toString()
+
                     syncManager.queueOperation(
                         entityType = com.application.motium.data.local.entities.PendingOperationEntity.TYPE_TRIP,
                         entityId = tripWithUserId.id,
@@ -318,11 +401,12 @@ class TripRepository private constructor(context: Context) {
                             com.application.motium.data.local.entities.PendingOperationEntity.ACTION_CREATE
                         } else {
                             com.application.motium.data.local.entities.PendingOperationEntity.ACTION_UPDATE
-                        }
+                        },
+                        payload = tripPayload
                     )
 
                     MotiumApplication.logger.i(
-                        "🔄 Trip queued for background sync: ${tripWithUserId.id} (${if (isNewTrip) "CREATE" else "UPDATE"})",
+                        "🔄 Trip queued for background sync: ${tripWithUserId.id} (${if (isNewTrip) "CREATE" else "UPDATE"}) with payload",
                         "TripRepository"
                     )
                 } catch (e: Exception) {
@@ -401,19 +485,22 @@ class TripRepository private constructor(context: Context) {
                 )
             }
 
-            if (subscription.hasValidAccess()) {
+            // SECURITY FIX: Use trusted time for access checks to prevent clock manipulation
+            val trustedTimeMs = TrustedTimeProvider.getInstance(appContext).getTrustedTimeMs()
+
+            if (subscription.hasValidAccessSecure(trustedTimeMs)) {
                 TripAccessCheckResult.Allowed(
                     isInTrial = subscription.isInTrial(),
                     trialDaysRemaining = subscription.daysLeftInTrial()
                 )
             } else {
-                TripAccessCheckResult.AccessDenied(
-                    reason = if (subscription.type == SubscriptionType.EXPIRED) {
-                        "Votre essai gratuit est terminé"
-                    } else {
-                        "Abonnement requis"
-                    }
-                )
+                // Determine the denial reason
+                val reason = when {
+                    trustedTimeMs == null -> "Veuillez vous connecter à Internet pour vérifier votre abonnement"
+                    subscription.type == SubscriptionType.EXPIRED -> "Votre essai gratuit est terminé"
+                    else -> "Abonnement requis"
+                }
+                TripAccessCheckResult.AccessDenied(reason = reason)
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error checking trip access: ${e.message}", "TripRepository", e)
@@ -450,8 +537,18 @@ class TripRepository private constructor(context: Context) {
                 return@withContext false
             }
             is TripAccessCheckResult.Error -> {
-                MotiumApplication.logger.e("Error checking trip access: ${accessCheck.message}", "TripRepository")
-                // Allow saving in case of error (fail-open)
+                // BUG FIX: Fail-SAFE for user data - don't lose trips due to temporary errors
+                // Rationale:
+                // 1. User data is precious - losing auto-tracked trips is unacceptable
+                // 2. Supabase RLS policies will enforce access control during sync
+                // 3. If user truly doesn't have access, sync will fail and trip stays local-only
+                // 4. Better UX: trip is saved, user sees it, worst case it won't sync
+                MotiumApplication.logger.w(
+                    "⚠️ Error checking trip access: ${accessCheck.message}. " +
+                    "Saving trip anyway (fail-safe for user data). Access will be verified during sync.",
+                    "TripRepository"
+                )
+                // Continue to save - don't return false
             }
             is TripAccessCheckResult.Allowed -> {
                 // Continue to save
@@ -970,6 +1067,19 @@ class TripRepository private constructor(context: Context) {
         }
     }
 
+    /**
+     * @deprecated This legacy method is replaced by DeltaSyncWorker which uses the get_changes() RPC
+     * for efficient delta synchronization. This method downloads ALL trips and performs full reconciliation,
+     * which is less efficient and doesn't support the new version-based conflict resolution.
+     *
+     * Use OfflineFirstSyncManager.triggerImmediateSync() instead for triggering sync.
+     *
+     * Kept for backward compatibility only - will be removed in a future version.
+     */
+    @Deprecated(
+        message = "Use DeltaSyncWorker via OfflineFirstSyncManager.triggerImmediateSync() instead",
+        replaceWith = ReplaceWith("OfflineFirstSyncManager.getInstance(context).triggerImmediateSync()")
+    )
     suspend fun syncTripsFromSupabase(userId: String? = null) = withContext(Dispatchers.IO) {
         try {
             // Utiliser le userId passé en paramètre ou le récupérer depuis localUserRepository

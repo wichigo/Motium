@@ -60,9 +60,8 @@ class ActivityRecognitionService : Service() {
         // Délai max pour considérer un événement comme valide (3 minutes)
         private const val MAX_EVENT_AGE_MS = 180000L
 
-        // Intervalle de ré-enregistrement périodique
-        private const val REREGISTER_INTERVAL_SAMSUNG_MS = 30 * 60 * 1000L  // 30 min Samsung
-        private const val REREGISTER_INTERVAL_DEFAULT_MS = 60 * 60 * 1000L  // 60 min autres
+        // BATTERY OPTIMIZATION (2026-01): REREGISTER_INTERVAL_* constantes supprimées
+        // Le keep-alive est maintenant UNIQUEMENT géré par DozeModeFix (AlarmManager 4-6h)
 
         // Debounce: ignorer même type d'activité si reçu dans cet intervalle
         private const val DEBOUNCE_SAME_ACTIVITY_MS = 15_000L  // 15 secondes
@@ -127,6 +126,10 @@ class ActivityRecognitionService : Service() {
             // l'auto-tracking. Ne PAS faire ça dans onDestroy() car Android pourrait tuer
             // le service et on veut que l'alarme le redémarre.
             DozeModeFix.cancelActivityRecognitionKeepAlive(context)
+
+            // BATTERY OPTIMIZATION (2026-01): Cleanup TripStateManager coroutines
+            TripStateManager.cleanup()
+
             MotiumApplication.logger.i("🛑 Stopping ActivityRecognitionService (user request)", TAG)
             context.stopService(Intent(context, ActivityRecognitionService::class.java))
         }
@@ -224,13 +227,9 @@ class ActivityRecognitionService : Service() {
     // Handler for notification updates
     private val notificationHandler = Handler(Looper.getMainLooper())
 
-    // Notification monitoring to ensure it stays visible
-    private val notificationMonitorHandler = Handler(Looper.getMainLooper())
-    private var notificationMonitorRunnable: Runnable? = null
-    private val NOTIFICATION_MONITOR_INTERVAL_MS = 60000L
-
-    // Double registration: ré-enregistrement périodique
-    private var reregisterJob: Job? = null
+    // BATTERY OPTIMIZATION (2026-01): Double registration via coroutine SUPPRIMÉE
+    // Le keep-alive est maintenant UNIQUEMENT géré par AlarmManager (DozeModeFix)
+    // qui est plus efficace car il ne nécessite pas de maintenir le service actif
 
     // Cooldown pour éviter les re-registrations en boucle
     private var lastReregistrationTimestamp: Long = 0L
@@ -268,7 +267,7 @@ class ActivityRecognitionService : Service() {
         if (action == ACTION_ACTIVITY_TRANSITION) {
             handleActivityTransitionIntent(intent)
             // NOTE: Re-registration post-transition supprimée - causait une boucle infinie
-            // La registration périodique (30-60min) via schedulePeriodicReregistration() suffit
+            // Le keep-alive est géré par DozeModeFix (AlarmManager 4-6h)
             return START_STICKY
         }
 
@@ -305,13 +304,8 @@ class ActivityRecognitionService : Service() {
         startActivityRecognition()
         isActivityRecognitionActive = true
 
-        // Démarrer le monitoring de notification
-        startNotificationMonitor()
-
-        // Double registration: planifier le ré-enregistrement périodique
-        schedulePeriodicReregistration()
-
         // Schedule keep-alive alarm (Doze mode fix)
+        // BATTERY OPTIMIZATION (2026-01): SEUL système de keep-alive (coroutine loop supprimée)
         DozeModeFix.scheduleActivityRecognitionKeepAlive(this)
 
         return START_STICKY
@@ -347,6 +341,12 @@ class ActivityRecognitionService : Service() {
                     updateNotification("Arrêt détecté...")
                 }
             }
+        }
+
+        // BUG FIX #4: Re-trigger callbacks if a trip was in progress before process death
+        // This ensures GPS tracking resumes for trips that were active when the process was killed
+        if (TripStateManager.triggerCallbacksForActiveTrip()) {
+            MotiumApplication.logger.i("🔄 Restored active trip - callbacks triggered", TAG)
         }
     }
 
@@ -610,15 +610,10 @@ class ActivityRecognitionService : Service() {
         // ⚠️ ANCIEN CODE BUGUÉ (supprimé):
         // DozeModeFix.cancelActivityRecognitionKeepAlive(this)
 
-        // Cancel periodic reregistration
-        reregisterJob?.cancel()
-        reregisterJob = null
+        // BATTERY OPTIMIZATION (2026-01): reregisterJob supprimé - utilise uniquement AlarmManager
 
         // Clean up handlers
         notificationHandler.removeCallbacksAndMessages(null)
-
-        // Stop notification monitoring
-        stopNotificationMonitor()
 
         // Stop activity recognition
         stopActivityRecognition()
@@ -926,37 +921,11 @@ class ActivityRecognitionService : Service() {
         activityTransitionRequest = null
     }
 
-    // ==================== DOUBLE REGISTRATION STRATEGY ====================
-
-    /**
-     * Planifie un ré-enregistrement périodique des transitions.
-     * Samsung: toutes les 30 min, autres: toutes les 60 min.
-     */
-    private fun schedulePeriodicReregistration() {
-        reregisterJob?.cancel()
-
-        val isSamsung = Build.MANUFACTURER.lowercase().contains("samsung")
-        val intervalMs = if (isSamsung) REREGISTER_INTERVAL_SAMSUNG_MS else REREGISTER_INTERVAL_DEFAULT_MS
-
-        MotiumApplication.logger.i(
-            "⏰ Scheduling periodic reregistration every ${intervalMs / 60000} min " +
-                    "(device: ${if (isSamsung) "Samsung" else "other"})",
-            TAG
-        )
-
-        reregisterJob = serviceScope.launch {
-            while (isActive) {
-                delay(intervalMs)
-                MotiumApplication.logger.i("🔄 Periodic reregistration triggered", TAG)
-                reregisterActivityTransitions()
-            }
-        }
-    }
-
-    // NOTE: scheduleReregistrationAfterTransition() a été supprimée.
-    // Elle causait une boucle infinie: chaque événement déclenchait une re-registration
-    // qui re-délivrait les événements en queue, créant un flood qui bloquait le GPS.
-    // La registration périodique (30-60min) via schedulePeriodicReregistration() suffit.
+    // ==================== REREGISTRATION (via AlarmManager keep-alive) ====================
+    // BATTERY OPTIMIZATION (2026-01): schedulePeriodicReregistration() SUPPRIMÉE
+    // Le keep-alive est maintenant UNIQUEMENT géré par DozeModeFix.scheduleActivityRecognitionKeepAlive()
+    // qui utilise AlarmManager.setExactAndAllowWhileIdle() - plus efficace que les coroutines
+    // car ne nécessite pas de maintenir le service actif en permanence.
 
     /**
      * Ré-enregistre les transitions d'activité (remove + add).
@@ -1161,55 +1130,6 @@ class ActivityRecognitionService : Service() {
             notificationHandler.postDelayed({
                 updateNotification(TripNotificationState.Standby.toNotificationText())
             }, 3000L)
-        }
-    }
-
-    /**
-     * Starts periodic monitoring of the notification to ensure it stays visible.
-     * If the notification is dismissed (by user or system), it will be re-displayed.
-     */
-    private fun startNotificationMonitor() {
-        stopNotificationMonitor() // Clear any existing monitor
-
-        notificationMonitorRunnable = object : Runnable {
-            override fun run() {
-                ensureNotificationVisible()
-                notificationMonitorHandler.postDelayed(this, NOTIFICATION_MONITOR_INTERVAL_MS)
-            }
-        }
-
-        // Start monitoring after initial delay
-        notificationMonitorHandler.postDelayed(notificationMonitorRunnable!!, NOTIFICATION_MONITOR_INTERVAL_MS)
-        MotiumApplication.logger.d("Notification monitor started", "Notification")
-    }
-
-    /**
-     * Stops the notification monitoring.
-     */
-    private fun stopNotificationMonitor() {
-        notificationMonitorRunnable?.let {
-            notificationMonitorHandler.removeCallbacks(it)
-            notificationMonitorRunnable = null
-        }
-    }
-
-    /**
-     * Checks if the notification is still visible and re-displays it if needed.
-     * This handles cases where the user swipes to dismiss or the system removes it.
-     */
-    private fun ensureNotificationVisible() {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val activeNotifications = notificationManager.activeNotifications
-
-        val isNotificationVisible = activeNotifications.any { it.id == NOTIFICATION_ID }
-
-        if (!isNotificationVisible) {
-            MotiumApplication.logger.w(
-                "⚠️ Notification was dismissed - re-displaying foreground notification",
-                "Notification"
-            )
-            // Re-start foreground service with notification
-            startForegroundService()
         }
     }
 }

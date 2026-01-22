@@ -1,0 +1,293 @@
+# GUIDE DE RÉPLICATION: MOTIUM (ANDROID KOTLIN) VERS IOS (SWIFTUI)
+# VERSION "PIXEL PERFECT" & EXHAUSTIVE
+
+Ce document contient les instructions techniques précises pour une IA génératrice de code.
+Chaque prompt doit être exécuté séquentiellement.
+
+---
+
+## PROMPT 0 : ARCHITECTURE, DÉPENDANCES & CONFIGURATION
+
+Agis comme un Lead Architect iOS. Nous posons les fondations.
+
+### 1. Stack Technique & Dépendances (SPM)
+Utilise Swift Package Manager. Versions cibles :
+*   `supabase-swift` (v2.0.0+) : Attention, la syntaxe a changé (utilisation de `SupabaseClient` et `from(_ table).select()`).
+*   `stripe-ios` (v23.0.0+) : Pour `PaymentSheet` et `StripeAPI`.
+*   `Alamofire` (v5.8+) : Pour les appels HTTP complexes (Nominatim/OSRM) si besoin, sinon `URLSession` native.
+*   `Kingfisher` (v7.0+) : Pour le chargement/cache des images de reçus.
+*   `Factory` (v2.0+) : Pour l'injection de dépendances (DI) propre.
+
+### 2. Configuration (`Info.plist` & Entitlements)
+Liste les clés **OBLIGATOIRES** à ajouter :
+*   `UIBackgroundModes`: [`location`, `fetch`, `processing`]
+*   `NSLocationAlwaysAndWhenInUseUsageDescription`: "Motium détecte vos trajets pro automatiquement."
+*   `NSLocationWhenInUseUsageDescription`: "Nécessaire pour afficher votre position sur la carte."
+*   `NSMotionUsageDescription`: "Utilisé pour activer le GPS uniquement quand vous conduisez (économie batterie)."
+*   `NSCameraUsageDescription`: "Pour scanner vos reçus de frais."
+*   `LSApplicationQueriesSchemes`: [`comgooglemaps`, `waze`] (Pour ouvrir le GPS externe).
+
+### 3. Gestion des Secrets & Constantes (`AppConfig.swift`)
+Crée un singleton `AppConfig` avec ces valeurs :
+Api key resend : re_HcZpATAg_HnAbkGTGUnpmGjkbeZja2JS
+*   `SUPABASE_URL`: "http://176.168.117.243:8000"
+*   `SUPABASE_ANON_KEY`: "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFub24iLCAiaXNzIjogInN1cGFiYXNlIiwgImlhdCI6IDE3MDQwNjcyMDAsICJleHAiOiAxODYxOTIwMDAwfQ.LUYd4QDV4W3yQc-HgbBHCmsjL1fkPU4xfTdlhabLN4M"
+*   `SUPABASE_SERVICE_KEY`: "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogInNlcnZpY2Vfcm9sZSIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwNDA2NzIwMCwgImV4cCI6IDE4NjE5MjAwMDB9.s3pKh4L_rPbNgqwjm7Gm-AqmImf6oVML_FBAlGrtIqw"
+*   `STRIPE_PUBLISHABLE_KEY`: "pk_test_51RLY4eCsRT1u49RI1vDxDBpBaR0iphMbJk47LKowyTKII2wTwbkYScTIpr7kTOQBQ4dEOTkztv767Pw75MWsBB1y00xLwmOflF"
+*   `STRIPE_SECRET_KEY`: "sk_test_51RLY4eCsRT1u49RI9ye2NaSOesJ1A7GHKFxZsVG3zPwOyixdSlTmgMt6kjXlPV5wmeDyFDyTQ22qfnjIK58OpTKM00TviLSbkK"
+*   **Nominatim API** : `https://nominatim.openstreetmap.org`
+    *   *Endpoint* : `/reverse?format=jsonv2&lat={lat}&lon={lon}`
+    *   *Header* : `User-Agent: Motium iOS App` (Obligatoire pour ne pas être bloqué).
+*   **OSRM API** : `http://router.project-osrm.org` (ou self-hosted)
+    *   *Endpoint* : `/match/v1/driving/{coords}?overview=full&geometries=geojson` (Pour lisser le tracé GPS).
+*   **Supabase Functions** :
+    *   `create-payment-intent`
+    *   `invite-user`
+    *   `assign-license`
+    *   `request-unlink`
+
+**Tâche :** Génère le fichier `AppConfig.swift` et le setup DI (`Container+Injection.swift` avec Factory).
+
+---
+
+## PROMPT 1 : COUCHE DE DONNÉES (SCHEMA EXACT)
+
+Agis comme un Senior iOS Dev. Crée les modèles SwiftData.
+⚠️ **CRITIQUE** : Respecte exactement ces types et noms pour la synchro JSON Supabase (`Codable`).
+
+**User** (`users`)
+- `id`: UUID (PK), `auth_id`: UUID
+- `name`: String, `email`: String
+- `role`: String (INDIVIDUAL / ENTERPRISE)
+- `subscription_type`: String (TRIAL, EXPIRED, PREMIUM, LIFETIME, LICENSED)
+- `subscription_expires_at`: Date?, `trial_started_at`: Date?, `trial_ends_at`: Date?
+- `stripe_customer_id`: String?, `stripe_subscription_id`: String?
+- `phone_number`: String?, `address`: String?
+- `phone_verified`: Bool (Def: false), `verified_phone`: String?
+- `device_fingerprint_id`: String?
+- `consider_full_distance`: Bool (Def: false)
+- `favorite_colors`: [String]? (Codable)
+- `created_at`: Date, `updated_at`: Date, `last_synced_at`: Date?
+- `sync_status`: String (SYNCED, PENDING...)
+
+**Vehicle** (`vehicles`)
+- `id`: UUID (PK), `user_id`: UUID
+- `name`: String, `type`: String (CAR, MOTORCYCLE, SCOOTER, BIKE)
+- `license_plate`: String?
+- `power`: String? (3CV, 4CV... 7CV+) -> Clé pour `FiscalCalculator`
+- `fuel_type`: String?, `mileage_rate`: Double
+- `is_default`: Bool
+- `total_mileage_perso`: Double, `total_mileage_pro`: Double, `total_mileage_work_home`: Double
+- `created_at`: Date, `updated_at`: Date, `sync_status`: String
+
+**Trip** (`trips`)
+- `id`: UUID (PK), `user_id`: UUID, `vehicle_id`: UUID?
+- `start_time`: Date, `end_time`: Date?
+- `start_latitude`: Double, `start_longitude`: Double
+- `end_latitude`: Double?, `end_longitude`: Double?
+- `start_address`: String?, `end_address`: String?
+- `distance_km`: Double, `duration_ms`: Int64
+- `type`: String (PROFESSIONAL / PERSONAL)
+- `is_validated`: Bool, `is_work_home_trip`: Bool
+- `cost`: Double, `reimbursement_amount`: Double?
+- `notes`: String?
+- `matched_route_coordinates`: String? (Cache OSRM JSON String)
+- `trace_gps`: Data? (Stockage binaire optimisé des points GPS)
+- `created_at`: Date, `updated_at`: Date, `sync_status`: String
+
+**Expense** (`expenses`)
+- `id`: UUID (PK), `user_id`: UUID, `trip_id`: UUID?
+- `date`: Date, `type`: String (FUEL, TOLL, RESTAURANT...)
+- `amount`: Double, `amount_ht`: Double?
+- `photo_uri`: String? (Local), `photo_url`: String? (Remote)
+- `created_at`: Date, `updated_at`: Date, `sync_status`: String
+
+**Tables Pro & Tech**
+- `ProAccount`, `CompanyLink`, `License`.
+- `PendingOperation`: id, entity_type, entity_id, action (CREATE/UPDATE/DELETE), payload (Data), created_at, retry_count.
+- `WorkSchedule`: day_of_week, start_hour/minute, end_hour/minute, is_active.
+- `AutoTrackingSettings`: tracking_mode, min_distance.
+
+**Tâche :** Génère ces modèles SwiftData. Assure-toi qu'ils implémentent `Codable` pour la sérialisation JSON.
+
+---
+
+## PROMPT 2 : AUTHENTICATION & SECURITY
+
+Agis comme un Expert Sécurité iOS.
+Implémente `AuthManager` et les Vues.
+
+**Logique Technique :**
+*   Utilise `Supabase.auth`.
+*   **Session Persistence** : Les tokens JWT doivent être stockés dans le **Keychain** (via le SDK Supabase ou `Security` framework), PAS dans UserDefaults.
+*   **State Management** : `AuthState` (Enum: .loading, .authenticated(User), .unauthenticated).
+
+**Flux UI :**
+1.  `SplashView` : Check session -> Fetch Profile (DB) -> Route to Home/Login.
+2.  `LoginView` : Email/Pass + Google Sign-In (via `Supabase.auth.signInWithOAuth`).
+3.  `RegisterView` : Crée le compte Auth + Crée le `User` dans la DB publique (Trigger Supabase ou appel explicite).
+4.  `PhoneVerificationView` :
+    *   Appel Edge Function `request-sms`.
+    *   Input "OTP Code".
+    *   Validation -> Update `user.phone_verified = true`.
+
+**Invitation Handler (Deep Link) :**
+*   Gère `motium://link?token=...`.
+*   Stocke le token temporairement si l'utilisateur doit se connecter.
+*   Une fois connecté, appelle la RPC `accept_invitation`.
+
+**Tâche :** Génère `AuthManager`, `DeepLinkManager` et les vues associées.
+
+---
+
+## PROMPT 3 : LOCATION CORE (BATTERY OPTIMIZED)
+
+Agis comme un Expert CoreLocation. C'est le composant le plus critique.
+
+**LocationManager (Singleton) :**
+1.  **Démarrage Intelligent** :
+    *   Observe `CMMotionActivityManager`.
+    *   Si `automotive` && `!stationary` -> Check `AutoTrackingSettings`.
+    *   Check `WorkSchedule` (Est-on lundi ? est-il entre 8h et 18h ?).
+    *   Si OK -> `startUpdatingLocation()`.
+2.  **Configuration GPS** :
+    *   `allowsBackgroundLocationUpdates = true`.
+    *   `pausesLocationUpdatesAutomatically = false` (CRITIQUE pour ne pas perdre le tracking).
+    *   `activityType = .automotiveNavigation`.
+    *   `distanceFilter` : Dynamique (10m si vitesse < 40km/h, 50m si > 40km/h).
+3.  **Ghost Trip & Safety** :
+    *   Timer `HealthCheck` toutes les 5 min. Si `lastLocationTime` > 10 min -> Stop tracking (Force Finish).
+4.  **Stop Detection** :
+    *   Si `activity == walking/stationary` OU vitesse ~0 pendant 3 min -> Trigger `STOP_PENDING`.
+    *   Attendre 2 min (Debounce).
+    *   Si toujours à l'arrêt -> `finalizeTrip()`.
+
+**Tâche :** Écris le `LocationManager` complet.
+
+---
+
+## PROMPT 4 : LOGIQUE MÉTIER (DOMAIN)
+
+Implémente la logique "Business" pure, sans UI.
+
+**1. VehicleRepository :**
+*   `getCurrentVehicle()` : Retourne le véhicule `is_default`.
+*   `updateMileage(trip)` : Ajoute la distance au bon compteur (`pro` ou `perso`).
+
+**2. FiscalCalculator (Moteur de Règles) :**
+*   Reproduction **exacte** du barème 2025 progressif.
+*   Entrée : `distanceTrajet`, `puissanceCV` (String -> Enum), `cumulAnnuelPrecedent`.
+*   Logique :
+    *   Détermine la tranche du cumul *avant* trajet.
+    *   Détermine la tranche du cumul *après* trajet.
+    *   Si changement de tranche au milieu du trajet, scinde le calcul en deux parties.
+*   Gère le flag `considerFullDistance` : si `false` et `isWorkHomeTrip` -> `min(distance, 40)`.
+
+**3. NominatimService (Geocoding Gratuit) :**
+*   Implémente `reverseGeocode(lat, lon) async throws -> String`.
+*   Construit l'URL avec `NOMINATIM_BASE_URL` et le Header User-Agent.
+*   Parse le JSON pour extraire `display_name` ou une adresse structurée (Rue, Ville).
+
+**Tâche :** Génère `VehicleRepository`, `FiscalCalculator`, et `NominatimService`.
+
+---
+
+## PROMPT 5 : SYNC ENGINE (OFFLINE QUEUE)
+
+Le cœur de l'Offline-First.
+
+**SyncManager :**
+1.  **Write Path** :
+    *   Quand l'UI sauvegarde un Trip -> SwiftData insert -> Création `PendingOperation` (Action: CREATE).
+    *   `SyncWorker` détecte l'opération -> Tente l'envoi POST Supabase.
+    *   Succès -> Supprime `PendingOperation`, met à jour `sync_status = SYNCED`.
+    *   Échec (Réseau) -> Garde l'opération, retry exponentiel.
+2.  **Read Path (Pull)** :
+    *   Appelé au lancement ou Pull-to-refresh.
+    *   `Supabase.rpc("get_changes", lastSyncDate)`
+    *   Upsert en local.
+3.  **Image Upload (Expenses)** :
+    *   Si une dépense a `photo_uri` (local) mais pas `photo_url` (remote).
+    *   Upload sur Supabase Storage bucket `receipts`.
+    *   Récupère l'URL publique -> Update `Expense` -> Mark Synced.
+
+**Tâche :** Génère `SyncManager` et `SyncWorker`.
+
+---
+
+## PROMPT 6 : UI - HOME (DASHBOARD)
+
+Reproduis l'écran principal.
+
+**Vue : `HomeView`**
+*   **Header** : Utilise `DailySummaryViewModel` pour calculer les totaux du jour en direct depuis SwiftData.
+*   **Liste** : `LazyVStack` avec `Section` (headers de date).
+*   **TripCard** :
+    *   Design : Row de 85pt de haut.
+    *   MiniMap : Utilise une `Map` SwiftUI (MapKit) statique (`interactionModes: []`) centrée sur les coordonnées du trajet, avec une `MapPolyline`.
+    *   Timeline visuelle (Point Vert -> Pointillé -> Point Rouge).
+    *   Badge Pro/Perso + Prix.
+    *   **Toggle Switch** : Action directe sur le modèle `Trip` (update `isValidated`).
+
+**Interactions :**
+*   Scroll infini (Pagination locale si beaucoup de trajets).
+*   Pull-to-refresh connecté au `SyncManager`.
+
+**Tâche :** Génère `HomeView`, `TripCard`, et `DailySummaryViewModel`.
+
+---
+
+## PROMPT 7 : UI - TRIP DETAILS & EXPENSES
+
+**Vue : `TripDetailView`**
+1.  **Carte Plein Écran** :
+    *   `Map` interactif. Affiche la route complète.
+    *   Utilise OSRM (`matchedRouteCoordinates`) si dispo pour tracer la route lissée sur la route réelle, sinon ligne droite.
+    *   Bouton "Centrer sur le trajet".
+2.  **Liste Dépenses** :
+    *   Horizontal ScrollView des miniatures de reçus.
+    *   Bouton "+" -> Sheet `AddExpenseView`.
+3.  **AddExpenseView & OCR** :
+    *   Champs : Type, Montant, TVA.
+    *   **Camera** : Bouton qui ouvre `VisionKit` (`DataScannerViewController`).
+    *   Analyse le texte scanné pour trouver un pattern de prix ("XX.XX €" ou "XX,XX").
+    *   Pré-remplit le champ Montant.
+    *   Sauvegarde l'image compressée (JPEG 0.7) dans `FileManager.documentsDirectory`.
+
+**Tâche :** Génère `TripDetailView`, `AddExpenseView` et `OCRHelper`.
+
+---
+
+## PROMPT 8 : MODULE PRO (MANAGEMENT)
+
+Module conditionnel (`if user.role == .enterprise`).
+
+**Vue : `ProDashboardView`**
+*   **Menu Grid** : "Comptes", "Licences", "Véhicules Flotte".
+*   **Licences** :
+    *   Liste : Récupérée via RPC `get_license_pool`.
+    *   Achat : Intégration basique (Bouton -> Ouvre lien web Stripe ou appel API backend pour générer PaymentLink).
+*   **Comptes Liés** :
+    *   Liste : Récupérée via RPC `get_linked_accounts`.
+    *   Actions : "Assigner Licence", "Révoquer" (Alert : "Attention délai 30 jours").
+    *   Invitation : Alert avec TextField (Email) -> RPC `invite_user`.
+
+**Tâche :** Génère ces vues et le `ProViewModel`.
+
+---
+
+## PROMPT 9 : EXPORT & PDF
+
+**Service : `PDFGenerator`**
+*   Crée un `PDFDocument`.
+*   Dessine le contenu avec CoreGraphics / PDFKit.
+*   **Page 1** : Récapitulatif (Total Km, Total Indemnités, Période, Info Véhicule).
+*   **Pages suivantes** : Tableau des trajets (Date, Départ, Arrivée, Motif, Km, €).
+*   **Annexes** : Itère sur les `Expenses`, charge les images locales, les dessine sur des pages séparées.
+
+**Vue : `ExportView`**
+*   Sélecteurs de date (DatePicker range).
+*   Preview du PDF (via `PDFView` UIViewRepresentable).
+*   Bouton "Partager" (`ShareLink`).
+
+**Tâche :** Génère `ExportView` et `PDFGenerator`.

@@ -168,10 +168,10 @@ serve(async (req) => {
     const trialEndsAt = new Date()
     trialEndsAt.setDate(trialEndsAt.getDate() + 7)
 
-    const { error: userInsertError } = await supabase
+    const { data: userInsertData, error: userInsertError } = await supabase
       .from('users')
       .insert({
-        id: userId,
+        auth_id: userId,  // Link to auth.users.id
         email: email.toLowerCase(),
         name: name || email.split('@')[0],
         phone_number: phone || '',
@@ -185,8 +185,10 @@ serve(async (req) => {
         created_at: now,
         updated_at: now
       })
+      .select('id')
+      .single()
 
-    if (userInsertError) {
+    if (userInsertError || !userInsertData) {
       console.error("User insert error:", userInsertError)
       // Try to clean up auth user
       await supabase.auth.admin.deleteUser(userId)
@@ -196,11 +198,13 @@ serve(async (req) => {
       )
     }
 
+    const publicUserId = userInsertData.id  // This is the public.users.id
+
     // Update company_link to set user_id and activate
     const { error: linkUpdateError } = await supabase
       .from('company_links')
       .update({
-        user_id: userId,
+        user_id: publicUserId,
         status: 'ACTIVE',
         invitation_token: null,
         invitation_email: null,
@@ -215,11 +219,11 @@ serve(async (req) => {
       // Don't fail - user was created successfully, they can manually accept later
     }
 
-    console.log(`New user ${email} created via invitation for company ${companyLink.company_name}`)
+    console.log(`New user ${email} (public.users.id: ${publicUserId}) created via invitation for company ${companyLink.company_name}`)
 
     const result: SetPasswordResult = {
       success: true,
-      user_id: userId,
+      user_id: publicUserId,  // Return public.users.id
       company_link_id: companyLink.id,
       company_name: companyLink.company_name
     }

@@ -31,11 +31,15 @@ object DozeModeFix {
     private const val TAG = "DozeModeFix"
 
     // Intervalles de keep-alive AlarmManager
-    // Standard interval for most devices
-    private const val ALARM_INTERVAL_DEFAULT = 60L * 60 * 1000 // 60 minutes (1 heure)
+    // BATTERY OPTIMIZATION (2026-01): Intervalles augmentés pour économiser la batterie
+    // Activity Recognition ne meurt généralement qu'après plusieurs heures d'inactivité
+    // Des intervalles de 4-6h sont suffisants pour maintenir le service vivant
 
-    // Samsung-specific interval (more aggressive due to One UI battery management)
-    private const val ALARM_INTERVAL_SAMSUNG = 30L * 60 * 1000 // 30 minutes
+    // Standard interval for most devices - 6 hours
+    private const val ALARM_INTERVAL_DEFAULT = 6L * 60 * 60 * 1000 // 6 heures (était 1h)
+
+    // Samsung-specific interval (more aggressive due to One UI battery management) - 4 hours
+    private const val ALARM_INTERVAL_SAMSUNG = 4L * 60 * 60 * 1000 // 4 heures (était 30 min)
 
     // Request code unique pour le PendingIntent keep-alive
     private const val KEEPALIVE_REQUEST_CODE = 9999
@@ -45,14 +49,16 @@ object DozeModeFix {
 
     /**
      * Get the appropriate alarm interval based on device manufacturer.
-     * Samsung devices get a more aggressive 30-minute interval.
-     * Other devices use 60-minute interval.
+     * Samsung devices get 4-hour interval (One UI is aggressive with background services).
+     * Other devices use 6-hour interval.
+     * BATTERY OPTIMIZATION: Reduced frequency from 30-60min to 4-6h
      */
     private fun getAlarmInterval(): Long {
         return if (AutoTrackingDiagnostics.isSamsungDevice()) {
-            MotiumApplication.logger.d("Using Samsung-specific 30-minute keep-alive interval", TAG)
+            MotiumApplication.logger.d("Using Samsung-specific 4-hour keep-alive interval", TAG)
             ALARM_INTERVAL_SAMSUNG
         } else {
+            MotiumApplication.logger.d("Using standard 6-hour keep-alive interval", TAG)
             ALARM_INTERVAL_DEFAULT
         }
     }

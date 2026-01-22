@@ -137,32 +137,29 @@ class VehicleRepository private constructor(context: Context) {
     /**
      * OFFLINE-FIRST: Récupère tous les véhicules de l'utilisateur depuis Room Database.
      * Fonctionne en mode offline.
-     * IMPORTANT: Mileage values are recalculated from local trips to ensure accuracy.
+     *
+     * BATTERY OPTIMIZATION (2026-01): Uses cached mileage values from Room Database.
+     * Mileage is kept in sync via recalculateAndUpdateVehicleMileage() which is called
+     * automatically when trips are created, updated, or deleted (TripRepository).
+     * This avoids expensive recalculation on every read.
      *
      * @param userId The user ID
-     * @param applyWorkHomeDailyCap If true, apply 80km daily cap for work-home mileage
+     * @param applyWorkHomeDailyCap Ignored - kept for API compatibility. Daily cap is applied at calculation time.
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun getAllVehiclesForUser(userId: String, applyWorkHomeDailyCap: Boolean = true): List<Vehicle> = withContext(Dispatchers.IO) {
         try {
             val vehicleEntities = vehicleDao.getVehiclesForUser(userId)
 
-            // Recalculate mileage from local trips for each vehicle
-            // This ensures we always have accurate values, not stale cached data
+            // BATTERY OPTIMIZATION: Use cached mileage values from Room Database
+            // Mileage is automatically updated by recalculateAndUpdateVehicleMileage()
+            // whenever trips are modified (see TripRepository)
             val vehicles = vehicleEntities.map { entity ->
-                val baseDomain = entity.toDomainModel()
-                val proMileage = calculateLocalMileage(entity.id, "PROFESSIONAL")
-                val persoMileage = calculateLocalMileage(entity.id, "PERSONAL")
-                val workHomeMileage = calculateWorkHomeMileage(entity.id, applyWorkHomeDailyCap)
-
-                baseDomain.copy(
-                    totalMileagePro = proMileage,
-                    totalMileagePerso = persoMileage,
-                    totalMileageWorkHome = workHomeMileage
-                )
+                entity.toDomainModel()
             }
 
             MotiumApplication.logger.i(
-                "Loaded ${vehicles.size} vehicles from Room Database for user $userId (mileage recalculated from local trips)",
+                "Loaded ${vehicles.size} vehicles from Room Database for user $userId (using cached mileage)",
                 "VehicleRepository"
             )
             return@withContext vehicles
@@ -174,26 +171,19 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * OFFLINE-FIRST: Récupère un véhicule par son ID depuis Room Database.
-     * Mileage values are recalculated from local trips.
+     *
+     * BATTERY OPTIMIZATION (2026-01): Uses cached mileage values from Room Database.
+     * Mileage is kept in sync via recalculateAndUpdateVehicleMileage().
      *
      * @param vehicleId The vehicle ID
-     * @param applyWorkHomeDailyCap If true, apply 80km daily cap for work-home mileage
+     * @param applyWorkHomeDailyCap Ignored - kept for API compatibility
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun getVehicleById(vehicleId: String, applyWorkHomeDailyCap: Boolean = true): Vehicle? = withContext(Dispatchers.IO) {
         try {
             val entity = vehicleDao.getVehicleById(vehicleId) ?: return@withContext null
-            val baseDomain = entity.toDomainModel()
-
-            // Recalculate mileage from local trips
-            val proMileage = calculateLocalMileage(vehicleId, "PROFESSIONAL")
-            val persoMileage = calculateLocalMileage(vehicleId, "PERSONAL")
-            val workHomeMileage = calculateWorkHomeMileage(vehicleId, applyWorkHomeDailyCap)
-
-            baseDomain.copy(
-                totalMileagePro = proMileage,
-                totalMileagePerso = persoMileage,
-                totalMileageWorkHome = workHomeMileage
-            )
+            // BATTERY OPTIMIZATION: Use cached mileage values
+            entity.toDomainModel()
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting vehicle by ID: ${e.message}", "VehicleRepository", e)
             null
@@ -202,26 +192,19 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * OFFLINE-FIRST: Récupère le véhicule par défaut de l'utilisateur depuis Room Database.
-     * Mileage values are recalculated from local trips.
+     *
+     * BATTERY OPTIMIZATION (2026-01): Uses cached mileage values from Room Database.
+     * Mileage is kept in sync via recalculateAndUpdateVehicleMileage().
      *
      * @param userId The user ID
-     * @param applyWorkHomeDailyCap If true, apply 80km daily cap for work-home mileage
+     * @param applyWorkHomeDailyCap Ignored - kept for API compatibility
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun getDefaultVehicle(userId: String, applyWorkHomeDailyCap: Boolean = true): Vehicle? = withContext(Dispatchers.IO) {
         try {
             val entity = vehicleDao.getDefaultVehicle(userId) ?: return@withContext null
-            val baseDomain = entity.toDomainModel()
-
-            // Recalculate mileage from local trips
-            val proMileage = calculateLocalMileage(entity.id, "PROFESSIONAL")
-            val persoMileage = calculateLocalMileage(entity.id, "PERSONAL")
-            val workHomeMileage = calculateWorkHomeMileage(entity.id, applyWorkHomeDailyCap)
-
-            baseDomain.copy(
-                totalMileagePro = proMileage,
-                totalMileagePerso = persoMileage,
-                totalMileageWorkHome = workHomeMileage
-            )
+            // BATTERY OPTIMIZATION: Use cached mileage values
+            entity.toDomainModel()
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting default vehicle: ${e.message}", "VehicleRepository", e)
             null
@@ -271,11 +254,14 @@ class VehicleRepository private constructor(context: Context) {
 
                     MotiumApplication.logger.i("✅ Vehicle synced to Supabase: ${vehicle.id}", "VehicleRepository")
                 } else {
-                    MotiumApplication.logger.w("⚠️ Vehicle saved locally only - will sync when user authenticates", "VehicleRepository")
+                    // OFFLINE-FIRST: Queue operation for background sync
+                    queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_CREATE)
+                    MotiumApplication.logger.w("⚠️ Vehicle saved locally only - queued for background sync", "VehicleRepository")
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Failed to sync vehicle to Supabase: ${e.message}", "VehicleRepository", e)
-                // Ne pas faire échouer l'opération si la sync échoue
+                // OFFLINE-FIRST: Queue operation for retry when sync fails
+                queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_CREATE)
+                MotiumApplication.logger.e("❌ Failed to sync vehicle to Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error inserting vehicle: ${e.message}", "VehicleRepository", e)
@@ -316,10 +302,14 @@ class VehicleRepository private constructor(context: Context) {
 
                     MotiumApplication.logger.i("✅ Vehicle synced to Supabase: ${vehicle.id}", "VehicleRepository")
                 } else {
-                    MotiumApplication.logger.w("⚠️ Vehicle updated locally only - will sync when user authenticates", "VehicleRepository")
+                    // OFFLINE-FIRST: Queue operation for background sync
+                    queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_UPDATE)
+                    MotiumApplication.logger.w("⚠️ Vehicle updated locally only - queued for background sync", "VehicleRepository")
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Failed to sync vehicle to Supabase: ${e.message}", "VehicleRepository", e)
+                // OFFLINE-FIRST: Queue operation for retry when sync fails
+                queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_UPDATE)
+                MotiumApplication.logger.e("❌ Failed to sync vehicle to Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error updating vehicle: ${e.message}", "VehicleRepository", e)
@@ -350,10 +340,14 @@ class VehicleRepository private constructor(context: Context) {
 
                     MotiumApplication.logger.i("✅ Default vehicle synced to Supabase: $vehicleId", "VehicleRepository")
                 } else {
-                    MotiumApplication.logger.w("⚠️ Default vehicle set locally only - will sync when user authenticates", "VehicleRepository")
+                    // OFFLINE-FIRST: Queue operation for background sync
+                    queueVehicleOperation(vehicleId, PendingOperationEntity.ACTION_UPDATE)
+                    MotiumApplication.logger.w("⚠️ Default vehicle set locally only - queued for background sync", "VehicleRepository")
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Failed to sync default vehicle to Supabase: ${e.message}", "VehicleRepository", e)
+                // OFFLINE-FIRST: Queue operation for retry when sync fails
+                queueVehicleOperation(vehicleId, PendingOperationEntity.ACTION_UPDATE)
+                MotiumApplication.logger.e("❌ Failed to sync default vehicle to Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error setting default vehicle: ${e.message}", "VehicleRepository", e)
@@ -366,23 +360,33 @@ class VehicleRepository private constructor(context: Context) {
      */
     suspend fun deleteVehicle(vehicle: Vehicle) = withContext(Dispatchers.IO) {
         try {
-            // 1. Supprimer localement de Room
-            vehicleDao.deleteVehicleById(vehicle.id)
-
-            MotiumApplication.logger.i("✅ Vehicle deleted from Room Database: ${vehicle.id}", "VehicleRepository")
-
-            // 2. Supprimer de Supabase si possible
+            // 1. Tenter la suppression sur Supabase d'abord si possible
+            var needsQueueing = false
             try {
                 val localUser = localUserRepository.getLoggedInUser()
                 if (localUser != null) {
                     vehicleRemoteDataSource.deleteVehicle(vehicle)
                     MotiumApplication.logger.i("✅ Vehicle deleted from Supabase: ${vehicle.id}", "VehicleRepository")
                 } else {
-                    MotiumApplication.logger.i("Vehicle deleted locally only: ${vehicle.id}", "VehicleRepository")
+                    // OFFLINE-FIRST: Queue operation for background sync BEFORE deleting locally
+                    needsQueueing = true
+                    MotiumApplication.logger.w("⚠️ User offline - queuing vehicle deletion for background sync", "VehicleRepository")
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Failed to delete vehicle from Supabase: ${e.message}", "VehicleRepository", e)
+                // OFFLINE-FIRST: Queue operation for retry when sync fails
+                needsQueueing = true
+                MotiumApplication.logger.e("❌ Failed to delete vehicle from Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
             }
+
+            // 2. Queue the delete operation if needed (BEFORE local deletion)
+            if (needsQueueing) {
+                queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_DELETE)
+            }
+
+            // 3. Supprimer localement de Room
+            vehicleDao.deleteVehicleById(vehicle.id)
+            MotiumApplication.logger.i("✅ Vehicle deleted from Room Database: ${vehicle.id}", "VehicleRepository")
+
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error deleting vehicle: ${e.message}", "VehicleRepository", e)
             throw e
@@ -474,6 +478,29 @@ class VehicleRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error deleting all vehicles for user: ${e.message}", "VehicleRepository", e)
             throw e
+        }
+    }
+
+    /**
+     * OFFLINE-FIRST: Queue a vehicle operation for background sync.
+     * This ensures that vehicle changes are synchronized even when offline.
+     *
+     * @param vehicleId The ID of the vehicle
+     * @param action The action to perform (ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE)
+     */
+    private suspend fun queueVehicleOperation(vehicleId: String, action: String) {
+        try {
+            val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_VEHICLE,
+                entityId = vehicleId,
+                action = action,
+                payload = null,
+                priority = 0
+            )
+            MotiumApplication.logger.i("🔄 Vehicle operation queued: $vehicleId ($action)", "VehicleRepository")
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to queue vehicle operation: ${e.message}", "VehicleRepository", e)
         }
     }
 

@@ -17,7 +17,9 @@ import com.application.motium.presentation.theme.ErrorRed
 import com.application.motium.presentation.theme.PendingOrange
 
 /**
- * Dialog to confirm unlink request with 30-day notice period explanation
+ * Dialog to confirm unlink/cancel request.
+ * - Lifetime: déliaison immédiate
+ * - Mensuelle: effective à la date de renouvellement
  */
 @Composable
 fun UnlinkConfirmDialog(
@@ -26,6 +28,17 @@ fun UnlinkConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    val isLifetime = license.isLifetime
+    val title = if (isLifetime) "Délier la licence" else "Résilier la licence"
+    val confirmText = if (isLifetime) "Confirmer la déliaison" else "Confirmer la résiliation"
+
+    // Format end date for monthly licenses
+    val endDateText = license.endDate?.let { endDate ->
+        val instant = endDate.toEpochMilliseconds()
+        val date = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE).format(java.util.Date(instant))
+        date
+    } ?: "immédiatement"
+
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
         containerColor = Color.White,
@@ -40,7 +53,7 @@ fun UnlinkConfirmDialog(
         },
         title = {
             Text(
-                "Demander la deliaison",
+                title,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
@@ -51,7 +64,7 @@ fun UnlinkConfirmDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Warning card
+                // Warning card - different message based on license type
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -64,13 +77,17 @@ fun UnlinkConfirmDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            "Preavis de 30 jours",
+                            if (isLifetime) "Déliaison immédiate" else "Résiliation au renouvellement",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = PendingOrange
                         )
                         Text(
-                            "La licence restera active pendant 30 jours. L'utilisateur continuera a avoir acces a ses donnees pendant cette periode.",
+                            if (isLifetime) {
+                                "La licence sera libérée immédiatement. L'utilisateur perdra l'accès aux fonctionnalités Pro."
+                            } else {
+                                "La licence restera active jusqu'au $endDateText (date de renouvellement). L'utilisateur conservera l'accès jusqu'à cette date."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
@@ -79,7 +96,7 @@ fun UnlinkConfirmDialog(
 
                 // Explanation text
                 Text(
-                    "Apres le preavis de 30 jours :",
+                    if (isLifetime) "Après la déliaison :" else "Après la date de renouvellement :",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -88,26 +105,28 @@ fun UnlinkConfirmDialog(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    BulletPoint("La licence sera liberee et retournera dans votre pool")
-                    BulletPoint("L'utilisateur n'aura plus acces aux fonctionnalites Pro")
-                    BulletPoint("Vous pourrez reassigner la licence a un autre compte")
+                    BulletPoint("La licence sera libérée et retournera dans votre pool")
+                    BulletPoint("L'utilisateur n'aura plus accès aux fonctionnalités Pro")
+                    BulletPoint("Vous pourrez réassigner la licence à un autre compte")
                 }
 
-                // Cancel option notice
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        "Vous pourrez annuler cette demande a tout moment avant la fin du preavis.",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        textAlign = TextAlign.Center
-                    )
+                // Cancel option notice - only for monthly (lifetime is immediate)
+                if (!isLifetime) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "Vous pourrez annuler cette demande à tout moment avant la date de renouvellement.",
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         },
@@ -127,7 +146,7 @@ fun UnlinkConfirmDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text("Confirmer la deliaison")
+                Text(confirmText)
             }
         },
         dismissButton = {

@@ -1245,10 +1245,15 @@ BEGIN
 
     -- L'app peut seulement modifier certains champs
     UPDATE licenses SET
-        -- Assigner/désassigner une licence
-        linked_account_id = (p_payload->>'linked_account_id')::UUID,
+        -- Assigner/désassigner une licence (SEULEMENT si explicitement fourni dans payload)
+        -- BUGFIX: Ne pas écraser linked_account_id si non fourni (évite NULL lors de unlink_requested)
+        linked_account_id = CASE
+            WHEN p_payload ? 'linked_account_id' THEN (p_payload->>'linked_account_id')::UUID
+            ELSE linked_account_id  -- Garder la valeur existante si pas fourni
+        END,
         linked_at = CASE
-            WHEN p_payload->>'linked_account_id' IS NOT NULL AND existing_license.linked_account_id IS NULL
+            WHEN p_payload ? 'linked_account_id' AND p_payload->>'linked_account_id' IS NOT NULL
+                 AND existing_license.linked_account_id IS NULL
             THEN now()
             ELSE linked_at
         END,
@@ -1256,9 +1261,19 @@ BEGIN
         unlink_requested_at = CASE
             WHEN (p_payload->>'unlink_requested')::BOOLEAN = true
             THEN now()
+            WHEN (p_payload->>'unlink_requested')::BOOLEAN = false
+            THEN NULL  -- Annulation de la demande de déliaison
             ELSE unlink_requested_at
         END,
-        -- Pause d'une licence non assignée
+        -- Date effective de déliaison (fournie par l'app: endDate pour mensuelle, now pour lifetime)
+        unlink_effective_at = CASE
+            WHEN p_payload ? 'unlink_effective_at'
+            THEN (p_payload->>'unlink_effective_at')::TIMESTAMPTZ
+            WHEN (p_payload->>'unlink_requested')::BOOLEAN = false
+            THEN NULL  -- Annulation de la demande de déliaison
+            ELSE unlink_effective_at
+        END,
+        -- Pause d'une licence non assignée (fonctionnalité dépréciée)
         paused_at = CASE
             WHEN (p_payload->>'paused')::BOOLEAN = true AND existing_license.linked_account_id IS NULL
             THEN now()

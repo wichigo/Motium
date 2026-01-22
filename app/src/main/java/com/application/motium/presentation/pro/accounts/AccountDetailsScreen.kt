@@ -412,7 +412,12 @@ fun AccountDetailsScreen(
                             offlineFirstLicenseRepo.requestUnlink(license!!.id, proId)
                             isUnlinking = false
                             showUnlinkConfirmDialog = false
-                            successMessage = "Demande de deliaison enregistree. La licence sera liberee dans 30 jours."
+                            // Message différent selon le type de licence
+                            successMessage = if (license!!.isLifetime) {
+                                "Licence déliée avec succès."
+                            } else {
+                                "Résiliation enregistrée. La licence sera libérée à la date de renouvellement."
+                            }
                             reloadLicenseData()
                         } catch (e: Exception) {
                             isUnlinking = false

@@ -46,6 +46,7 @@ import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.worker.ActivityRecognitionHealthWorker
 import com.application.motium.utils.ThemeManager
 import com.application.motium.presentation.theme.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -188,28 +189,30 @@ fun NewHomeScreen(
                 hasSyncedWithSupabase = true
                 MotiumApplication.logger.i("🔄 Initial sync triggered for user ${freshUser.id}", "HomeScreen")
 
-                coroutineScope.launch(Dispatchers.IO) {
-                    tripRepository.syncTripsFromSupabase(freshUser.id)
-                    // Recharger après synchro pour afficher les nouveaux trajets
-                    val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
-                    trips = syncedTrips
-                    currentOffset = syncedTrips.size
-                    hasMoreTrips = syncedTrips.size >= 10
-                }
+                // BATTERY OPTIMIZATION (2026-01): Use unified sync_changes() via WorkManager
+                // instead of legacy tripRepository.syncTripsFromSupabase() which bypasses atomic sync
+                syncManager.triggerImmediateSync()
 
                 // Charger le mode de tracking et les horaires depuis Supabase
                 coroutineScope.launch(Dispatchers.IO) {
-                    MotiumApplication.logger.i("🔄 Loading auto-tracking settings from Supabase for user ${freshUser.id}", "HomeScreen")
-                    val settings = workScheduleRepository.getAutoTrackingSettings(freshUser.id)
-                    val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
-                    // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
-                    tripRepository.setTrackingMode(supabaseMode)
-                    trackingMode = supabaseMode
-                    MotiumApplication.logger.i("✅ Auto-tracking mode loaded: $supabaseMode", "HomeScreen")
+                    try {
+                        MotiumApplication.logger.i("🔄 Loading auto-tracking settings from Supabase for user ${freshUser.id}", "HomeScreen")
+                        val settings = workScheduleRepository.getAutoTrackingSettings(freshUser.id)
+                        val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                        // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
+                        tripRepository.setTrackingMode(supabaseMode)
+                        trackingMode = supabaseMode
+                        MotiumApplication.logger.i("✅ Auto-tracking mode loaded: $supabaseMode", "HomeScreen")
 
-                    // Vérifier si l'utilisateur a des horaires définis
-                    val schedules = workScheduleRepository.getWorkSchedules(freshUser.id)
-                    hasWorkSchedules = schedules.isNotEmpty()
+                        // Vérifier si l'utilisateur a des horaires définis
+                        val schedules = workScheduleRepository.getWorkSchedules(freshUser.id)
+                        hasWorkSchedules = schedules.isNotEmpty()
+                    } catch (e: CancellationException) {
+                        // Normal when user navigates away - don't log as error
+                        MotiumApplication.logger.d("Work schedule loading cancelled (user left screen)", "HomeScreen")
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("Failed to load work schedules: ${e.message}", "HomeScreen")
+                    }
                 }
             }
 
@@ -228,30 +231,30 @@ fun NewHomeScreen(
         if (authState.isAuthenticated && user != null && !hasSyncedWithSupabase) {
             MotiumApplication.logger.i("🔄 Auth state changed to authenticated, syncing from Supabase", "HomeScreen")
             hasSyncedWithSupabase = true
-            coroutineScope.launch(Dispatchers.IO) {
-                // Sync trips and expenses
-                tripRepository.syncTripsFromSupabase(user.id)
-
-                // Recharger après synchro pour afficher les nouveaux trajets
-                val syncedTrips = tripRepository.getTripsPaginated(limit = currentOffset.coerceAtLeast(10), offset = 0)
-                trips = syncedTrips
-                currentOffset = syncedTrips.size
-                hasMoreTrips = syncedTrips.size >= 10
-            }
+            // BATTERY OPTIMIZATION (2026-01): Use unified sync_changes() via WorkManager
+            // instead of legacy tripRepository.syncTripsFromSupabase() which bypasses atomic sync
+            syncManager.triggerImmediateSync()
 
             // Charger le mode de tracking et les horaires depuis Supabase
             coroutineScope.launch(Dispatchers.IO) {
-                MotiumApplication.logger.i("🔄 Loading auto-tracking settings from Supabase for user ${user.id}", "HomeScreen")
-                val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
-                val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
-                // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
-                tripRepository.setTrackingMode(supabaseMode)
-                trackingMode = supabaseMode
-                MotiumApplication.logger.i("✅ Auto-tracking mode loaded: $supabaseMode", "HomeScreen")
+                try {
+                    MotiumApplication.logger.i("🔄 Loading auto-tracking settings from Supabase for user ${user.id}", "HomeScreen")
+                    val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
+                    val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
+                    // Mettre à jour le cache local avec la valeur Supabase (source de vérité)
+                    tripRepository.setTrackingMode(supabaseMode)
+                    trackingMode = supabaseMode
+                    MotiumApplication.logger.i("✅ Auto-tracking mode loaded: $supabaseMode", "HomeScreen")
 
-                // Vérifier si l'utilisateur a des horaires définis
-                val schedules = workScheduleRepository.getWorkSchedules(user.id)
-                hasWorkSchedules = schedules.isNotEmpty()
+                    // Vérifier si l'utilisateur a des horaires définis
+                    val schedules = workScheduleRepository.getWorkSchedules(user.id)
+                    hasWorkSchedules = schedules.isNotEmpty()
+                } catch (e: CancellationException) {
+                    // Normal when user navigates away - don't log as error
+                    MotiumApplication.logger.d("Work schedule loading cancelled (user left screen)", "HomeScreen")
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("Failed to load work schedules: ${e.message}", "HomeScreen")
+                }
             }
         }
     }
@@ -333,7 +336,12 @@ fun NewHomeScreen(
                         SyncStatusIndicator(
                             isOnline = syncManager.isOnline,
                             pendingOperationsCount = syncManager.pendingOperationsCount,
+                            needsRelogin = authState.needsRelogin,
                             onSyncClick = { syncManager.triggerImmediateSync() },
+                            onReloginClick = {
+                                // Force sign out to trigger re-authentication
+                                authViewModel.signOut()
+                            },
                             modifier = Modifier.padding(end = 8.dp)
                         )
                         // Theme toggle
@@ -357,16 +365,11 @@ fun NewHomeScreen(
                     coroutineScope.launch(Dispatchers.IO) {
                         isRefreshing = true
                         try {
-                            // Récupérer le userId depuis authState (plus fiable que authRepository)
-                            val userId = currentUser?.id
+                            // BATTERY OPTIMIZATION (2026-01): Use unified sync_changes() via WorkManager
+                            // instead of legacy sync methods which bypass atomic sync and waste battery
+                            syncManager.triggerImmediateSync()
 
-                            // 1. Sync trips depuis Supabase
-                            tripRepository.syncTripsFromSupabase(userId)
-
-                            // 3. Sync véhicules (pour les kilométrages à jour)
-                            vehicleRepository.syncVehiclesFromSupabase()
-
-                            // 3. Sync horaires de travail
+                            // Sync horaires de travail (settings are loaded locally, not synced via sync_changes)
                             currentUser?.let { user ->
                                 val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
                                 val supabaseMode = settings?.trackingMode ?: TrackingMode.DISABLED
@@ -376,7 +379,7 @@ fun NewHomeScreen(
                                 hasWorkSchedules = schedules.isNotEmpty()
                             }
 
-                            // 4. Recharger les trips locaux
+                            // Recharger les trips depuis Room (la sync mettra à jour Room en background)
                             currentOffset = 0
                             val refreshedTrips = tripRepository.getTripsPaginated(limit = 10, offset = 0)
                             trips = refreshedTrips
@@ -384,6 +387,9 @@ fun NewHomeScreen(
                             hasMoreTrips = refreshedTrips.size == 10
 
                             MotiumApplication.logger.i("Pull-to-refresh completed: ${trips.size} trips loaded", "HomeScreen")
+                        } catch (e: CancellationException) {
+                            // Normal when user navigates away during refresh - don't log as error
+                            MotiumApplication.logger.d("Refresh cancelled (user left screen)", "HomeScreen")
                         } catch (e: Exception) {
                             MotiumApplication.logger.e("Refresh failed: ${e.message}", "HomeScreen", e)
                         } finally {

@@ -1,9 +1,20 @@
 -- ============================================
--- Supabase Trigger: Sync subscription_type on license changes
+-- ⚠️ DEPRECATED - DO NOT USE THIS FILE
 -- ============================================
+-- This trigger has been SUPERSEDED by database/migrations/bugfix_005_006.sql
+-- The newer version has important fixes:
+-- - Uses 'EXPIRED' instead of 'FREE' (constraint compliance)
+-- - Does NOT revoke on 'canceled' or 'unlinked' (keeps access until renewal)
+-- - Only 'suspended' revokes immediately (payment failure)
+--
+-- RUN bugfix_005_006.sql INSTEAD
+-- ============================================
+--
+-- OLD DESCRIPTION (for reference):
+-- Supabase Trigger: Sync subscription_type on license changes
 -- This trigger automatically updates users.subscription_type when:
 -- 1. A license is assigned (linked_account_id set) -> LICENSED
--- 2. A license is unassigned (linked_account_id cleared) -> FREE
+-- 2. A license is unassigned (linked_account_id cleared) -> EXPIRED
 --
 -- This serves as a backup to the Android-side updates in LicenseRemoteDataSource.kt
 
@@ -39,11 +50,11 @@ BEGIN
             AND id != OLD.id
         ) THEN
             UPDATE users
-            SET subscription_type = 'FREE',
+            SET subscription_type = 'EXPIRED',
                 updated_at = NOW()
             WHERE id = OLD.linked_account_id;
 
-            RAISE LOG 'License % unassigned from user %, subscription_type set to FREE',
+            RAISE LOG 'License % unassigned from user %, subscription_type set to EXPIRED',
                 OLD.id, OLD.linked_account_id;
         END IF;
     END IF;
@@ -58,11 +69,11 @@ BEGIN
             AND id != NEW.id
         ) THEN
             UPDATE users
-            SET subscription_type = 'FREE',
+            SET subscription_type = 'EXPIRED',
                 updated_at = NOW()
             WHERE id = NEW.linked_account_id;
 
-            RAISE LOG 'License % deactivated for user %, subscription_type set to FREE',
+            RAISE LOG 'License % deactivated for user %, subscription_type set to EXPIRED',
                 NEW.id, NEW.linked_account_id;
         END IF;
     END IF;

@@ -23,7 +23,8 @@ class OfflineFirstProAccountRepository private constructor(
 
     companion object {
         private const val TAG = "OfflineFirstProAccountRepo"
-        private const val ENTITY_TYPE = "pro_account"
+        // CRITICAL: Must match PendingOperationEntity.TYPE_PRO_ACCOUNT for sync to work
+        private const val ENTITY_TYPE = PendingOperationEntity.TYPE_PRO_ACCOUNT
 
         @Volatile
         private var instance: OfflineFirstProAccountRepository? = null

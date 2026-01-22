@@ -132,8 +132,23 @@ object TripStateManager {
         logE("Uncaught exception in TripStateManager: ${exception.message}", exception)
     }
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + exceptionHandler)
+    private var supervisorJob = SupervisorJob()
+    private var scope = CoroutineScope(Dispatchers.Default + supervisorJob + exceptionHandler)
     private var stillConfirmationJob: Job? = null
+
+    /**
+     * BATTERY OPTIMIZATION (2026-01): Cleanup coroutine scope to prevent memory leaks.
+     * Should be called when auto-tracking is disabled or on user logout.
+     */
+    fun cleanup() {
+        logI("Cleanup requested - cancelling all coroutines")
+        stillConfirmationJob?.cancel()
+        stillConfirmationJob = null
+        scope.cancel()
+        // Recreate scope for potential reuse (singleton)
+        supervisorJob = SupervisorJob()
+        scope = CoroutineScope(Dispatchers.Default + supervisorJob + exceptionHandler)
+    }
 
     // ==================== CALLBACKS ====================
 
@@ -441,6 +456,39 @@ object TripStateManager {
         }
 
         _state.value = restoredState
+    }
+
+    /**
+     * BUG FIX #4: Re-trigger callbacks for active trip after process restart.
+     *
+     * After process death, callbacks are lost (they're in-memory vars).
+     * This method should be called AFTER callbacks are reconfigured to ensure
+     * an active trip triggers the appropriate actions (e.g., start GPS).
+     *
+     * @return true if an active trip was found and callbacks were triggered
+     */
+    fun triggerCallbacksForActiveTrip(): Boolean {
+        val currentState = _state.value
+
+        return when (currentState) {
+            is TrackingState.Moving -> {
+                logI("🔄 Triggering onTripStarted for restored trip: ${currentState.tripId}")
+                onTripStarted?.invoke(currentState.tripId)
+                onStateChanged?.invoke(currentState)
+                true
+            }
+            is TrackingState.PossiblyStopped -> {
+                // Trip is paused but still active - trigger started callback
+                logI("🔄 Triggering onTripStarted for restored paused trip: ${currentState.tripId}")
+                onTripStarted?.invoke(currentState.tripId)
+                onStateChanged?.invoke(currentState)
+                true
+            }
+            is TrackingState.Idle -> {
+                logD("No active trip to restore callbacks for")
+                false
+            }
+        }
     }
 
     /**

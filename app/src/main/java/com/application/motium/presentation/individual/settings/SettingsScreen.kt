@@ -46,7 +46,6 @@ import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.UserRole
 import com.application.motium.domain.model.isPremium
-import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.CompanyLinkCard
 import com.application.motium.presentation.components.LinkActivationDialog
@@ -71,9 +70,7 @@ import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.service.TripSimulator
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
-import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.repository.OfflineFirstProAccountRepository
-import com.application.motium.domain.model.AuthResult
 import android.content.Intent
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -230,7 +227,6 @@ fun SettingsScreen(
     val offlineFirstLicenseRepo = remember { com.application.motium.data.repository.OfflineFirstLicenseRepository.getInstance(context) }
     // offlineFirstProAccountRepo already declared above
     val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
-    val supabaseAuthRepository = remember { SupabaseAuthRepository.getInstance(context) }
     var ownerLicense by remember { mutableStateOf<License?>(null) }
     var availableLicenses by remember { mutableStateOf<List<License>>(emptyList()) }
     var isLoadingLicense by remember { mutableStateOf(false) }
@@ -501,17 +497,10 @@ fun SettingsScreen(
                                     if (user != null) {
                                         val updatedUser = user.copy(considerFullDistance = false)
 
-                                        // 1. Update local (immédiat, pour UI)
-                                        localUserRepository.saveUserFromServer(updatedUser, SyncStatus.SYNCED)
-
-                                        // 2. Sync direct vers Supabase
-                                        val result = supabaseAuthRepository.updateUserProfile(updatedUser)
-                                        if (result is AuthResult.Success) {
-                                            MotiumApplication.logger.i("✅ considerFullDistance synced to Supabase: false", "SettingsScreen")
-                                        } else {
-                                            val error = (result as? AuthResult.Error)?.message ?: "Unknown error"
-                                            MotiumApplication.logger.e("❌ Failed to sync considerFullDistance: $error", "SettingsScreen")
-                                        }
+                                        // Use updateUser() which queues for offline-first sync
+                                        // This ensures the change is synced even if offline
+                                        localUserRepository.updateUser(updatedUser)
+                                        MotiumApplication.logger.i("✅ considerFullDistance queued for sync: false", "SettingsScreen")
                                     }
                                 } catch (e: Exception) {
                                     MotiumApplication.logger.e("Error updating considerFullDistance: ${e.message}", "SettingsScreen", e)
@@ -687,17 +676,10 @@ fun SettingsScreen(
                         if (user != null) {
                             val updatedUser = user.copy(considerFullDistance = true)
 
-                            // 1. Update local (immédiat, pour UI)
-                            localUserRepository.saveUserFromServer(updatedUser, SyncStatus.SYNCED)
-
-                            // 2. Sync direct vers Supabase
-                            val result = supabaseAuthRepository.updateUserProfile(updatedUser)
-                            if (result is AuthResult.Success) {
-                                MotiumApplication.logger.i("✅ considerFullDistance synced to Supabase: true", "SettingsScreen")
-                            } else {
-                                val error = (result as? AuthResult.Error)?.message ?: "Unknown error"
-                                MotiumApplication.logger.e("❌ Failed to sync considerFullDistance: $error", "SettingsScreen")
-                            }
+                            // Use updateUser() which queues for offline-first sync
+                            // This ensures the change is synced even if offline
+                            localUserRepository.updateUser(updatedUser)
+                            MotiumApplication.logger.i("✅ considerFullDistance queued for sync: true", "SettingsScreen")
                         }
                     } catch (e: Exception) {
                         MotiumApplication.logger.e("Error updating considerFullDistance: ${e.message}", "SettingsScreen", e)
@@ -2248,16 +2230,19 @@ fun SubscriptionSection(
                     (subscriptionType == SubscriptionType.TRIAL && (trialDaysRemaining ?: 0) <= 0)
     val isLifetime = subscriptionType == SubscriptionType.LIFETIME
     val isMonthlyPremium = subscriptionType == SubscriptionType.PREMIUM
+    val isLicensed = subscriptionType == SubscriptionType.LICENSED
 
     val planText = when {
         isLifetime -> "Premium à vie"
         isMonthlyPremium -> "Premium"
+        isLicensed -> "Licence Pro"
         isInTrial -> "Essai gratuit"
         isExpired -> "Essai expiré"
         else -> "Aucun abonnement"
     }
 
     val planIcon = when {
+        isLicensed -> "🏢"
         isPremium -> "👑"
         isInTrial -> "⏳"
         isExpired -> "⚠️"
@@ -2265,6 +2250,7 @@ fun SubscriptionSection(
     }
 
     val planColor = when {
+        isLicensed -> MotiumPrimary
         isPremium -> Color(0xFFFFD700)
         isInTrial -> MotiumPrimary
         isExpired -> Color(0xFFFF5252)
@@ -2525,6 +2511,35 @@ fun ProLicenseSection(
                     }
                 } else if (ownerLicense != null) {
                     // Owner has a license
+                    // Note: canceled licenses won't appear here because getActiveLicenseForUser
+                    // filters by status='active'. When canceled, ownerLicense becomes null
+                    // and user's subscription_type becomes EXPIRED at end_date.
+                    val isPendingUnlink = ownerLicense.isPendingUnlink
+                    val daysUntilUnlink = ownerLicense.daysUntilUnlinkEffective
+
+                    // Color and icon based on status
+                    val (statusColor, statusIcon) = when {
+                        ownerLicense.isLifetime -> Color(0xFFFFD700) to "👑"
+                        isPendingUnlink -> Color(0xFFFF9800) to "⏳"
+                        else -> MotiumPrimary to "✓"
+                    }
+
+                    // Label based on status
+                    val statusLabel = when {
+                        isPendingUnlink -> "Résiliation en cours"
+                        else -> "Licence active"
+                    }
+
+                    // Subtitle based on status
+                    val statusSubtitle = when {
+                        ownerLicense.isLifetime -> "Accès illimité à vie"
+                        isPendingUnlink && daysUntilUnlink != null -> {
+                            if (daysUntilUnlink <= 1) "Accès jusqu'à demain"
+                            else "Accès pendant encore $daysUntilUnlink jours"
+                        }
+                        else -> "${String.format("%.2f", ownerLicense.priceMonthlyTTC)} €/mois"
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2538,14 +2553,11 @@ fun ProLicenseSection(
                                 modifier = Modifier
                                     .size(48.dp)
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(
-                                        if (ownerLicense.isLifetime) Color(0xFFFFD700).copy(alpha = 0.2f)
-                                        else MotiumPrimary.copy(alpha = 0.2f)
-                                    ),
+                                    .background(statusColor.copy(alpha = 0.2f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = if (ownerLicense.isLifetime) "👑" else "✓",
+                                    text = statusIcon,
                                     fontSize = 24.sp
                                 )
                             }
@@ -2553,12 +2565,12 @@ fun ProLicenseSection(
                             Column {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "Licence active",
+                                        text = statusLabel,
                                         style = MaterialTheme.typography.bodyLarge.copy(
                                             fontWeight = FontWeight.SemiBold
                                         ),
                                         fontSize = 16.sp,
-                                        color = textColor
+                                        color = if (isPendingUnlink) statusColor else textColor
                                     )
                                     if (ownerLicense.isLifetime) {
                                         Spacer(modifier = Modifier.width(8.dp))
@@ -2578,21 +2590,22 @@ fun ProLicenseSection(
                                 }
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = if (ownerLicense.isLifetime)
-                                        "Accès illimité à vie"
-                                    else
-                                        "${String.format("%.2f", ownerLicense.priceMonthlyTTC)} €/mois",
+                                    text = statusSubtitle,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontSize = 14.sp,
-                                    color = if (ownerLicense.isLifetime) Color(0xFFFFD700) else textSecondaryColor
+                                    color = if (isPendingUnlink) statusColor else
+                                        if (ownerLicense.isLifetime) Color(0xFFFFD700) else textSecondaryColor
                                 )
                             }
                         }
 
                         Icon(
-                            imageVector = Icons.Default.CheckCircle,
+                            imageVector = if (isPendingUnlink)
+                                Icons.Default.Schedule
+                            else
+                                Icons.Default.CheckCircle,
                             contentDescription = null,
-                            tint = if (ownerLicense.isLifetime) Color(0xFFFFD700) else MotiumPrimary,
+                            tint = statusColor,
                             modifier = Modifier.size(32.dp)
                         )
                     }

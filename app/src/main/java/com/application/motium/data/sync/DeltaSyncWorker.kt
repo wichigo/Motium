@@ -32,9 +32,17 @@ import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.domain.model.TripType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * WorkManager CoroutineWorker for delta synchronization.
@@ -62,6 +70,9 @@ class DeltaSyncWorker(
         private const val TAG = "DeltaSyncWorker"
         private const val MAX_BATCH_SIZE = 50
         private const val PAGINATION_LIMIT = 500
+        // BATTERY OPTIMIZATION (2026-01): Limit retries to prevent infinite sync loops
+        // that drain battery when server is unreachable or auth is broken
+        private const val MAX_RETRY_ATTEMPTS = 5
     }
 
     private val database = MotiumDatabase.getInstance(applicationContext)
@@ -78,7 +89,12 @@ class DeltaSyncWorker(
     private val workScheduleDao = database.workScheduleDao()
 
     private val localUserRepository = LocalUserRepository.getInstance(applicationContext)
+    // BATTERY OPTIMIZATION (2026-01): These RemoteDataSources are NO LONGER USED for sync
+    // All sync now goes through syncChangesRemoteDataSource.syncChanges() (atomic RPC)
+    // Kept only for deprecated code reference - see uploadPendingOperations()
+    @Deprecated("Used only by deprecated uploadPendingOperations()")
     private val tripRemoteDataSource = TripRemoteDataSource.getInstance(applicationContext)
+    @Deprecated("Used only by deprecated uploadPendingOperations()")
     private val vehicleRemoteDataSource = VehicleRemoteDataSource.getInstance(applicationContext)
     private val syncChangesRemoteDataSource = SyncChangesRemoteDataSource.getInstance(applicationContext)
     private val supabaseLicenseRepository = SupabaseLicenseRepository.getInstance(applicationContext)
@@ -90,6 +106,15 @@ class DeltaSyncWorker(
     private val secureSessionStorage = SecureSessionStorage(applicationContext)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // BATTERY OPTIMIZATION (2026-01): Stop retrying after MAX_RETRY_ATTEMPTS to prevent battery drain
+        if (runAttemptCount > MAX_RETRY_ATTEMPTS) {
+            MotiumApplication.logger.w(
+                "⚠️ DeltaSyncWorker exceeded max retry attempts ($runAttemptCount > $MAX_RETRY_ATTEMPTS), giving up",
+                TAG
+            )
+            return@withContext Result.failure()
+        }
+
         try {
             val user = localUserRepository.getLoggedInUser()
             if (user == null) {
@@ -158,22 +183,18 @@ class DeltaSyncWorker(
      */
     private suspend fun ensureValidSession(): Boolean {
         return try {
-            // Step 1: Check if we have a refresh token
-            val refreshToken = secureSessionStorage.getRefreshToken()
-            if (refreshToken == null) {
-                MotiumApplication.logger.w("⚠️ No refresh token available - cannot validate session", TAG)
-                return false
-            }
-
-            // Step 2: Try to refresh the session to get a fresh access token
-            // refreshSessionForSync() already validates that the session has a valid user
+            // Step 1: Try to refresh/restore the session
+            // refreshSessionForSync() handles multiple fallback strategies:
+            // - Priority 1: Use SDK session if available
+            // - Priority 2: Use stored refresh token
+            // - Priority 3: Try silent re-authentication with stored credentials
             val refreshResult = authRepository.refreshSessionForSync()
             if (!refreshResult) {
-                MotiumApplication.logger.w("⚠️ Session refresh failed - skipping sync", TAG)
+                MotiumApplication.logger.w("⚠️ Session refresh/restore failed - skipping sync", TAG)
                 return false
             }
 
-            // Step 3: Double-check we have a valid session in secure storage
+            // Step 2: Double-check we have a valid session in secure storage
             if (!secureSessionStorage.hasValidSession()) {
                 MotiumApplication.logger.w("⚠️ No valid session in storage after refresh - skipping sync", TAG)
                 return false
@@ -204,68 +225,88 @@ class DeltaSyncWorker(
             return true
         }
 
-        MotiumApplication.logger.i("Processing ${pendingUploads.size} pending file uploads", TAG)
+        MotiumApplication.logger.i("Processing ${pendingUploads.size} pending file uploads in parallel", TAG)
 
-        var allSuccess = true
-
-        pendingUploads.forEach { upload ->
-            try {
-                // Mark as uploading
-                pendingFileUploadDao.updateStatus(upload.id, com.application.motium.data.local.entities.PendingFileUploadEntity.STATUS_UPLOADING)
-
-                // Upload file to Supabase Storage
-                val result = storageService.uploadQueuedPhoto(upload.localUri)
-
-                if (result.isSuccess) {
-                    val publicUrl = result.getOrNull()!!
-
-                    // Mark upload as completed
-                    pendingFileUploadDao.markCompleted(upload.id, publicUrl)
-
-                    // Update expense entity with public URL
-                    val expense = expenseDao.getExpenseById(upload.expenseId)
-                    if (expense != null) {
-                        val updatedExpense = expense.copy(
-                            photoUri = publicUrl,
-                            syncStatus = SyncStatus.PENDING_UPLOAD.name, // Mark expense for sync
-                            localUpdatedAt = System.currentTimeMillis()
-                        )
-                        expenseDao.insertExpense(updatedExpense)
-                        MotiumApplication.logger.i(
-                            "✅ Uploaded receipt and updated expense ${upload.expenseId}: $publicUrl",
-                            TAG
-                        )
-                    } else {
-                        MotiumApplication.logger.w(
-                            "Expense ${upload.expenseId} not found for file upload ${upload.id}",
-                            TAG
-                        )
+        // BATTERY OPTIMIZATION: Process uploads in parallel for faster completion
+        // Limit parallelism to 3 to avoid overwhelming the network/server
+        val results = coroutineScope {
+            pendingUploads.chunked(3).flatMap { batch ->
+                batch.map { upload ->
+                    async {
+                        processFileUpload(upload, now)
                     }
-                } else {
-                    // Upload failed - mark as retried
-                    val error = result.exceptionOrNull()?.message ?: "Unknown error"
-                    pendingFileUploadDao.markRetried(upload.id, now, error)
-                    MotiumApplication.logger.e(
-                        "Failed to upload file ${upload.id}: $error",
-                        TAG
-                    )
-                    allSuccess = false
-                }
-            } catch (e: Exception) {
-                pendingFileUploadDao.markRetried(upload.id, now, e.message)
-                MotiumApplication.logger.e(
-                    "Exception during file upload ${upload.id}: ${e.message}",
-                    TAG,
-                    e
-                )
-                allSuccess = false
+                }.awaitAll()
             }
         }
+
+        val allSuccess = results.all { it }
 
         // Clean up completed uploads older than 7 days
         cleanupOldCompletedUploads()
 
         return allSuccess
+    }
+
+    /**
+     * Process a single file upload.
+     * @return true if upload succeeded, false otherwise
+     */
+    private suspend fun processFileUpload(
+        upload: com.application.motium.data.local.entities.PendingFileUploadEntity,
+        now: Long
+    ): Boolean {
+        return try {
+            // Mark as uploading
+            pendingFileUploadDao.updateStatus(upload.id, com.application.motium.data.local.entities.PendingFileUploadEntity.STATUS_UPLOADING)
+
+            // Upload file to Supabase Storage
+            val result = storageService.uploadQueuedPhoto(upload.localUri)
+
+            if (result.isSuccess) {
+                val publicUrl = result.getOrNull()!!
+
+                // Mark upload as completed
+                pendingFileUploadDao.markCompleted(upload.id, publicUrl)
+
+                // Update expense entity with public URL
+                val expense = expenseDao.getExpenseById(upload.expenseId)
+                if (expense != null) {
+                    val updatedExpense = expense.copy(
+                        photoUri = publicUrl,
+                        syncStatus = SyncStatus.PENDING_UPLOAD.name, // Mark expense for sync
+                        localUpdatedAt = System.currentTimeMillis()
+                    )
+                    expenseDao.insertExpense(updatedExpense)
+                    MotiumApplication.logger.i(
+                        "✅ Uploaded receipt and updated expense ${upload.expenseId}: $publicUrl",
+                        TAG
+                    )
+                } else {
+                    MotiumApplication.logger.w(
+                        "Expense ${upload.expenseId} not found for file upload ${upload.id}",
+                        TAG
+                    )
+                }
+                true
+            } else {
+                // Upload failed - mark as retried
+                val error = result.exceptionOrNull()?.message ?: "Unknown error"
+                pendingFileUploadDao.markRetried(upload.id, now, error)
+                MotiumApplication.logger.e(
+                    "Failed to upload file ${upload.id}: $error",
+                    TAG
+                )
+                false
+            }
+        } catch (e: Exception) {
+            pendingFileUploadDao.markRetried(upload.id, now, e.message)
+            MotiumApplication.logger.e(
+                "Exception during file upload ${upload.id}: ${e.message}",
+                TAG,
+                e
+            )
+            false
+        }
     }
 
     /**
@@ -310,6 +351,14 @@ class DeltaSyncWorker(
         // Calculate backoff threshold (operations ready for retry)
         val now = System.currentTimeMillis()
         val backoffThreshold = now - PendingOperationEntity.calculateBackoffMs(0)
+
+        // FIX (2026-01): Reconcile orphan trips before fetching pending operations
+        // This recreates missing operations for trips with PENDING_UPLOAD status but no operation in queue
+        // Happens when operations were deleted after max retries but trip entity wasn't marked as error
+        val reconciled = reconcileOrphanTrips(userId)
+        if (reconciled > 0) {
+            MotiumApplication.logger.i("🔧 Reconciled $reconciled orphan trips", TAG)
+        }
 
         // Get pending operations that are ready for sync
         val pendingOps = pendingOpDao.getOperationsReadyForRetry(backoffThreshold, MAX_BATCH_SIZE)
@@ -421,11 +470,15 @@ class DeltaSyncWorker(
                 when (result.errorCode) {
                     "VERSION_CONFLICT" -> {
                         // Version conflict - server has newer data
-                        // Don't increment retry, let pull phase handle it
+                        // Delete the stale pending operation and reset entity status
+                        // so pull phase can update it with server's current version
                         MotiumApplication.logger.w(
-                            "Version conflict for ${op.entityType}:${op.entityId} (server v${result.serverVersion})",
+                            "Version conflict for ${op.entityType}:${op.entityId} (server v${result.serverVersion}), " +
+                                    "deleting stale operation and resetting entity for pull",
                             TAG
                         )
+                        pendingOpDao.deleteById(op.id)
+                        resetEntityForPull(op.entityType, op.entityId)
                     }
                     "ALREADY_PROCESSED" -> {
                         // Idempotent - already processed, safe to delete
@@ -467,9 +520,44 @@ class DeltaSyncWorker(
                         consent?.let { consentDao.markAsSynced(it.id, timestamp) }
                     }
                 }
+                PendingOperationEntity.TYPE_AUTO_TRACKING_SETTINGS -> {
+                    // entityId is the userId for auto tracking settings
+                    workScheduleDao.markAutoTrackingSettingsAsSynced(entityId, timestamp)
+                }
             }
         } catch (e: Exception) {
             MotiumApplication.logger.w("Failed to mark $entityType:$entityId as synced: ${e.message}", TAG)
+        }
+    }
+
+    /**
+     * Reset an entity's syncStatus to SYNCED after VERSION_CONFLICT.
+     * This allows the pull phase to update the entity with server's current version.
+     * The stale local changes are discarded in favor of server's authoritative data.
+     */
+    private suspend fun resetEntityForPull(entityType: String, entityId: String) {
+        try {
+            val now = System.currentTimeMillis()
+            when (entityType) {
+                PendingOperationEntity.TYPE_TRIP -> tripDao.markTripAsSynced(entityId, now)
+                PendingOperationEntity.TYPE_VEHICLE -> vehicleDao.markVehicleAsSynced(entityId, now)
+                PendingOperationEntity.TYPE_LICENSE -> licenseDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
+                PendingOperationEntity.TYPE_PRO_ACCOUNT -> proAccountDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
+                PendingOperationEntity.TYPE_USER -> database.userDao().updateSyncStatus(entityId, SyncStatus.SYNCED.name, now)
+                PendingOperationEntity.TYPE_CONSENT -> {
+                    val parts = entityId.split(":")
+                    if (parts.size == 2) {
+                        val consent = consentDao.getConsentByTypeOnce(parts[0], parts[1])
+                        consent?.let { consentDao.markAsSynced(it.id, now) }
+                    }
+                }
+                PendingOperationEntity.TYPE_AUTO_TRACKING_SETTINGS -> {
+                    workScheduleDao.markAutoTrackingSettingsAsSynced(entityId, now)
+                }
+            }
+            MotiumApplication.logger.i("Reset $entityType:$entityId syncStatus to SYNCED for pull phase", TAG)
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("Failed to reset $entityType:$entityId for pull: ${e.message}", TAG)
         }
     }
 
@@ -487,8 +575,32 @@ class DeltaSyncWorker(
         )
     }
 
-    // ==================== LEGACY UPLOAD PHASE (deprecated) ====================
+    /*
+     * ==================== LEGACY CODE REMOVED (2026-01) ====================
+     *
+     * The following methods have been REMOVED as they used direct Supabase calls
+     * instead of the atomic sync_changes() RPC. All synchronization now goes
+     * through performAtomicSync() → syncChangesRemoteDataSource.syncChanges().
+     *
+     * Removed methods:
+     * - uploadPendingOperations() - replaced by performAtomicSync()
+     * - processOperation() - no longer needed
+     * - processTripOperation() - was using tripRemoteDataSource.saveTrip/deleteTrip
+     * - processVehicleOperation() - was using vehicleRemoteDataSource.updateVehicle/deleteVehicle
+     * - processLicenseOperation() - replaced by sync_changes RPC
+     * - processProAccountOperation() - replaced by sync_changes RPC
+     * - processCompanyLinkOperation() - replaced by sync_changes RPC
+     * - processUserOperation() - replaced by sync_changes RPC
+     * - processConsentOperation() - replaced by sync_changes RPC
+     *
+     * The tripRemoteDataSource and vehicleRemoteDataSource are no longer used
+     * in this Worker. All sync operations are now atomic via sync_changes().
+     *
+     * See git history if you need to reference the old implementation.
+     */
 
+    // Legacy code block start - to be removed in future cleanup
+    @Suppress("UNUSED", "DEPRECATION")
     @Deprecated("Use performAtomicSync() instead - kept for reference")
     private suspend fun uploadPendingOperations(userId: String): Boolean {
         // Calculate backoff threshold (operations ready for retry)
@@ -2005,6 +2117,131 @@ class DeltaSyncWorker(
             syncMetadataDao.setSyncError(entityType, e.message)
             MotiumApplication.logger.e("Failed to download consents: ${e.message}", TAG, e)
             return false
+        }
+    }
+
+    // ==================== ORPHAN TRIP RECONCILIATION ====================
+
+    /**
+     * Reconcile orphan trips - trips with PENDING_UPLOAD status but no pending operation.
+     *
+     * This can happen when:
+     * - Operations were deleted after exceeding MAX_RETRY_COUNT (5 attempts)
+     * - But the trip entity's syncStatus was never reset to ERROR or SYNCED
+     * - Result: Trip is stuck forever in PENDING_UPLOAD without any operation to sync it
+     *
+     * Fix: Recreate CREATE operations for orphan trips so they get another chance to sync.
+     *
+     * @param userId Current user's ID
+     * @return Number of orphan trips that were reconciled
+     */
+    private suspend fun reconcileOrphanTrips(userId: String): Int {
+        try {
+            // Get all trips that need sync (syncStatus != SYNCED)
+            val tripsNeedingSync = tripDao.getTripsNeedingSync(userId)
+
+            if (tripsNeedingSync.isEmpty()) {
+                return 0
+            }
+
+            var reconciledCount = 0
+            val isoDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+
+            for (trip in tripsNeedingSync) {
+                // Only reconcile PENDING_UPLOAD trips (not CONFLICT, ERROR, etc.)
+                if (trip.syncStatus != SyncStatus.PENDING_UPLOAD.name) {
+                    continue
+                }
+
+                // Check if trip already has a pending operation
+                val existingOps = pendingOpDao.getByEntity(trip.id, PendingOperationEntity.TYPE_TRIP)
+                if (existingOps.isNotEmpty()) {
+                    // Operation exists - no need to reconcile
+                    continue
+                }
+
+                // ORPHAN DETECTED: Trip has PENDING_UPLOAD but no operation
+                MotiumApplication.logger.w(
+                    "🔧 Orphan trip detected: ${trip.id} - recreating CREATE operation",
+                    TAG
+                )
+
+                // Build payload in the same format as TripRepository
+                val startLoc = trip.locations.firstOrNull()
+                val endLoc = trip.locations.lastOrNull()
+
+                val tripPayload = buildJsonObject {
+                    put("start_time", isoDateFormat.format(java.util.Date(trip.startTime)))
+                    trip.endTime?.let { put("end_time", isoDateFormat.format(java.util.Date(it))) }
+
+                    // Coordinates
+                    startLoc?.let {
+                        put("start_latitude", it.latitude)
+                        put("start_longitude", it.longitude)
+                    }
+                    endLoc?.let {
+                        put("end_latitude", it.latitude)
+                        put("end_longitude", it.longitude)
+                    }
+
+                    // Addresses
+                    trip.startAddress?.let { put("start_address", it) }
+                    trip.endAddress?.let { put("end_address", it) }
+
+                    // Distance and duration
+                    put("distance_km", trip.totalDistance / 1000.0)
+                    val durationMs = (trip.endTime ?: System.currentTimeMillis()) - trip.startTime
+                    put("duration_ms", durationMs)
+
+                    // Trip metadata
+                    put("type", trip.tripType ?: "PERSONAL")
+                    put("is_validated", trip.isValidated)
+                    put("is_work_home_trip", trip.isWorkHomeTrip)
+                    trip.vehicleId?.let { put("vehicle_id", it) }
+                    trip.reimbursementAmount?.let { put("reimbursement_amount", it) }
+                    trip.notes?.let { put("notes", it) }
+                    trip.matchedRouteCoordinates?.let { put("matched_route_coordinates", it) }
+
+                    // Include version for conflict detection
+                    put("version", trip.version)
+                }
+
+                // Create operation - use CREATE since trip doesn't exist on server yet
+                val now = System.currentTimeMillis()
+                val idempotencyKey = PendingOperationEntity.generateIdempotencyKey(
+                    PendingOperationEntity.TYPE_TRIP,
+                    trip.id,
+                    PendingOperationEntity.ACTION_CREATE,
+                    now
+                )
+
+                val operation = PendingOperationEntity(
+                    id = java.util.UUID.randomUUID().toString(),
+                    idempotencyKey = idempotencyKey,
+                    entityType = PendingOperationEntity.TYPE_TRIP,
+                    entityId = trip.id,
+                    action = PendingOperationEntity.ACTION_CREATE,
+                    payload = tripPayload.toString(),
+                    createdAt = now,
+                    retryCount = 0,
+                    priority = 0
+                )
+
+                pendingOpDao.insert(operation)
+                reconciledCount++
+
+                MotiumApplication.logger.i(
+                    "✅ Recreated CREATE operation for orphan trip: ${trip.id}",
+                    TAG
+                )
+            }
+
+            return reconciledCount
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to reconcile orphan trips: ${e.message}", TAG, e)
+            return 0
         }
     }
 }

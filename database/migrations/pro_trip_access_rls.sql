@@ -19,43 +19,55 @@ DROP POLICY IF EXISTS "Users can delete own trips" ON trips;
 ALTER TABLE trips ENABLE ROW LEVEL SECURITY;
 
 -- Policy 1: Users can view their own trips
+-- NOTE: trips.user_id is public.users.id, NOT auth.uid()
+-- We must use a subquery to link auth.uid() -> users.auth_id -> users.id
 CREATE POLICY "Users can view own trips" ON trips
 FOR SELECT
-USING (auth.uid() = user_id);
+USING (
+    user_id IN (SELECT id FROM users WHERE auth_id = auth.uid())
+);
 
 -- Policy 2: Users can insert their own trips
 CREATE POLICY "Users can insert own trips" ON trips
 FOR INSERT
-WITH CHECK (auth.uid() = user_id);
+WITH CHECK (
+    user_id IN (SELECT id FROM users WHERE auth_id = auth.uid())
+);
 
 -- Policy 3: Users can update their own trips
 CREATE POLICY "Users can update own trips" ON trips
 FOR UPDATE
-USING (auth.uid() = user_id);
+USING (
+    user_id IN (SELECT id FROM users WHERE auth_id = auth.uid())
+);
 
 -- Policy 4: Users can delete their own trips
 CREATE POLICY "Users can delete own trips" ON trips
 FOR DELETE
-USING (auth.uid() = user_id);
+USING (
+    user_id IN (SELECT id FROM users WHERE auth_id = auth.uid())
+);
 
 -- Policy 5: Pro account owners can view trips of their linked users
 -- This allows a Pro owner to SELECT trips where:
 -- - The trip's user_id belongs to a user linked to the Pro owner's account
 -- - The link status is ACTIVE
 -- - The company_link has sharing enabled for that trip type
+-- NOTE: pa.user_id is public.users.id, NOT auth.uid()
 CREATE POLICY "Pro owners can view linked users trips" ON trips
 FOR SELECT
 USING (
     -- Either the trip belongs to the current user
-    auth.uid() = user_id
+    user_id IN (SELECT id FROM users WHERE auth_id = auth.uid())
     OR
     -- Or the current user is the owner of a Pro account that the trip's user is linked to
     EXISTS (
         SELECT 1
         FROM company_links cl
         JOIN pro_accounts pa ON cl.linked_pro_account_id = pa.id
+        JOIN users u ON pa.user_id = u.id
         WHERE cl.user_id = trips.user_id
-        AND pa.user_id = auth.uid()
+        AND u.auth_id = auth.uid()
         AND cl.status = 'ACTIVE'
         -- Check sharing preferences on company_links based on trip type
         AND (

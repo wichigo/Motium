@@ -74,10 +74,18 @@ interface TripDao {
     suspend fun markTripAsSynced(tripId: String, timestamp: Long)
 
     /**
-     * Mark a trip as needing sync.
+     * Mark a trip as needing sync and increment version for optimistic locking.
+     * The version increment enables server-side conflict detection.
      */
-    @Query("UPDATE trips SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :tripId")
+    @Query("UPDATE trips SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp, version = version + 1 WHERE id = :tripId")
     suspend fun markTripAsNeedingSync(tripId: String, timestamp: Long = System.currentTimeMillis())
+
+    /**
+     * Mark trip as conflict (requires manual resolution).
+     * Used when server version is newer but local has unsaved changes.
+     */
+    @Query("UPDATE trips SET syncStatus = 'CONFLICT', localUpdatedAt = :timestamp WHERE id = :tripId")
+    suspend fun markTripAsConflict(tripId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
      * Delete all trips for a user.
@@ -102,6 +110,33 @@ interface TripDao {
      */
     @Query("SELECT COUNT(*) FROM trips WHERE userId = :userId")
     suspend fun getTripCount(userId: String): Int
+
+    /**
+     * Get trips with CONFLICT status that require user resolution.
+     * These are trips where both local and server had changes that couldn't be auto-merged.
+     */
+    @Query("SELECT * FROM trips WHERE userId = :userId AND syncStatus = 'CONFLICT' ORDER BY startTime DESC")
+    fun getConflictTripsFlow(userId: String): Flow<List<TripEntity>>
+
+    /**
+     * Get count of trips with CONFLICT status.
+     */
+    @Query("SELECT COUNT(*) FROM trips WHERE userId = :userId AND syncStatus = 'CONFLICT'")
+    fun getConflictTripsCountFlow(userId: String): Flow<Int>
+
+    /**
+     * Resolve a conflict by accepting the local version.
+     * Marks the trip as PENDING_UPLOAD to sync local changes to server.
+     */
+    @Query("UPDATE trips SET syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :timestamp WHERE id = :tripId AND syncStatus = 'CONFLICT'")
+    suspend fun resolveConflictKeepLocal(tripId: String, timestamp: Long = System.currentTimeMillis())
+
+    /**
+     * Resolve a conflict by accepting the server version.
+     * Marks the trip as SYNCED (no upload needed).
+     */
+    @Query("UPDATE trips SET syncStatus = 'SYNCED', localUpdatedAt = :timestamp WHERE id = :tripId AND syncStatus = 'CONFLICT'")
+    suspend fun resolveConflictKeepServer(tripId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
      * Calculate annual mileage for a specific vehicle and trip type.

@@ -165,12 +165,13 @@ class ActivityRecognitionHealthWorker(
         private const val ACTIVE_HOURS_END = 22
 
         /**
-         * Schedule hourly health checks.
+         * Schedule health checks every 2 hours.
+         * BATTERY OPTIMIZATION (2026-01-22): Passé de 1h à 2h pour réduire la consommation batterie.
          */
         fun schedule(context: Context) {
             val workRequest = PeriodicWorkRequestBuilder<ActivityRecognitionHealthWorker>(
-                1, TimeUnit.HOURS,
-                15, TimeUnit.MINUTES // Flex interval
+                2, TimeUnit.HOURS,
+                30, TimeUnit.MINUTES // Flex interval
             )
                 .setConstraints(
                     Constraints.Builder()
@@ -191,7 +192,7 @@ class ActivityRecognitionHealthWorker(
             )
 
             MotiumApplication.logger.i(
-                "ActivityRecognitionHealthWorker scheduled (every hour)",
+                "ActivityRecognitionHealthWorker scheduled (every 2 hours)",
                 TAG
             )
         }

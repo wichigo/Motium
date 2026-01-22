@@ -5,8 +5,10 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.LegalForm
 import com.application.motium.domain.model.ProAccount
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -41,9 +43,19 @@ class ProAccountRemoteDataSource private constructor(
 
     /**
      * Get Pro account for the current user
+     *
+     * IMPORTANT: Checks authentication before making the request to avoid 401 errors.
+     * RLS policy requires user_id = get_user_id_from_auth(), which needs a valid JWT.
      */
     suspend fun getProAccount(userId: String): Result<ProAccountDto?> = withContext(Dispatchers.IO) {
         try {
+            // Check if user is authenticated before making the request
+            val currentUser = supabaseClient.auth.currentUserOrNull()
+            if (currentUser == null) {
+                MotiumApplication.logger.w("No authenticated user, skipping pro_accounts fetch", "ProAccountRepo")
+                return@withContext Result.failure(Exception("User not authenticated"))
+            }
+
             val response = supabaseClient.from("pro_accounts")
                 .select() {
                     filter {
@@ -59,9 +71,9 @@ class ProAccountRemoteDataSource private constructor(
             }
             Result.success(response)
         } catch (e: PostgrestRestException) {
-            // JWT expired - refresh token and retry once
-            if (e.message?.contains("JWT expired") == true) {
-                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "ProAccountRepo")
+            // JWT expired or 401 - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true || e.message?.contains("401") == true) {
+                MotiumApplication.logger.w("JWT expired or 401, refreshing token and retrying...", "ProAccountRepo")
                 val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
                 if (refreshed) {
                     return@withContext try {
@@ -86,6 +98,10 @@ class ProAccountRemoteDataSource private constructor(
             }
             MotiumApplication.logger.e("Error getting pro account: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)
+        } catch (e: CancellationException) {
+            // Don't log cancellation as error - it's expected during navigation/scope cleanup
+            MotiumApplication.logger.d("Pro account fetch cancelled (navigation)", "ProAccountRepo")
+            throw e // Re-throw to properly propagate cancellation
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting pro account: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)
@@ -94,9 +110,19 @@ class ProAccountRemoteDataSource private constructor(
 
     /**
      * Get Pro account by its ID (works for linked users too)
+     *
+     * IMPORTANT: Checks authentication before making the request to avoid 401 errors.
+     * RLS policy requires user_id = get_user_id_from_auth(), which needs a valid JWT.
      */
     suspend fun getProAccountById(proAccountId: String): Result<ProAccountDto?> = withContext(Dispatchers.IO) {
         try {
+            // Check if user is authenticated before making the request
+            val currentUser = supabaseClient.auth.currentUserOrNull()
+            if (currentUser == null) {
+                MotiumApplication.logger.w("No authenticated user, skipping pro_accounts fetch by ID", "ProAccountRepo")
+                return@withContext Result.failure(Exception("User not authenticated"))
+            }
+
             val response = supabaseClient.from("pro_accounts")
                 .select() {
                     filter {
@@ -112,9 +138,9 @@ class ProAccountRemoteDataSource private constructor(
             }
             Result.success(response)
         } catch (e: PostgrestRestException) {
-            // JWT expired - refresh token and retry once
-            if (e.message?.contains("JWT expired") == true) {
-                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "ProAccountRepo")
+            // JWT expired or 401 - refresh token and retry once
+            if (e.message?.contains("JWT expired") == true || e.message?.contains("401") == true) {
+                MotiumApplication.logger.w("JWT expired or 401, refreshing token and retrying...", "ProAccountRepo")
                 val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
                 if (refreshed) {
                     return@withContext try {
@@ -139,6 +165,10 @@ class ProAccountRemoteDataSource private constructor(
             }
             MotiumApplication.logger.e("Error getting pro account by ID: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)
+        } catch (e: CancellationException) {
+            // Don't log cancellation as error - it's expected during navigation/scope cleanup
+            MotiumApplication.logger.d("Pro account fetch by ID cancelled (navigation)", "ProAccountRepo")
+            throw e // Re-throw to properly propagate cancellation
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error getting pro account by ID: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)
@@ -315,6 +345,10 @@ class ProAccountRemoteDataSource private constructor(
             }
             MotiumApplication.logger.e("Error updating billing anchor day: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)
+        } catch (e: CancellationException) {
+            // Don't log cancellation as error - it's expected during navigation/scope cleanup
+            MotiumApplication.logger.d("Billing anchor day update cancelled (navigation)", "ProAccountRepo")
+            throw e // Re-throw to properly propagate cancellation
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error updating billing anchor day: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)

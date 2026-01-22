@@ -14,7 +14,7 @@ interface LicenseDao {
     @Query("SELECT * FROM licenses WHERE linkedAccountId = :userId AND status = 'active' LIMIT 1")
     fun getActiveLicenseForUser(userId: String): Flow<LicenseEntity?>
 
-    @Query("SELECT * FROM licenses WHERE proAccountId = :proAccountId AND linkedAccountId IS NULL AND status = 'active'")
+    @Query("SELECT * FROM licenses WHERE proAccountId = :proAccountId AND linkedAccountId IS NULL AND (status = 'available' OR status = 'active')")
     fun getAvailableLicenses(proAccountId: String): Flow<List<LicenseEntity>>
 
     @Query("SELECT * FROM licenses WHERE id = :id")

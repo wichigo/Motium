@@ -15,15 +15,25 @@ import androidx.room.PrimaryKey
     tableName = "pending_operations",
     indices = [
         Index(value = ["entityType", "entityId"]),
-        Index(value = ["createdAt"])
+        Index(value = ["createdAt"]),
+        Index(value = ["idempotencyKey"], unique = true)
     ]
 )
 data class PendingOperationEntity(
     /**
-     * Unique identifier for this operation (UUID)
+     * Unique identifier for this operation (UUID).
+     * Can change on retries for internal tracking.
      */
     @PrimaryKey
     val id: String,
+
+    /**
+     * Stable idempotency key for server-side deduplication.
+     * Format: "{entityType}:{entityId}:{action}:{createdAt}"
+     * This key remains constant across retries, ensuring the server
+     * can safely deduplicate operations even on network failures.
+     */
+    val idempotencyKey: String,
 
     /**
      * Type of entity: TRIP, VEHICLE, EXPENSE, USER, WORK_SCHEDULE, COMPANY_LINK
@@ -88,6 +98,7 @@ data class PendingOperationEntity(
         const val TYPE_PRO_ACCOUNT = "PRO_ACCOUNT"
         const val TYPE_STRIPE_SUBSCRIPTION = "STRIPE_SUBSCRIPTION"
         const val TYPE_CONSENT = "CONSENT"
+        const val TYPE_AUTO_TRACKING_SETTINGS = "AUTO_TRACKING_SETTINGS"
 
         // Action types
         const val ACTION_CREATE = "CREATE"
@@ -106,6 +117,20 @@ data class PendingOperationEntity(
             val maxDelayMs = 5 * 60 * 1000L // 5 minutes
             val exponentialDelay = (1L shl retryCount) * baseDelayMs
             return minOf(exponentialDelay, maxDelayMs)
+        }
+
+        /**
+         * Generate a stable idempotency key for an operation.
+         * This key remains constant across retries, enabling server-side deduplication.
+         * Format: "{entityType}:{entityId}:{action}:{createdAt}"
+         */
+        fun generateIdempotencyKey(
+            entityType: String,
+            entityId: String,
+            action: String,
+            createdAt: Long
+        ): String {
+            return "$entityType:$entityId:$action:$createdAt"
         }
     }
 

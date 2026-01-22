@@ -1,0 +1,93 @@
+{
+  "version": "1.0",
+  "project": "motium-subscription-system",
+  
+  "thresholds": {
+    "feature_pass": 100,
+    "module_warning": 90,
+    "project_release": 100,
+    "blocker_fails": true
+  },
+  
+  "retries": {
+    "max_attempts": 30,
+    "backoff_seconds": 0
+  },
+  
+  "scanning": {
+    "include_patterns": [
+      "supabase/functions/**/*.ts",
+      "supabase/migrations/**/*.sql",
+      "**/*Subscription*.kt",
+      "**/*License*.kt",
+      "**/*Pro*.kt",
+      "**/stripe*.ts"
+    ],
+    "exclude_patterns": [
+      "**/test/**",
+      "**/generated/**",
+      "**/build/**",
+      "**/.gradle/**"
+    ],
+    "max_file_lines": 2000,
+    "sample_large_files": false
+  },
+  
+  "personas": {
+    "ralph": {"enabled": true, "weight": 0.20},
+    "expert": {"enabled": true, "weight": 0.50},
+    "avocat": {"enabled": true, "weight": 0.30}
+  },
+  
+  "validation_rules": {
+    "subscription_types_valid": ["TRIAL", "PREMIUM", "LIFETIME", "LICENSED", "EXPIRED"],
+    "subscription_types_invalid": ["FREE"],
+    "license_statuses_valid": ["available", "active", "suspended", "canceled", "unlinked"],
+    "license_statuses_invalid": ["pending"],
+    "pro_statuses_valid": ["trial", "active", "expired", "suspended"]
+  },
+  
+  "webhook_events_required": [
+    "checkout.session.completed",
+    "invoice.paid",
+    "invoice.payment_failed",
+    "customer.subscription.updated",
+    "customer.subscription.deleted"
+  ],
+  
+  "rpc_functions_required": [
+    "assign_license_to_collaborator",
+    "finalize_license_assignment",
+    "cancel_license",
+    "unlink_collaborator",
+    "check_premium_access"
+  ],
+  
+  "business_rules": {
+    "trial_days": 7,
+    "payment_failure_individual": "EXPIRED_IMMEDIATELY",
+    "payment_failure_pro": "SUSPEND_MONTHLY_LICENSES",
+    "billing_anchor": "first_monthly_license_purchase",
+    "lifetime_payment": "immediate",
+    "monthly_payment": "prorated_to_anchor",
+    "unlink_effective": "next_billing_date",
+    "cancel_effective": "next_billing_date",
+    "monthly_canceled_action": "delete",
+    "lifetime_canceled_action": "return_to_pool"
+  },
+  
+  "attribution_rules": {
+    "LIFETIME": "BLOCK",
+    "LICENSED": "BLOCK", 
+    "PREMIUM": "CANCEL_THEN_LICENSE",
+    "TRIAL": "LICENSE_DIRECT",
+    "EXPIRED": "LICENSE_DIRECT"
+  },
+  
+  "reporting": {
+    "format": "detailed",
+    "include_suggestions": true,
+    "include_code_snippets": true,
+    "max_issues_per_file": 20
+  }
+}

@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
  * Scheduler for license-related background tasks.
  *
  * Schedules periodic processing of:
- * - Expired license unlink requests (30-day notice period)
+ * - Expired license unlink requests (effective at renewal date or immediate for lifetime)
  *
  * The worker runs daily to check if any licenses have passed their
  * unlink_effective_at date and should be returned to the pool.

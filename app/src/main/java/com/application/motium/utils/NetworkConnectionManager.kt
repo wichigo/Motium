@@ -24,19 +24,19 @@ class NetworkConnectionManager(private val context: Context) {
     private val _connectionType = MutableStateFlow(getConnectionType())
     val connectionType: StateFlow<ConnectionType> = _connectionType.asStateFlow()
 
-    private var onConnectionRestored: (() -> Unit)? = null
-    private var onConnectionLost: (() -> Unit)? = null
+    // BATTERY OPTIMIZATION (2026-01): Removed unused callbacks onConnectionRestored/onConnectionLost
+    // These were never used and would have triggered unnecessary work on network changes.
+    // The StateFlow approach is sufficient - observers react when they collect the flow.
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            MotiumApplication.logger.i("✅ Network connection available", "NetworkManager")
             val wasDisconnected = !_isConnected.value
             _isConnected.value = true
             _connectionType.value = getConnectionType()
 
+            // BATTERY OPTIMIZATION: Only log significant changes (disconnected → connected)
             if (wasDisconnected) {
-                MotiumApplication.logger.i("🔄 Network restored - triggering reconnection", "NetworkManager")
-                onConnectionRestored?.invoke()
+                MotiumApplication.logger.i("Network restored", "NetworkManager")
             }
         }
 
@@ -44,21 +44,20 @@ class NetworkConnectionManager(private val context: Context) {
             // Vérifier s'il y a encore un réseau actif (ex: transition WiFi → 5G)
             val stillConnected = isNetworkAvailable()
             if (stillConnected) {
-                MotiumApplication.logger.i("🔄 Network switched (WiFi ↔ Cellular), still connected", "NetworkManager")
+                // BATTERY OPTIMIZATION: Silent network switch, no logging
                 _connectionType.value = getConnectionType()
                 return
             }
 
-            MotiumApplication.logger.w("❌ Network connection lost", "NetworkManager")
             _isConnected.value = false
             _connectionType.value = ConnectionType.NONE
-            onConnectionLost?.invoke()
+            MotiumApplication.logger.w("Network lost", "NetworkManager")
         }
 
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
             val newType = getConnectionType()
             if (_connectionType.value != newType) {
-                MotiumApplication.logger.i("🔄 Network type changed to: $newType", "NetworkManager")
+                // BATTERY OPTIMIZATION: Silent type changes, only update state
                 _connectionType.value = newType
             }
         }
@@ -91,13 +90,8 @@ class NetworkConnectionManager(private val context: Context) {
         }
     }
 
-    fun setOnConnectionRestored(callback: () -> Unit) {
-        onConnectionRestored = callback
-    }
-
-    fun setOnConnectionLost(callback: () -> Unit) {
-        onConnectionLost = callback
-    }
+    // BATTERY OPTIMIZATION (2026-01): Removed setOnConnectionRestored/setOnConnectionLost
+    // as they were never used and would have caused unnecessary work on network changes
 
     private fun isNetworkAvailable(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
@@ -130,6 +124,20 @@ class NetworkConnectionManager(private val context: Context) {
         fun getInstance(context: Context): NetworkConnectionManager {
             return instance ?: synchronized(this) {
                 instance ?: NetworkConnectionManager(context.applicationContext).also { instance = it }
+            }
+        }
+
+        /**
+         * BATTERY OPTIMIZATION (2026-01): Cleanup singleton to stop network monitoring.
+         * Should be called on user logout or when network monitoring is no longer needed.
+         * This prevents the NetworkCallback from waking up the CPU on every network change
+         * when the app is not actively being used.
+         */
+        fun cleanup() {
+            synchronized(this) {
+                instance?.stopNetworkMonitoring()
+                instance = null
+                MotiumApplication.logger.i("NetworkConnectionManager singleton cleaned up", "NetworkManager")
             }
         }
     }

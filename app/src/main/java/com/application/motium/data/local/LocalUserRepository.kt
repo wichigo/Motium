@@ -1,6 +1,7 @@
 package com.application.motium.data.local
 
 import android.content.Context
+import com.application.motium.MotiumApplication
 import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.local.entities.UserEntity
@@ -10,6 +11,9 @@ import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.domain.model.User
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Local repository for user operations using Room database.
@@ -94,30 +98,59 @@ class LocalUserRepository(context: Context) {
      * Marks the user as PENDING_UPLOAD and queues a sync operation for offline-first sync.
      */
     suspend fun updateUser(user: User) {
+        // First get the current entity to retrieve the latest version
+        val currentEntity = userDao.getUserById(user.id)
+        val newVersion = (currentEntity?.version ?: 0) + 1
+
         val entity = user.toEntity(
             lastSyncedAt = System.currentTimeMillis(),
             isLocallyConnected = true
         ).copy(
             syncStatus = SyncStatus.PENDING_UPLOAD.name,
-            localUpdatedAt = System.currentTimeMillis()
+            localUpdatedAt = System.currentTimeMillis(),
+            version = newVersion
         )
         userDao.updateUser(entity)
 
         // Queue pending sync operation for uploading user preferences to Supabase
-        queueUserSyncOperation(user.id)
+        queueUserSyncOperation(user, newVersion)
     }
 
     /**
      * Queue a pending sync operation for user profile update.
      * Uses OfflineFirstSyncManager to trigger immediate sync if online.
+     * Builds a payload with user fields that can be updated via sync_changes().
      */
-    private suspend fun queueUserSyncOperation(userId: String) {
+    private suspend fun queueUserSyncOperation(user: User, version: Int) {
         val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+
+        // Build payload with user fields allowed by push_user_change()
+        // Allowed: name, phone_number, address, favorite_colors, consider_full_distance
+        val userPayload = buildJsonObject {
+            put("name", user.name)
+            put("phone_number", user.phoneNumber ?: "")
+            put("address", user.address ?: "")
+            put("consider_full_distance", user.considerFullDistance)
+            // favorite_colors is a list - build as JSON array
+            if (user.favoriteColors.isNotEmpty()) {
+                put("favorite_colors", buildJsonArray {
+                    user.favoriteColors.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                })
+            }
+            // Version for optimistic locking - server checks this
+            put("version", version)
+        }.toString()
+
+        MotiumApplication.logger.i(
+            "Queueing USER update with payload: consider_full_distance=${user.considerFullDistance}, version=$version",
+            "LocalUserRepository"
+        )
+
         syncManager.queueOperation(
             entityType = PendingOperationEntity.TYPE_USER,
-            entityId = userId,
+            entityId = user.id,
             action = PendingOperationEntity.ACTION_UPDATE,
-            payload = null,
+            payload = userPayload,
             priority = 0
         )
     }

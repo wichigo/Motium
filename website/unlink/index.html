@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirmation de déliaison - Motium</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 24px;
+            padding: 48px;
+            max-width: 420px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        .logo {
+            font-size: 36px;
+            font-weight: 700;
+            color: #6366F1;
+            margin-bottom: 8px;
+        }
+        .icon {
+            width: 80px;
+            height: 80px;
+            background: #FEF3C7;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 24px auto;
+            font-size: 40px;
+        }
+        .icon.success {
+            background: #D1FAE5;
+        }
+        .icon.error {
+            background: #FEE2E2;
+        }
+        h1 {
+            font-size: 22px;
+            color: #1f2937;
+            margin-bottom: 12px;
+        }
+        p {
+            color: #6b7280;
+            line-height: 1.6;
+            margin-bottom: 24px;
+            font-size: 15px;
+        }
+        .warning-box {
+            background: #FEF3C7;
+            border: 1px solid #F59E0B;
+            border-radius: 12px;
+            padding: 16px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        .warning-title {
+            color: #92400E;
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .warning-text {
+            color: #92400E;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #E5E7EB;
+            border-top-color: #6366F1;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 24px auto;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background: #6366F1;
+            color: white;
+            padding: 14px 28px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 15px;
+            transition: all 0.2s;
+            border: none;
+            cursor: pointer;
+            width: 100%;
+        }
+        .btn:hover {
+            background: #4f46e5;
+        }
+        .btn-danger {
+            background: #DC2626;
+        }
+        .btn-danger:hover {
+            background: #B91C1C;
+        }
+        .btn-secondary {
+            background: transparent;
+            color: #6366F1;
+            border: 2px solid #6366F1;
+            margin-top: 12px;
+        }
+        .btn-secondary:hover {
+            background: #EEF2FF;
+        }
+        .hidden {
+            display: none;
+        }
+        footer {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">Motium</div>
+
+        <!-- Loading state -->
+        <div id="loading">
+            <div class="icon">🔗</div>
+            <h1>Confirmation de déliaison</h1>
+            <p>Redirection vers l'application...</p>
+            <div class="spinner"></div>
+        </div>
+
+        <!-- Fallback state (app not installed) -->
+        <div id="fallback" class="hidden">
+            <div class="icon">🔗</div>
+            <h1>Confirmation de déliaison</h1>
+            <p>Pour confirmer la déliaison de votre compte professionnel, veuillez ouvrir ce lien depuis un appareil avec l'application Motium installée.</p>
+
+            <div class="warning-box">
+                <div class="warning-title">
+                    <span>⚠️</span>
+                    <span>Action importante</span>
+                </div>
+                <div class="warning-text">
+                    Cette action va dissocier votre compte de l'espace professionnel.
+                    Vos trajets personnels seront conservés mais ne seront plus partagés avec l'entreprise.
+                </div>
+            </div>
+
+            <a href="https://play.google.com/store/apps/details?id=com.application.motium" class="btn">
+                Télécharger Motium
+            </a>
+
+            <button onclick="tryOpenApp()" class="btn btn-secondary">
+                Réessayer d'ouvrir l'app
+            </button>
+        </div>
+
+        <!-- Success state -->
+        <div id="success" class="hidden">
+            <div class="icon success">✅</div>
+            <h1>Déliaison confirmée</h1>
+            <p>Votre compte a été délié de l'espace professionnel. Vous pouvez continuer à utiliser Motium avec votre compte personnel.</p>
+
+            <button onclick="tryOpenApp()" class="btn">
+                Ouvrir Motium
+            </button>
+        </div>
+
+        <!-- Error state -->
+        <div id="error" class="hidden">
+            <div class="icon error">❌</div>
+            <h1>Lien invalide</h1>
+            <p>Ce lien de confirmation n'est pas valide ou a expiré. Si vous souhaitez toujours vous délier de l'espace professionnel, veuillez refaire la demande depuis l'application.</p>
+
+            <a href="/" class="btn">
+                Retour à l'accueil
+            </a>
+        </div>
+
+        <footer>
+            © 2025 Motium
+        </footer>
+    </div>
+
+    <script>
+        const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.application.motium';
+        const APP_SCHEME = 'motium://';
+
+        function getToken() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('token');
+        }
+
+        function tryOpenApp() {
+            const token = getToken();
+            if (!token) {
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('error').classList.remove('hidden');
+                return;
+            }
+
+            // Construct deep link URL
+            const deepLink = APP_SCHEME + 'unlink?token=' + encodeURIComponent(token);
+
+            // Try to open the app
+            const start = Date.now();
+
+            window.location.href = deepLink;
+
+            // If we're still here after 2 seconds, app is probably not installed
+            setTimeout(function() {
+                if (Date.now() - start < 2500) {
+                    document.getElementById('loading').classList.add('hidden');
+                    document.getElementById('fallback').classList.remove('hidden');
+                }
+            }, 2000);
+        }
+
+        // Start the redirect process
+        window.onload = function() {
+            const token = getToken();
+            if (!token) {
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('error').classList.remove('hidden');
+                return;
+            }
+
+            tryOpenApp();
+        };
+    </script>
+</body>
+</html>

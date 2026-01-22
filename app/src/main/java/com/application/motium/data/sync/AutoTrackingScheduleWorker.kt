@@ -114,12 +114,13 @@ class AutoTrackingScheduleWorker(
         private const val WORK_TAG = "auto_tracking_schedule"
 
         /**
-         * Démarre la vérification périodique des horaires (toutes les 15 minutes)
+         * Démarre la vérification périodique des horaires (toutes les 30 minutes)
+         * BATTERY OPTIMIZATION (2026-01-22): Passé de 15min à 30min pour réduire la consommation batterie.
          */
         fun schedule(context: Context) {
             val workRequest = PeriodicWorkRequestBuilder<AutoTrackingScheduleWorker>(
-                15, TimeUnit.MINUTES,
-                5, TimeUnit.MINUTES // Flex interval de 5 minutes
+                30, TimeUnit.MINUTES,
+                10, TimeUnit.MINUTES // Flex interval de 10 minutes
             )
                 .setConstraints(
                     Constraints.Builder()
@@ -140,7 +141,7 @@ class AutoTrackingScheduleWorker(
                 workRequest
             )
 
-            MotiumApplication.logger.i("AutoTrackingScheduleWorker scheduled (every 15 minutes)", "AutoTrackingScheduleWorker")
+            MotiumApplication.logger.i("AutoTrackingScheduleWorker scheduled (every 30 minutes)", "AutoTrackingScheduleWorker")
         }
 
         /**

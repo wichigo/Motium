@@ -11,7 +11,10 @@ import kotlinx.serialization.Serializable
  *
  * Système de pool: Les licences sont achetées et vont dans un pool,
  * puis sont assignées aux comptes liés individuellement.
- * Déliaison avec préavis de 30 jours.
+ *
+ * Résiliation/Déliaison:
+ * - Licences mensuelles: résiliation effective à la date de renouvellement (endDate)
+ * - Licences lifetime: déliaison immédiate
  */
 @Serializable
 data class License(
@@ -38,13 +41,13 @@ data class License(
     val vatRate: Double = VAT_RATE,
 
     // Statut
-    val status: LicenseStatus = LicenseStatus.PENDING,
+    val status: LicenseStatus = LicenseStatus.AVAILABLE,
     @SerialName("start_date")
     val startDate: Instant? = null,
     @SerialName("end_date")
     val endDate: Instant? = null,
 
-    // Déliaison avec préavis 30 jours
+    // Déliaison (effective à endDate pour mensuelle, immédiate pour lifetime)
     @SerialName("unlink_requested_at")
     val unlinkRequestedAt: Instant? = null,
     @SerialName("unlink_effective_at")
@@ -54,10 +57,6 @@ data class License(
     @SerialName("billing_starts_at")
     val billingStartsAt: Instant? = null,
 
-    // Pause (licence non assignée, facturation suspendue)
-    @SerialName("paused_at")
-    val pausedAt: Instant? = null,
-
     // Stripe
     @SerialName("stripe_subscription_id")
     val stripeSubscriptionId: String? = null,
@@ -65,6 +64,10 @@ data class License(
     val stripeSubscriptionItemId: String? = null,
     @SerialName("stripe_price_id")
     val stripePriceId: String? = null,
+    @SerialName("stripe_subscription_ref")
+    val stripeSubscriptionRef: String? = null,  // FK vers stripe_subscriptions.id (UUID)
+    @SerialName("stripe_payment_intent_id")
+    val stripePaymentIntentId: String? = null,  // Pour les paiements lifetime
 
     // Métadonnées
     @SerialName("created_at")
@@ -76,7 +79,6 @@ data class License(
         const val LICENSE_PRICE_HT = 5.0           // 5€ HT par utilisateur par mois
         const val LICENSE_LIFETIME_PRICE_HT = 120.0 // 120€ HT par utilisateur à vie
         const val VAT_RATE = 0.20                   // TVA 20%
-        const val UNLINK_NOTICE_DAYS = 30          // Préavis de déliaison en jours
     }
 
     /**
@@ -86,14 +88,32 @@ data class License(
         get() = !linkedAccountId.isNullOrEmpty()
 
     /**
-     * Vérifie si une demande de déliaison est en cours (préavis de 30 jours)
+     * Vérifie si une demande de déliaison/résiliation est en cours.
+     * La licence reste active jusqu'à unlinkEffectiveAt (= endDate pour mensuelle, now pour lifetime).
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [isPendingUnlinkWithTrustedTime].
      */
     val isPendingUnlink: Boolean
         get() = unlinkRequestedAt != null && unlinkEffectiveAt != null &&
                 Instant.fromEpochMilliseconds(System.currentTimeMillis()) < unlinkEffectiveAt
 
     /**
+     * SECURE version: Check if unlink is pending using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if pending, false if not pending, null if time not trusted
+     */
+    fun isPendingUnlinkWithTrustedTime(trustedTimeMs: Long?): Boolean? {
+        if (trustedTimeMs == null) return null
+        if (unlinkRequestedAt == null || unlinkEffectiveAt == null) return false
+        return Instant.fromEpochMilliseconds(trustedTimeMs) < unlinkEffectiveAt
+    }
+
+    /**
      * Jours restants avant que la déliaison prenne effet (null si pas de déliaison en cours)
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [daysUntilUnlinkEffectiveWithTrustedTime].
      */
     val daysUntilUnlinkEffective: Int?
         get() {
@@ -104,20 +124,32 @@ data class License(
         }
 
     /**
+     * SECURE version: Days until unlink using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return days remaining, or null if not pending or time not trusted
+     */
+    fun daysUntilUnlinkEffectiveWithTrustedTime(trustedTimeMs: Long?): Int? {
+        if (trustedTimeMs == null) return null
+        if (isPendingUnlinkWithTrustedTime(trustedTimeMs) != true || unlinkEffectiveAt == null) return null
+        val now = Instant.fromEpochMilliseconds(trustedTimeMs)
+        val diff = unlinkEffectiveAt.toEpochMilliseconds() - now.toEpochMilliseconds()
+        return (diff / (1000L * 60 * 60 * 24)).toInt().coerceAtLeast(0)
+    }
+
+    /**
      * Statut effectif de la licence (combiné pour l'UI)
      */
     val effectiveStatus: LicenseEffectiveStatus
-        get() = when {
-            status == LicenseStatus.PAUSED -> LicenseEffectiveStatus.PAUSED
-            status != LicenseStatus.ACTIVE -> when (status) {
-                LicenseStatus.PENDING -> LicenseEffectiveStatus.PENDING_PAYMENT
-                LicenseStatus.EXPIRED -> LicenseEffectiveStatus.EXPIRED
-                LicenseStatus.CANCELLED -> LicenseEffectiveStatus.CANCELLED
-                else -> LicenseEffectiveStatus.INACTIVE
+        get() = when (status) {
+            LicenseStatus.AVAILABLE -> LicenseEffectiveStatus.AVAILABLE
+            LicenseStatus.SUSPENDED -> LicenseEffectiveStatus.SUSPENDED
+            LicenseStatus.CANCELED -> LicenseEffectiveStatus.CANCELLED
+            LicenseStatus.UNLINKED -> LicenseEffectiveStatus.PENDING_UNLINK
+            LicenseStatus.ACTIVE -> when {
+                !isAssigned -> LicenseEffectiveStatus.AVAILABLE
+                isPendingUnlink -> LicenseEffectiveStatus.PENDING_UNLINK
+                else -> LicenseEffectiveStatus.ACTIVE
             }
-            !isAssigned -> LicenseEffectiveStatus.AVAILABLE
-            isPendingUnlink -> LicenseEffectiveStatus.PENDING_UNLINK
-            else -> LicenseEffectiveStatus.ACTIVE
         }
     
     /**
@@ -134,20 +166,67 @@ data class License(
     
     /**
      * Vérifie si la licence est active et valide
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [isActiveWithTrustedTime].
      */
     val isActive: Boolean
         get() = status == LicenseStatus.ACTIVE && !isExpired
-    
+
+    /**
+     * SECURE version: Check if license is active using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if active, false if not active, null if time not trusted
+     */
+    fun isActiveWithTrustedTime(trustedTimeMs: Long?): Boolean? {
+        if (trustedTimeMs == null) return null
+        return status == LicenseStatus.ACTIVE && (isExpiredWithTrustedTime(trustedTimeMs) == false)
+    }
+
+    /**
+     * FAIL-SECURE version: Returns false if time is not trusted.
+     * Use this for security gates where denying access is safer.
+     */
+    fun isActiveFailSecure(trustedTimeMs: Long?): Boolean {
+        return isActiveWithTrustedTime(trustedTimeMs) ?: false
+    }
+
     /**
      * Vérifie si la licence a expiré
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [isExpiredWithTrustedTime].
      */
     val isExpired: Boolean
         get() = endDate?.let { end ->
             Instant.fromEpochMilliseconds(System.currentTimeMillis()) > end
         } ?: false
-    
+
+    /**
+     * SECURE version: Check if license is expired using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return true if expired, false if not expired, null if time not trusted
+     */
+    fun isExpiredWithTrustedTime(trustedTimeMs: Long?): Boolean? {
+        if (trustedTimeMs == null) return null
+        return endDate?.let { end ->
+            Instant.fromEpochMilliseconds(trustedTimeMs) > end
+        } ?: false
+    }
+
+    /**
+     * FAIL-SECURE version: Returns true (expired) if time is not trusted.
+     * Use this for security gates where denying access is safer.
+     */
+    fun isExpiredFailSecure(trustedTimeMs: Long?): Boolean {
+        return isExpiredWithTrustedTime(trustedTimeMs) ?: true
+    }
+
     /**
      * Jours restants avant expiration (null si pas de date de fin)
+     *
+     * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
+     * For security-critical checks, use [daysRemainingWithTrustedTime].
      */
     val daysRemaining: Int?
         get() = endDate?.let { end ->
@@ -155,6 +234,20 @@ data class License(
             val diff = end.toEpochMilliseconds() - now.toEpochMilliseconds()
             (diff / (1000 * 60 * 60 * 24)).toInt().coerceAtLeast(0)
         }
+
+    /**
+     * SECURE version: Days remaining using trusted time.
+     * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+     * @return days remaining, or null if no end date or time not trusted
+     */
+    fun daysRemainingWithTrustedTime(trustedTimeMs: Long?): Int? {
+        if (trustedTimeMs == null) return null
+        return endDate?.let { end ->
+            val now = Instant.fromEpochMilliseconds(trustedTimeMs)
+            val diff = end.toEpochMilliseconds() - now.toEpochMilliseconds()
+            (diff / (1000 * 60 * 60 * 24)).toInt().coerceAtLeast(0)
+        }
+    }
 
     /**
      * Prix TTC pour licence à vie
@@ -178,57 +271,104 @@ data class License(
     }
 
     /**
-     * Vérifie si la licence peut être mise en pause.
-     * Seules les licences actives NON assignées (dans le pool) peuvent être pausées.
-     * Cela permet au Pro de suspendre la facturation pour les licences inutilisées.
-     */
-    fun canPause(): Boolean {
-        return status == LicenseStatus.ACTIVE && !isAssigned && !isLifetime
-    }
-
-    /**
-     * Vérifie si la licence peut être reprise (dé-pausée).
-     */
-    fun canResume(): Boolean {
-        return status == LicenseStatus.PAUSED
-    }
-
-    /**
      * Vérifie si la licence peut être supprimée définitivement.
-     * Seules les licences NON assignées (disponibles ou en pause) peuvent être supprimées.
-     * Les licences assignées ou en cours de déliaison ne peuvent pas être supprimées.
+     * Seules les licences mensuelles NON assignées peuvent être supprimées.
+     * Les licences assignées, lifetime ou en cours de déliaison ne peuvent pas être supprimées.
      */
     fun canDelete(): Boolean {
-        return !isAssigned && !isPendingUnlink &&
-            (status == LicenseStatus.ACTIVE || status == LicenseStatus.PAUSED || status == LicenseStatus.PENDING)
+        return !isAssigned && !isPendingUnlink && !isLifetime &&
+            (status == LicenseStatus.ACTIVE || status == LicenseStatus.AVAILABLE)
     }
 
     /**
-     * Vérifie si la licence est en pause
+     * Vérifie si la licence peut être résiliée.
+     * Seules les licences mensuelles actives et assignées peuvent être résiliées.
      */
-    val isPaused: Boolean
-        get() = status == LicenseStatus.PAUSED
+    fun canCancel(): Boolean {
+        return isAssigned && status == LicenseStatus.ACTIVE && !isLifetime
+    }
+
+    /**
+     * Vérifie si la licence peut être liée à un compte.
+     * Seules les licences disponibles (non assignées) peuvent être liées.
+     */
+    fun canLink(): Boolean {
+        return !isAssigned && (status == LicenseStatus.ACTIVE || status == LicenseStatus.AVAILABLE)
+    }
+
+    /**
+     * Vérifie si la licence lifetime peut être déliée.
+     * Seules les licences lifetime assignées peuvent être déliées.
+     */
+    fun canUnlink(): Boolean {
+        return isAssigned && isLifetime && status == LicenseStatus.ACTIVE
+    }
 }
 
 /**
  * Statut d'une licence (stocké en base)
+ *
+ * Conformément aux spécifications:
+ * - available: Dans le pool, non attribuée
+ * - active: Attribuée à un collaborateur
+ * - suspended: Impayé du compte pro (mensuelles uniquement)
+ * - canceled: Résiliée (date de résiliation = date de renouvellement prévue)
+ * - unlinked: Délinkage, bloquée jusqu'à date groupée
  */
 @Serializable
 enum class LicenseStatus {
-    @SerialName("pending")
-    PENDING,     // En attente de paiement ou d'activation
+    @SerialName("available")
+    AVAILABLE,   // Dans le pool, non attribuée, prête à être assignée
 
     @SerialName("active")
-    ACTIVE,      // Licence active et payée
+    ACTIVE,      // Licence active et assignée à un collaborateur
 
-    @SerialName("expired")
-    EXPIRED,     // Licence expirée (non renouvelée)
+    @SerialName("suspended")
+    SUSPENDED,   // Impayé du compte pro (mensuelles uniquement)
 
-    @SerialName("cancelled")
-    CANCELLED,   // Licence annulée par le Pro
+    @SerialName("canceled")
+    CANCELED,    // Résiliée (date de résiliation = date de renouvellement prévue)
 
-    @SerialName("paused")
-    PAUSED       // Licence mise en pause (non assignée, facturation suspendue)
+    @SerialName("unlinked")
+    UNLINKED;    // Délinkage en cours, bloquée jusqu'à date groupée
+
+    companion object {
+        /**
+         * Parse le statut depuis la base de données avec gestion des legacy values.
+         * Logs unknown values to help identify data inconsistencies.
+         */
+        fun fromDbValue(value: String): LicenseStatus {
+            val normalized = value.lowercase().trim()
+            return when (normalized) {
+                "available" -> AVAILABLE
+                "active" -> ACTIVE
+                "suspended" -> SUSPENDED
+                "canceled", "cancelled" -> CANCELED  // Support both spellings
+                "unlinked" -> UNLINKED
+                // Legacy mappings - paused devient available (migration)
+                "paused" -> {
+                    android.util.Log.w("LicenseStatus", "Legacy status 'paused' encountered, mapping to AVAILABLE")
+                    AVAILABLE
+                }
+                "pending" -> {
+                    android.util.Log.w("LicenseStatus", "Legacy status 'pending' encountered, mapping to SUSPENDED")
+                    SUSPENDED
+                }
+                "expired" -> {
+                    android.util.Log.w("LicenseStatus", "Legacy status 'expired' encountered, mapping to SUSPENDED")
+                    SUSPENDED
+                }
+                else -> {
+                    android.util.Log.e(
+                        "LicenseStatus",
+                        "Unknown license status '$value' encountered - defaulting to AVAILABLE. " +
+                        "This may indicate data corruption or a new status not handled by the app."
+                    )
+                    AVAILABLE
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -238,11 +378,9 @@ enum class LicenseStatus {
 enum class LicenseEffectiveStatus {
     AVAILABLE,       // Dans le pool, prête à être assignée
     ACTIVE,          // Assignée à un compte et active
-    PENDING_UNLINK,  // En préavis de déliaison (30 jours)
-    PENDING_PAYMENT, // En attente de paiement
-    EXPIRED,         // Licence expirée
-    CANCELLED,       // Licence annulée
-    PAUSED,          // Licence mise en pause (facturation suspendue)
+    PENDING_UNLINK,  // En préavis de déliaison / status UNLINKED
+    SUSPENDED,       // Impayé du compte pro
+    CANCELLED,       // Licence résiliée (canceled)
     INACTIVE         // Autre état inactif
 }
 
@@ -251,12 +389,11 @@ enum class LicenseEffectiveStatus {
  */
 data class LicensesSummary(
     val totalLicenses: Int,
-    val availableLicenses: Int,      // Dans le pool, non assignées
+    val availableLicenses: Int,      // Dans le pool, non assignées (status AVAILABLE ou ACTIVE sans linked_account_id)
     val assignedLicenses: Int,       // Assignées à un compte
-    val pendingUnlinkLicenses: Int,  // En préavis de déliaison
-    val pendingPaymentLicenses: Int, // En attente de paiement
-    val expiredLicenses: Int,
-    val pausedLicenses: Int,         // En pause (facturation suspendue)
+    val pendingUnlinkLicenses: Int,  // En préavis de déliaison (status UNLINKED)
+    val suspendedLicenses: Int,      // Impayé du compte pro (status SUSPENDED)
+    val canceledLicenses: Int,       // Résiliées (status CANCELED)
     val lifetimeLicenses: Int,       // Licences à vie
     val monthlyLicenses: Int,        // Licences mensuelles
     val monthlyTotalHT: Double,
@@ -267,14 +404,13 @@ data class LicensesSummary(
         fun fromLicenses(licenses: List<License>): LicensesSummary {
             val available = licenses.count { it.effectiveStatus == LicenseEffectiveStatus.AVAILABLE }
             val assigned = licenses.count { it.isAssigned && it.status == LicenseStatus.ACTIVE }
-            val pendingUnlink = licenses.count { it.effectiveStatus == LicenseEffectiveStatus.PENDING_UNLINK }
-            val pendingPayment = licenses.count { it.status == LicenseStatus.PENDING }
-            val expired = licenses.count { it.status == LicenseStatus.EXPIRED }
-            val paused = licenses.count { it.status == LicenseStatus.PAUSED }
+            val pendingUnlink = licenses.count { it.status == LicenseStatus.UNLINKED }
+            val suspended = licenses.count { it.status == LicenseStatus.SUSPENDED }
+            val canceled = licenses.count { it.status == LicenseStatus.CANCELED }
             val lifetime = licenses.count { it.isLifetime && it.status == LicenseStatus.ACTIVE }
             val monthly = licenses.count { !it.isLifetime && it.status == LicenseStatus.ACTIVE }
 
-            // Calcul du coût mensuel (seulement les licences mensuelles actives - exclut pausées)
+            // Calcul du coût mensuel (seulement les licences mensuelles actives)
             val monthlyActiveLicenses = licenses.filter { !it.isLifetime && it.status == LicenseStatus.ACTIVE }
             val totalHT = monthlyActiveLicenses.sumOf { it.priceMonthlyHT }
 
@@ -283,9 +419,8 @@ data class LicensesSummary(
                 availableLicenses = available,
                 assignedLicenses = assigned,
                 pendingUnlinkLicenses = pendingUnlink,
-                pendingPaymentLicenses = pendingPayment,
-                expiredLicenses = expired,
-                pausedLicenses = paused,
+                suspendedLicenses = suspended,
+                canceledLicenses = canceled,
                 lifetimeLicenses = lifetime,
                 monthlyLicenses = monthly,
                 monthlyTotalHT = totalHT,

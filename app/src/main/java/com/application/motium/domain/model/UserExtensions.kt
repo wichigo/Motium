@@ -5,19 +5,34 @@ package com.application.motium.domain.model
  */
 
 /**
- * Vérifie si l'utilisateur a un abonnement premium (Premium ou Lifetime)
+ * Vérifie si l'utilisateur a un accès premium (Premium, Lifetime ou Licensed)
+ * LICENSED = l'utilisateur a une licence Pro attribuée par une entreprise
  */
 fun User.isPremium(): Boolean {
     return subscription.type == SubscriptionType.PREMIUM ||
-           subscription.type == SubscriptionType.LIFETIME
+           subscription.type == SubscriptionType.LIFETIME ||
+           subscription.type == SubscriptionType.LICENSED
 }
 
 /**
  * Vérifie si l'utilisateur peut enregistrer un nouveau trajet
  * Require either active trial or active subscription
+ *
+ * ⚠️ SECURITY WARNING: This method uses System.currentTimeMillis() which can be
+ * manipulated. Only use this for UI display purposes.
+ * For security-critical checks, use [canSaveTripSecure] with TrustedTimeProvider.
  */
 fun User.canSaveTrip(): Boolean {
     return subscription.hasValidAccess()
+}
+
+/**
+ * SECURE version: Check if user can save trips using trusted time.
+ * @param trustedTimeMs Trusted time from TrustedTimeProvider.getTrustedTimeMs()
+ * @return true if can save, false if not or time not trusted (fail-secure)
+ */
+fun User.canSaveTripSecure(trustedTimeMs: Long?): Boolean {
+    return subscription.hasValidAccessSecure(trustedTimeMs)
 }
 
 /**

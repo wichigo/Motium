@@ -35,6 +35,7 @@ import com.application.motium.presentation.components.createLicenseButtonLabel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.MotiumGreen
 import com.stripe.android.paymentsheet.PaymentSheetResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -64,17 +65,24 @@ fun ProTrialExpiredScreen(
 
     // Get user ID synchronously (needed for Flow collection)
     var userId by remember { mutableStateOf<String?>(null) }
+    var currentUser by remember { mutableStateOf<com.application.motium.domain.model.User?>(null) }
     var proAccountId by remember { mutableStateOf<String?>(null) }
     var networkProAccount by remember { mutableStateOf<ProAccount?>(null) }
     var networkFetchAttempted by remember { mutableStateOf(false) }
     var isLoadingProAccount by remember { mutableStateOf(true) }
+    var isCreatingProAccount by remember { mutableStateOf(false) }
+
+    // Check if user is ENTERPRISE role (allows purchase even without pro_account)
+    val isEnterpriseUser = currentUser?.role == com.application.motium.domain.model.UserRole.ENTERPRISE
 
     // Load user ID and fetch pro account from network immediately
     // Using scope instead of LaunchedEffect to survive recomposition
+    // FIX: Properly handle CancellationException to avoid crash during navigation
     LaunchedEffect(Unit) {
         val user = localUserRepository.getLoggedInUser()
         userId = user?.id
-        MotiumApplication.logger.i("ProTrialExpiredScreen: userId loaded = ${user?.id}", "ProTrialExpired")
+        currentUser = user
+        MotiumApplication.logger.i("ProTrialExpiredScreen: userId loaded = ${user?.id}, role = ${user?.role}", "ProTrialExpired")
 
         // Fetch from network immediately (don't wait for local cache check)
         if (user?.id != null && !networkFetchAttempted) {
@@ -93,9 +101,18 @@ fun ProTrialExpiredScreen(
                         }
                     },
                     onFailure = { e ->
+                        // FIX: Don't log CancellationException as error - it's expected during navigation
+                        if (e is CancellationException) {
+                            MotiumApplication.logger.d("ProTrialExpiredScreen: Network fetch cancelled (navigation)", "ProTrialExpired")
+                            return@LaunchedEffect
+                        }
                         MotiumApplication.logger.e("ProTrialExpiredScreen: Network fetch failed: ${e.message}", "ProTrialExpired", e)
                     }
                 )
+            } catch (e: CancellationException) {
+                // Expected during navigation - silently return
+                MotiumApplication.logger.d("ProTrialExpiredScreen: LaunchedEffect cancelled (navigation)", "ProTrialExpired")
+                return@LaunchedEffect
             } catch (e: Exception) {
                 MotiumApplication.logger.e("ProTrialExpiredScreen: Network fetch exception: ${e.message}", "ProTrialExpired", e)
             }
@@ -124,20 +141,60 @@ fun ProTrialExpiredScreen(
         .collectAsState(initial = emptyList())
 
     // Also fetch licenses from network if local is empty
+    // FIX: Use forceRefresh to persist licenses to Room DB so reactive Flow updates
     var networkLicenses by remember { mutableStateOf<List<License>>(emptyList()) }
-    LaunchedEffect(proAccountId, localLicenses) {
-        if (proAccountId != null && localLicenses.isEmpty()) {
+    var networkFetchLicensesAttempted by remember { mutableStateOf(false) }
+    LaunchedEffect(proAccountId, localLicenses, networkFetchLicensesAttempted) {
+        if (proAccountId != null && localLicenses.isEmpty() && !networkFetchLicensesAttempted) {
+            networkFetchLicensesAttempted = true
             try {
-                val result = supabaseLicenseRepo.getAvailableLicenses(proAccountId!!)
+                MotiumApplication.logger.i("ProTrialExpiredScreen: Local licenses empty, forcing refresh from network", "ProTrialExpired")
+                // Use forceRefresh to fetch AND persist to Room DB
+                // This will update the reactive localLicenses Flow automatically
+                val result = licenseCacheManager.forceRefresh(proAccountId!!)
                 result.fold(
                     onSuccess = { licenses ->
-                        networkLicenses = licenses
-                        MotiumApplication.logger.i("ProTrialExpiredScreen: Fetched ${licenses.size} licenses from network", "ProTrialExpired")
+                        // Also store in networkLicenses as immediate fallback
+                        // Filter: unassigned (linkedAccountId == null) AND status is active or available
+                        val available = licenses.filter {
+                            it.linkedAccountId == null &&
+                            (it.status == com.application.motium.domain.model.LicenseStatus.ACTIVE ||
+                             it.status == com.application.motium.domain.model.LicenseStatus.AVAILABLE)
+                        }
+                        networkLicenses = available
+                        MotiumApplication.logger.i("ProTrialExpiredScreen: forceRefresh successful, ${available.size} available licenses persisted to Room", "ProTrialExpired")
                     },
                     onFailure = { e ->
-                        MotiumApplication.logger.w("ProTrialExpiredScreen: License network fetch failed: ${e.message}", "ProTrialExpired")
+                        // Ignore CancellationException - expected when navigating away
+                        if (e is CancellationException) {
+                            MotiumApplication.logger.d("ProTrialExpiredScreen: forceRefresh cancelled (navigation)", "ProTrialExpired")
+                            return@LaunchedEffect
+                        }
+                        MotiumApplication.logger.w("ProTrialExpiredScreen: forceRefresh failed: ${e.message}", "ProTrialExpired")
+                        // Fallback: try direct network fetch without persistence
+                        try {
+                            val directResult = supabaseLicenseRepo.getAvailableLicenses(proAccountId!!)
+                            directResult.fold(
+                                onSuccess = { licenses ->
+                                    networkLicenses = licenses
+                                    MotiumApplication.logger.i("ProTrialExpiredScreen: Fallback direct fetch got ${licenses.size} licenses", "ProTrialExpired")
+                                },
+                                onFailure = { e2 ->
+                                    if (e2 !is CancellationException) {
+                                        MotiumApplication.logger.w("ProTrialExpiredScreen: Fallback also failed: ${e2.message}", "ProTrialExpired")
+                                    }
+                                }
+                            )
+                        } catch (e2: CancellationException) {
+                            // Expected during navigation - silently ignore
+                        } catch (e2: Exception) {
+                            MotiumApplication.logger.w("ProTrialExpiredScreen: Fallback exception: ${e2.message}", "ProTrialExpired")
+                        }
                     }
                 )
+            } catch (e: CancellationException) {
+                // Expected during navigation - silently ignore
+                MotiumApplication.logger.d("ProTrialExpiredScreen: License fetch cancelled (navigation)", "ProTrialExpired")
             } catch (e: Exception) {
                 MotiumApplication.logger.w("ProTrialExpiredScreen: License fetch exception: ${e.message}", "ProTrialExpired")
             }
@@ -185,6 +242,7 @@ fun ProTrialExpiredScreen(
             val uId = userId ?: return@LaunchedEffect
 
             // Retry loop to wait for webhook to create license
+            // FIX: Use forceRefresh to ensure licenses are persisted to Room
             var attempts = 0
             val maxAttempts = 5
             while (attempts < maxAttempts) {
@@ -192,23 +250,28 @@ fun ProTrialExpiredScreen(
                 attempts++
 
                 try {
-                    // Check for available licenses - Try network first, fallback to local DB
+                    MotiumApplication.logger.i("Post-payment attempt $attempts: forcing refresh from network", "ProTrialExpired")
+
+                    // Use forceRefresh to fetch AND persist to Room DB
+                    val refreshResult = licenseCacheManager.forceRefresh(pId)
                     var licenses: List<License>? = null
 
-                    // Try fetching from network
-                    try {
-                        licenses = supabaseLicenseRepo.getAvailableLicenses(pId).getOrNull()
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.w("Network check failed, checking local DB: ${e.message}", "ProTrialExpired")
-                    }
-
-                    // Fallback to local DB if network failed
-                    if (licenses == null) {
-                        licenses = licenseCacheManager.getAvailableLicensesOnce(pId)
-                        if (licenses.isNotEmpty()) {
-                            MotiumApplication.logger.i("Found ${licenses.size} licenses in local DB (offline mode)", "ProTrialExpired")
+                    refreshResult.fold(
+                        onSuccess = { allLicenses ->
+                            // Filter for available licenses (not assigned, status active or available)
+                            licenses = allLicenses.filter {
+                                it.linkedAccountId == null &&
+                                (it.status == com.application.motium.domain.model.LicenseStatus.ACTIVE ||
+                                 it.status == com.application.motium.domain.model.LicenseStatus.AVAILABLE)
+                            }
+                            MotiumApplication.logger.i("Post-payment: forceRefresh got ${licenses?.size ?: 0} available licenses", "ProTrialExpired")
+                        },
+                        onFailure = { e ->
+                            MotiumApplication.logger.w("Post-payment: forceRefresh failed, trying direct: ${e.message}", "ProTrialExpired")
+                            // Fallback to direct network fetch
+                            licenses = supabaseLicenseRepo.getAvailableLicenses(pId).getOrNull()
                         }
-                    }
+                    )
 
                     if (!licenses.isNullOrEmpty()) {
                         // Assign the first available license to owner
@@ -228,24 +291,25 @@ fun ProTrialExpiredScreen(
                 }
             }
 
-            // Final attempt - check both network and local DB
+            // Final attempt - force refresh one more time
             try {
+                MotiumApplication.logger.i("Post-payment final attempt: forcing refresh", "ProTrialExpired")
+                val refreshResult = licenseCacheManager.forceRefresh(pId)
                 var licenses: List<License>? = null
 
-                // Try network one last time
-                try {
-                    licenses = supabaseLicenseRepo.getAvailableLicenses(pId).getOrNull()
-                } catch (e: Exception) {
-                    MotiumApplication.logger.w("Final network attempt failed: ${e.message}", "ProTrialExpired")
-                }
-
-                // Fallback to local DB
-                if (licenses == null || licenses.isEmpty()) {
-                    licenses = licenseCacheManager.getAvailableLicensesOnce(pId)
-                    if (licenses.isNotEmpty()) {
-                        MotiumApplication.logger.i("Using local DB for final assignment attempt", "ProTrialExpired")
+                refreshResult.fold(
+                    onSuccess = { allLicenses ->
+                        licenses = allLicenses.filter {
+                            it.linkedAccountId == null &&
+                            (it.status == com.application.motium.domain.model.LicenseStatus.ACTIVE ||
+                             it.status == com.application.motium.domain.model.LicenseStatus.AVAILABLE)
+                        }
+                    },
+                    onFailure = { e ->
+                        MotiumApplication.logger.w("Final forceRefresh failed: ${e.message}", "ProTrialExpired")
+                        licenses = supabaseLicenseRepo.getAvailableLicenses(pId).getOrNull()
                     }
-                }
+                )
 
                 if (!licenses.isNullOrEmpty()) {
                     val assignResult = supabaseLicenseRepo.assignLicenseToOwner(pId, uId)
@@ -257,7 +321,10 @@ fun ProTrialExpiredScreen(
                         return@LaunchedEffect
                     }
                 }
-                errorMessage = "Licence creee. Veuillez vous reconnecter pour l'activer."
+                // FIX [P2]: Message post-paiement plus actionnable
+                errorMessage = "Licence achetée avec succès ! Fermez et rouvrez l'app pour l'activer, ou appuyez sur le bouton ci-dessous."
+                // Reset networkFetchLicensesAttempted to allow re-fetch
+                networkFetchLicensesAttempted = false
             } catch (e: Exception) {
                 errorMessage = "Erreur: ${e.message}"
             }
@@ -526,13 +593,49 @@ fun ProTrialExpiredScreen(
                     Button(
                         onClick = {
                             selectedPurchasePlan?.let { plan ->
-                                val isLifetime = plan == "lifetime"
-                                paymentPriceType = if (isLifetime) "pro_license_lifetime" else "pro_license_monthly"
-                                paymentAmountCents = subscriptionManager.getAmountCents(paymentPriceType, 1)
-                                showPaymentSheet = true
+                                scope.launch {
+                                    // If no pro_account exists but user is ENTERPRISE, create one automatically
+                                    var effectiveProAccountId = proAccountId
+                                    if (effectiveProAccountId == null && isEnterpriseUser && currentUser != null) {
+                                        isCreatingProAccount = true
+                                        MotiumApplication.logger.i("ProTrialExpiredScreen: Creating pro_account for ENTERPRISE user", "ProTrialExpired")
+                                        try {
+                                            val createResult = supabaseProAccountRepo.createProAccount(
+                                                userId = currentUser!!.id,
+                                                companyName = currentUser!!.name, // Use user name as default company name
+                                                billingEmail = currentUser!!.email
+                                            )
+                                            createResult.fold(
+                                                onSuccess = { dto ->
+                                                    effectiveProAccountId = dto.id
+                                                    proAccountId = dto.id
+                                                    networkProAccount = dto.toDomainModel()
+                                                    MotiumApplication.logger.i("ProTrialExpiredScreen: Pro account created: ${dto.id}", "ProTrialExpired")
+                                                },
+                                                onFailure = { e ->
+                                                    errorMessage = "Erreur création compte Pro: ${e.message}"
+                                                    MotiumApplication.logger.e("ProTrialExpiredScreen: Failed to create pro_account: ${e.message}", "ProTrialExpired", e)
+                                                }
+                                            )
+                                        } catch (e: Exception) {
+                                            errorMessage = "Erreur: ${e.message}"
+                                            MotiumApplication.logger.e("ProTrialExpiredScreen: Exception creating pro_account: ${e.message}", "ProTrialExpired", e)
+                                        } finally {
+                                            isCreatingProAccount = false
+                                        }
+                                    }
+
+                                    // Proceed with payment if we have a pro_account ID
+                                    if (effectiveProAccountId != null) {
+                                        val isLifetime = plan == "lifetime"
+                                        paymentPriceType = if (isLifetime) "pro_license_lifetime" else "pro_license_monthly"
+                                        paymentAmountCents = subscriptionManager.getAmountCents(paymentPriceType, 1)
+                                        showPaymentSheet = true
+                                    }
+                                }
                             }
                         },
-                        enabled = selectedPurchasePlan != null && !isRefreshing && proAccountId != null,
+                        enabled = selectedPurchasePlan != null && !isRefreshing && !isCreatingProAccount && isEnterpriseUser,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
@@ -541,7 +644,7 @@ fun ProTrialExpiredScreen(
                         ),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        if (isRefreshing) {
+                        if (isRefreshing || isCreatingProAccount) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(24.dp),
                                 color = Color.White,

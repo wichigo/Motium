@@ -171,7 +171,7 @@ object ChangeEntityMapper {
                 syncStatus = SyncStatus.SYNCED.name,
                 localUpdatedAt = System.currentTimeMillis(),
                 serverUpdatedAt = parseTimestamp(updatedAt),
-                version = 1
+                version = data.getInt("version") ?: 1
             )
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error mapping user: ${e.message}", TAG, e)

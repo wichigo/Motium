@@ -13,7 +13,9 @@ import kotlinx.datetime.Instant
     tableName = "vehicles",
     indices = [
         androidx.room.Index(value = ["syncStatus"]),
-        androidx.room.Index(value = ["userId"])
+        androidx.room.Index(value = ["userId"]),
+        // BATTERY OPTIMIZATION (2026-01): Index pour delta sync queries
+        androidx.room.Index(value = ["localUpdatedAt"])
     ]
 )
 data class VehicleEntity(

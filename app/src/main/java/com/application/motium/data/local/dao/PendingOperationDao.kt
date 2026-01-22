@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.application.motium.data.local.entities.PendingOperationEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -22,6 +23,31 @@ interface PendingOperationDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(operations: List<PendingOperationEntity>)
+
+    /**
+     * Atomically replace any existing operation for the same entity.
+     * This prevents race conditions between delete and insert operations.
+     *
+     * WHY @Transaction is critical here:
+     * Without @Transaction, if two coroutines call this method simultaneously for the same entity,
+     * the following race condition can occur:
+     *   Thread A: deleteByEntity(id, type)  -- deletes existing
+     *   Thread B: deleteByEntity(id, type)  -- no-op (already deleted)
+     *   Thread A: insert(operationA)        -- inserts A
+     *   Thread B: insert(operationB)        -- inserts B (DUPLICATE!)
+     *
+     * With @Transaction, Room wraps delete+insert in a single database transaction,
+     * ensuring atomicity and preventing duplicate operations in the sync queue.
+     *
+     * @param entityId ID of the entity
+     * @param entityType Type of the entity
+     * @param operation New operation to insert
+     */
+    @Transaction
+    suspend fun replaceOperation(entityId: String, entityType: String, operation: PendingOperationEntity) {
+        deleteByEntity(entityId, entityType)
+        insert(operation)
+    }
 
     // ==================== DELETE ====================
 
@@ -157,4 +183,10 @@ interface PendingOperationDao {
      */
     @Query("SELECT COUNT(*) FROM pending_operations WHERE retryCount >= 5")
     suspend fun getFailedCount(): Int
+
+    /**
+     * Get count of failed operations as a Flow for reactive UI updates.
+     */
+    @Query("SELECT COUNT(*) FROM pending_operations WHERE retryCount >= 5")
+    fun getFailedCountFlow(): kotlinx.coroutines.flow.Flow<Int>
 }

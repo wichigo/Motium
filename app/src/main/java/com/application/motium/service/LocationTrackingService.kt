@@ -22,6 +22,7 @@ import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.google.android.gms.location.*
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
 
 class LocationTrackingService : Service() {
 
@@ -29,15 +30,14 @@ class LocationTrackingService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "LocationTrackingChannel"
 
-        // Configuration GPS avec deux modes pour économie batterie
-        // Mode STANDBY (pas de trajet): 1 appel GPS par minute pour économiser batterie
-        private const val STANDBY_UPDATE_INTERVAL = 60000L // 60 secondes (1 minute)
-        private const val STANDBY_FASTEST_INTERVAL = 60000L // 60 secondes
+        // Configuration GPS - fréquence adaptative selon la vitesse
+        // BATTERY OPTIMIZATION: Pas de GPS en mode STANDBY - le GPS démarre uniquement quand
+        // ActivityRecognition détecte un mouvement (via ACTION_START_BUFFERING)
 
         // Mode TRIP (trajet en cours): fréquence adaptative selon la vitesse
         // Mode BASSE VITESSE (ville, embouteillage < 40 km/h): haute fréquence pour précision tracé
         private const val LOW_SPEED_THRESHOLD_KMH = 40f // Seuil basse vitesse
-        private const val LOW_SPEED_UPDATE_INTERVAL = 4000L // 4 secondes
+        private const val LOW_SPEED_UPDATE_INTERVAL = 5000L // 5 secondes (optimisé batterie, était 4s)
         private const val LOW_SPEED_FASTEST_INTERVAL = 2000L // 2 secondes minimum
         private const val LOW_SPEED_MIN_DISPLACEMENT = 5f // 5 mètres
 
@@ -386,6 +386,186 @@ class LocationTrackingService : Service() {
         var totalDistance: Double = 0.0
     )
 
+    // ==================== GPS PERSISTENCE (Bug #3 fix) ====================
+    // Persist currentTrip to survive process death
+
+    private val tripPersistenceFile: java.io.File by lazy {
+        java.io.File(filesDir, "current_trip_backup.json")
+    }
+
+    private val gpsBufferPersistenceFile: java.io.File by lazy {
+        java.io.File(filesDir, "gps_buffer_backup.json")
+    }
+
+    private val jsonSerializer = kotlinx.serialization.json.Json {
+        ignoreUnknownKeys = true
+        prettyPrint = false
+    }
+
+    // Debounce persistence to avoid excessive I/O
+    private var lastPersistTime: Long = 0
+    private val PERSIST_DEBOUNCE_MS = 10000L // Persist every 10 seconds max
+
+    /**
+     * Persist currentTrip to disk for crash recovery.
+     * Called periodically during active trips.
+     */
+    private fun persistCurrentTrip() {
+        val trip = currentTrip ?: return
+        val now = System.currentTimeMillis()
+
+        // Debounce to avoid excessive I/O
+        if (now - lastPersistTime < PERSIST_DEBOUNCE_MS) return
+        lastPersistTime = now
+
+        try {
+            // Serialize trip data
+            val tripJson = kotlinx.serialization.json.buildJsonObject {
+                put("id", kotlinx.serialization.json.JsonPrimitive(trip.id))
+                put("startTime", kotlinx.serialization.json.JsonPrimitive(trip.startTime))
+                trip.endTime?.let { put("endTime", kotlinx.serialization.json.JsonPrimitive(it)) }
+                put("totalDistance", kotlinx.serialization.json.JsonPrimitive(trip.totalDistance))
+                put("tripState", kotlinx.serialization.json.JsonPrimitive(tripState.name))
+                put("locations", kotlinx.serialization.json.buildJsonArray {
+                    trip.locations.forEach { loc ->
+                        add(kotlinx.serialization.json.buildJsonObject {
+                            put("latitude", kotlinx.serialization.json.JsonPrimitive(loc.latitude))
+                            put("longitude", kotlinx.serialization.json.JsonPrimitive(loc.longitude))
+                            put("timestamp", kotlinx.serialization.json.JsonPrimitive(loc.timestamp))
+                            put("accuracy", kotlinx.serialization.json.JsonPrimitive(loc.accuracy))
+                            put("speed", kotlinx.serialization.json.JsonPrimitive(loc.speed))
+                            put("bearing", kotlinx.serialization.json.JsonPrimitive(loc.bearing))
+                            put("altitude", kotlinx.serialization.json.JsonPrimitive(loc.altitude))
+                        })
+                    }
+                })
+            }
+
+            tripPersistenceFile.writeText(tripJson.toString())
+            MotiumApplication.logger.d(
+                "💾 Persisted trip ${trip.id} with ${trip.locations.size} locations (${String.format("%.0f", trip.totalDistance)}m)",
+                "GPSPersistence"
+            )
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to persist trip: ${e.message}", "GPSPersistence", e)
+        }
+    }
+
+    /**
+     * Persist gpsBuffer for pre-trip data recovery.
+     */
+    private fun persistGpsBuffer() {
+        if (gpsBuffer.isEmpty()) return
+
+        try {
+            val bufferJson = kotlinx.serialization.json.buildJsonArray {
+                gpsBuffer.forEach { loc ->
+                    add(kotlinx.serialization.json.buildJsonObject {
+                        put("latitude", kotlinx.serialization.json.JsonPrimitive(loc.latitude))
+                        put("longitude", kotlinx.serialization.json.JsonPrimitive(loc.longitude))
+                        put("timestamp", kotlinx.serialization.json.JsonPrimitive(loc.timestamp))
+                        put("accuracy", kotlinx.serialization.json.JsonPrimitive(loc.accuracy))
+                        put("speed", kotlinx.serialization.json.JsonPrimitive(loc.speed))
+                        put("bearing", kotlinx.serialization.json.JsonPrimitive(loc.bearing))
+                        put("altitude", kotlinx.serialization.json.JsonPrimitive(loc.altitude))
+                    })
+                }
+            }
+
+            gpsBufferPersistenceFile.writeText(bufferJson.toString())
+            MotiumApplication.logger.d("💾 Persisted GPS buffer with ${gpsBuffer.size} locations", "GPSPersistence")
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to persist GPS buffer: ${e.message}", "GPSPersistence", e)
+        }
+    }
+
+    /**
+     * Restore currentTrip from disk after process restart.
+     * Returns true if a trip was restored.
+     */
+    private fun restoreCurrentTrip(): Boolean {
+        if (!tripPersistenceFile.exists()) return false
+
+        try {
+            val content = tripPersistenceFile.readText()
+            if (content.isBlank()) return false
+
+            val jsonElement = kotlinx.serialization.json.Json.parseToJsonElement(content)
+            val json = jsonElement.jsonObject
+
+            val id = json["id"]?.jsonPrimitive?.content ?: return false
+            val startTime = json["startTime"]?.jsonPrimitive?.long ?: return false
+            val endTime = json["endTime"]?.jsonPrimitive?.longOrNull
+            val totalDistance = json["totalDistance"]?.jsonPrimitive?.double ?: 0.0
+            val savedState = json["tripState"]?.jsonPrimitive?.content
+
+            val locations = mutableListOf<TripLocation>()
+            json["locations"]?.jsonArray?.forEach { locJson ->
+                val locObj = locJson.jsonObject
+                locations.add(TripLocation(
+                    latitude = locObj["latitude"]?.jsonPrimitive?.double ?: 0.0,
+                    longitude = locObj["longitude"]?.jsonPrimitive?.double ?: 0.0,
+                    timestamp = locObj["timestamp"]?.jsonPrimitive?.long ?: 0L,
+                    accuracy = locObj["accuracy"]?.jsonPrimitive?.float ?: 0f,
+                    speed = locObj["speed"]?.jsonPrimitive?.float ?: 0f,
+                    bearing = locObj["bearing"]?.jsonPrimitive?.float ?: 0f,
+                    altitude = locObj["altitude"]?.jsonPrimitive?.double ?: 0.0
+                ))
+            }
+
+            // Don't restore trips that are too old (> 24 hours)
+            val maxAge = 24 * 60 * 60 * 1000L
+            if (System.currentTimeMillis() - startTime > maxAge) {
+                MotiumApplication.logger.w("Discarding stale persisted trip (> 24h old)", "GPSPersistence")
+                clearPersistedTrip()
+                return false
+            }
+
+            currentTrip = TripData(
+                id = id,
+                startTime = startTime,
+                endTime = endTime,
+                locations = locations,
+                totalDistance = totalDistance
+            )
+
+            // Restore tripState if valid
+            savedState?.let { stateName ->
+                try {
+                    tripState = TripState.valueOf(stateName)
+                } catch (e: IllegalArgumentException) {
+                    tripState = TripState.TRIP_ACTIVE // Default to active if corrupted
+                }
+            }
+
+            MotiumApplication.logger.i(
+                "🔄 RESTORED trip ${id} with ${locations.size} locations (${String.format("%.0f", totalDistance)}m, state: $tripState)",
+                "GPSPersistence"
+            )
+            return true
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to restore trip: ${e.message}", "GPSPersistence", e)
+            clearPersistedTrip()
+            return false
+        }
+    }
+
+    /**
+     * Clear persisted trip data (called after successful save or trip cancellation).
+     */
+    private fun clearPersistedTrip() {
+        try {
+            if (tripPersistenceFile.exists()) tripPersistenceFile.delete()
+            if (gpsBufferPersistenceFile.exists()) gpsBufferPersistenceFile.delete()
+            lastPersistTime = 0
+            MotiumApplication.logger.d("🗑️ Cleared persisted trip data", "GPSPersistence")
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Failed to clear persisted trip: ${e.message}", "GPSPersistence", e)
+        }
+    }
+
+    // ==================== END GPS PERSISTENCE ====================
+
     override fun onCreate() {
         super.onCreate()
         MotiumApplication.logger.i("📍 LocationTrackingService created - GPS collection only during trips", "LocationService")
@@ -408,6 +588,13 @@ class LocationTrackingService : Service() {
         createNotificationChannel()
         createLocationRequest()
         createLocationCallback()
+
+        // BUG FIX #3: Restore trip data after process death
+        if (restoreCurrentTrip()) {
+            MotiumApplication.logger.i("🔄 Trip recovered from persistence - resuming tracking", "LocationService")
+            // Trip was restored - resume GPS tracking
+            startLocationUpdates()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1267,49 +1454,41 @@ class LocationTrackingService : Service() {
     }
 
     private fun createLocationRequest() {
-        // Démarrer en mode STANDBY (économie batterie)
-        locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, STANDBY_UPDATE_INTERVAL)
+        // BATTERY OPTIMIZATION: Initialise avec LOW_SPEED pour être prêt quand un trajet démarre
+        // Le GPS n'est PAS démarré ici - il ne démarre que via startLocationUpdates()
+        // qui est appelé uniquement dans ACTION_START_BUFFERING/ACTION_START_TRIP
+        locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOW_SPEED_UPDATE_INTERVAL)
             .setWaitForAccurateLocation(false)
-            .setMinUpdateIntervalMillis(STANDBY_FASTEST_INTERVAL)
-            .setMaxUpdateDelayMillis(STANDBY_UPDATE_INTERVAL * 2)
+            .setMinUpdateIntervalMillis(LOW_SPEED_FASTEST_INTERVAL)
+            .setMaxUpdateDelayMillis(LOW_SPEED_UPDATE_INTERVAL * 2)
+            .setMinUpdateDistanceMeters(LOW_SPEED_MIN_DISPLACEMENT)
             .build()
 
-        MotiumApplication.logger.i("GPS initialized in STANDBY mode (1 call/minute)", "LocationService")
+        MotiumApplication.logger.i("GPS LocationRequest initialized (not started - waiting for activity detection)", "LocationService")
     }
 
     /**
-     * Change la fréquence GPS selon le mode (STANDBY vs TRIP)
-     * En mode TRIP, utilise par défaut la fréquence basse vitesse (haute précision)
+     * Configure la fréquence GPS pour le mode TRIP (haute précision au départ)
+     * BATTERY OPTIMIZATION: Cette fonction n'est appelée qu'en mode TRIP actif
      */
     private fun updateGPSFrequency(tripMode: Boolean) {
         if (!isTracking) return
 
-        if (tripMode) {
-            // En mode trip, réinitialiser le mode vitesse pour forcer la détection
-            currentSpeedMode = null
-            // Démarrer en mode LOW_SPEED par défaut pour capturer précisément le départ
-            applyGPSFrequency(
-                interval = LOW_SPEED_UPDATE_INTERVAL,
-                fastestInterval = LOW_SPEED_FASTEST_INTERVAL,
-                minDisplacement = LOW_SPEED_MIN_DISPLACEMENT,
-                modeName = "TRIP LOW_SPEED (4s, 5m)"
-            )
-        } else {
-            // Mode STANDBY
-            currentSpeedMode = null
-            applyGPSFrequency(
-                interval = STANDBY_UPDATE_INTERVAL,
-                fastestInterval = STANDBY_FASTEST_INTERVAL,
-                minDisplacement = MIN_DISPLACEMENT,
-                modeName = "STANDBY (1min)"
-            )
-        }
+        // En mode trip, réinitialiser le mode vitesse pour forcer la détection
+        currentSpeedMode = null
+        // Démarrer en mode LOW_SPEED par défaut pour capturer précisément le départ
+        applyGPSFrequency(
+            interval = LOW_SPEED_UPDATE_INTERVAL,
+            fastestInterval = LOW_SPEED_FASTEST_INTERVAL,
+            minDisplacement = LOW_SPEED_MIN_DISPLACEMENT,
+            modeName = "TRIP LOW_SPEED (5s, 5m)"
+        )
     }
 
     /**
      * Adapte la fréquence GPS selon la vitesse actuelle (pendant un trajet actif)
-     * - Basse vitesse (<40 km/h): 4s intervalle, 5m déplacement → précision en ville
-     * - Haute vitesse (>40 km/h): 10s intervalle, 15m déplacement → économie batterie
+     * - Basse vitesse (<40 km/h): 5s intervalle, 5m déplacement, HIGH_ACCURACY → précision en ville
+     * - Haute vitesse (>40 km/h): 10s intervalle, 15m déplacement, BALANCED_POWER → économie batterie
      */
     private fun updateGPSFrequencyBasedOnSpeed(currentSpeedKmh: Float) {
         if (!isTracking) return
@@ -1327,28 +1506,33 @@ class LocationTrackingService : Service() {
                 interval = LOW_SPEED_UPDATE_INTERVAL,
                 fastestInterval = LOW_SPEED_FASTEST_INTERVAL,
                 minDisplacement = LOW_SPEED_MIN_DISPLACEMENT,
-                modeName = "TRIP LOW_SPEED (4s, 5m) - ${currentSpeedKmh.toInt()} km/h"
+                modeName = "TRIP LOW_SPEED (5s, 5m) - ${currentSpeedKmh.toInt()} km/h"
             )
         } else {
             applyGPSFrequency(
                 interval = HIGH_SPEED_UPDATE_INTERVAL,
                 fastestInterval = HIGH_SPEED_FASTEST_INTERVAL,
                 minDisplacement = HIGH_SPEED_MIN_DISPLACEMENT,
-                modeName = "TRIP HIGH_SPEED (10s, 15m) - ${currentSpeedKmh.toInt()} km/h"
+                modeName = "TRIP HIGH_SPEED (10s, 15m) - ${currentSpeedKmh.toInt()} km/h",
+                useBalancedPower = true // BATTERY OPTIMIZATION: Moins de précision nécessaire à haute vitesse
             )
         }
     }
 
     /**
      * Applique la configuration GPS spécifiée
+     * @param useBalancedPower Si true, utilise PRIORITY_BALANCED_POWER_ACCURACY (économie batterie)
      */
     private fun applyGPSFrequency(
         interval: Long,
         fastestInterval: Long,
         minDisplacement: Float,
-        modeName: String
+        modeName: String,
+        useBalancedPower: Boolean = false
     ) {
-        locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
+        // BATTERY OPTIMIZATION: Utiliser BALANCED_POWER en haute vitesse (routes droites, moins de précision nécessaire)
+        val priority = if (useBalancedPower) Priority.PRIORITY_BALANCED_POWER_ACCURACY else Priority.PRIORITY_HIGH_ACCURACY
+        locationRequest = LocationRequest.Builder(priority, interval)
             .setWaitForAccurateLocation(false)
             .setMinUpdateIntervalMillis(fastestInterval)
             .setMaxUpdateDelayMillis(interval * 2)
@@ -1523,7 +1707,10 @@ class LocationTrackingService : Service() {
             latitude = location.latitude,
             longitude = location.longitude,
             accuracy = location.accuracy,
-            timestamp = location.time
+            timestamp = location.time,
+            speed = location.speed,
+            bearing = location.bearing,
+            altitude = location.altitude
         )
 
         // Si on collecte les points d'arrivée, ajouter aux candidats
@@ -1870,7 +2057,10 @@ class LocationTrackingService : Service() {
             latitude = weightedLat / totalWeight,
             longitude = weightedLng / totalWeight,
             accuracy = minAccuracy, // Utiliser la meilleure précision pour représenter le point composite
-            timestamp = points.maxOf { it.timestamp }
+            timestamp = points.maxOf { it.timestamp },
+            speed = points.map { it.speed }.average().toFloat(),
+            bearing = points.lastOrNull()?.bearing ?: 0f,
+            altitude = points.map { it.altitude }.average()
         )
     }
 
@@ -2003,7 +2193,10 @@ class LocationTrackingService : Service() {
             latitude = location.latitude,
             longitude = location.longitude,
             accuracy = location.accuracy,
-            timestamp = location.time
+            timestamp = location.time,
+            speed = location.speed,
+            bearing = location.bearing,
+            altitude = location.altitude
         )
 
         // Phase 1: Collecter les points de départ candidats (première minute)
@@ -2030,6 +2223,9 @@ class LocationTrackingService : Service() {
         }
 
         trip.locations.add(tripLocation)
+
+        // BUG FIX #3: Persist trip periodically for crash recovery
+        persistCurrentTrip()
 
         // Log toutes les 10 localisations pour éviter le spam
         if (trip.locations.size % 10 == 0) {
@@ -2077,6 +2273,8 @@ class LocationTrackingService : Service() {
                     "points=${trip.locations.size} (min: 3)",
                     "TripTracker"
                 )
+                // BUG FIX #3: Clear persisted trip data when trip is rejected
+                clearPersistedTrip()
             }
         }
 
@@ -2179,8 +2377,14 @@ class LocationTrackingService : Service() {
                     MotiumApplication.logger.e("Error in trip health check: ${e.message}", "TripHealthCheck", e)
                 }
 
-                // Planifier la prochaine vérification
-                tripHealthCheckHandler.postDelayed(this, TRIP_HEALTH_CHECK_INTERVAL_MS)
+                // BATTERY OPTIMIZATION (2026-01): Planifier la prochaine vérification UNIQUEMENT si encore en mode actif
+                // Ceci évite que le handler continue de wakeup le CPU après une transition vers STANDBY/PAUSED
+                if (tripState == TripState.TRIP_ACTIVE || tripState == TripState.BUFFERING) {
+                    tripHealthCheckHandler.postDelayed(this, TRIP_HEALTH_CHECK_INTERVAL_MS)
+                } else {
+                    MotiumApplication.logger.i("Trip health check auto-stopped (state=$tripState is not active)", "TripHealthCheck")
+                    tripHealthCheckRunnable = null
+                }
             }
         }
 
@@ -2282,106 +2486,31 @@ class LocationTrackingService : Service() {
         }
     }
 
+    /**
+     * Save trip to database using a two-phase approach for resilience:
+     * 1. IMMEDIATE SAVE: Save trip with minimal data (no geocoding) - survives service kill
+     * 2. ASYNC ENRICHMENT: Geocode addresses and update trip - best-effort
+     *
+     * This ensures trips are NEVER lost due to service cancellation during geocoding.
+     */
+    @OptIn(DelicateCoroutinesApi::class)
     private fun saveTripToDatabase(trip: TripData) {
-        serviceScope.launch {
+        // PHASE 1: IMMEDIATE SAVE - Use GlobalScope to survive service destruction
+        // This is critical: serviceScope.launch would be cancelled if service is killed
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                // CRASH FIX: Check if service is still active before long-running operations
-                if (!isActive) {
-                    MotiumApplication.logger.w("Service scope cancelled, aborting trip save", "DatabaseSave")
-                    return@launch
-                }
+                MotiumApplication.logger.i(
+                    "🔒 Phase 1: Immediate trip save (resilient) - ${trip.id}",
+                    "DatabaseSave"
+                )
 
-                // Géocoder les adresses de départ et d'arrivée avec les points précis sélectionnés
-                val nominatimService = com.application.motium.data.geocoding.NominatimService.getInstance()
+                // Determine trip type synchronously (fast, local operation)
+                val tripType = determineTripTypeSync()
 
-                var startAddress: String? = null
-                var endAddress: String? = null
+                // Get current default vehicle (cached, fast)
+                val currentDefaultVehicleId = defaultVehicleId
 
-                // Sélectionner le meilleur point de départ avec anchoring delay et clustering
-                val bestStartPoint = selectBestStartPoint()
-                bestStartPoint?.let { startPoint ->
-                    try {
-                        startAddress = nominatimService.reverseGeocode(startPoint.latitude, startPoint.longitude)
-                        MotiumApplication.logger.i(
-                            "📍 Start address geocoded (precision optimized): $startAddress " +
-                            "at ${String.format("%.5f", startPoint.latitude)}, ${String.format("%.5f", startPoint.longitude)} " +
-                            "(accuracy: ${startPoint.accuracy}m)",
-                            "Geocoding"
-                        )
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.w(
-                            "Failed to geocode start address: ${e.message}",
-                            "Geocoding"
-                        )
-                    }
-                } ?: run {
-                    // Fallback: utiliser la moyenne des premiers points
-                    getAverageLocation(trip.locations, fromStart = true)?.let { (avgLat, avgLng) ->
-                        try {
-                            startAddress = nominatimService.reverseGeocode(avgLat, avgLng)
-                            MotiumApplication.logger.i(
-                                "📍 Start address geocoded (fallback avg): $startAddress",
-                                "Geocoding"
-                            )
-                        } catch (e: Exception) {
-                            MotiumApplication.logger.w("Failed to geocode start address: ${e.message}", "Geocoding")
-                        }
-                    }
-                }
-
-                // Sélectionner le meilleur point d'arrivée avec clustering et filtrage
-                val bestEndPoint = selectBestEndPoint()
-                bestEndPoint?.let { endPoint ->
-                    try {
-                        endAddress = nominatimService.reverseGeocode(endPoint.latitude, endPoint.longitude)
-                        MotiumApplication.logger.i(
-                            "📍 End address geocoded (precision optimized): $endAddress " +
-                            "at ${String.format("%.5f", endPoint.latitude)}, ${String.format("%.5f", endPoint.longitude)} " +
-                            "(accuracy: ${endPoint.accuracy}m)",
-                            "Geocoding"
-                        )
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.w(
-                            "Failed to geocode end address: ${e.message}",
-                            "Geocoding"
-                        )
-                    }
-                } ?: run {
-                    // Fallback: utiliser la moyenne des derniers points
-                    getAverageLocation(trip.locations, fromStart = false)?.let { (avgLat, avgLng) ->
-                        try {
-                            endAddress = nominatimService.reverseGeocode(avgLat, avgLng)
-                            MotiumApplication.logger.i(
-                                "📍 End address geocoded (fallback avg): $endAddress",
-                                "Geocoding"
-                            )
-                        } catch (e: Exception) {
-                            MotiumApplication.logger.w("Failed to geocode end address: ${e.message}", "Geocoding")
-                        }
-                    }
-                }
-
-                // Déterminer le type de trajet (PRO/PERSO) selon les horaires de travail
-                val tripType = determineTripType()
-
-                // Recharger le véhicule par défaut au cas où il a changé pendant le trajet
-                val currentDefaultVehicleId = currentUserId?.let { userId ->
-                    try {
-                        vehicleRepository.getDefaultVehicle(userId)?.id.also { vehicleId ->
-                            if (vehicleId != null && vehicleId != defaultVehicleId) {
-                                defaultVehicleId = vehicleId
-                                MotiumApplication.logger.i(
-                                    "🔄 Default vehicle updated before saving trip: $vehicleId",
-                                    "AutoTracking"
-                                )
-                            }
-                        }
-                    } catch (e: Exception) {
-                        MotiumApplication.logger.w("Failed to reload default vehicle: ${e.message}", "AutoTracking")
-                        defaultVehicleId
-                    }
-                } ?: defaultVehicleId
-
+                // Create trip with minimal data - NO NETWORK CALLS HERE
                 val tripToSave = Trip(
                     id = trip.id,
                     startTime = trip.startTime,
@@ -2389,41 +2518,155 @@ class LocationTrackingService : Service() {
                     locations = trip.locations,
                     totalDistance = trip.totalDistance,
                     isValidated = false,
-                    vehicleId = currentDefaultVehicleId,  // Véhicule par défaut actuel de l'utilisateur
-                    tripType = tripType,            // PRO ou PERSO selon horaires de travail
-                    startAddress = startAddress,
-                    endAddress = endAddress
+                    vehicleId = currentDefaultVehicleId,
+                    tripType = tripType,
+                    startAddress = null,  // Will be enriched in Phase 2
+                    endAddress = null     // Will be enriched in Phase 2
                 )
 
-                // Save trip with subscription access check
+                // CRITICAL: Save immediately with access check
                 val tripSaved = tripRepository.saveTripWithAccessCheck(tripToSave)
 
                 if (tripSaved) {
                     MotiumApplication.logger.i(
-                        "✅ Trip saved: ${trip.locations.size} points, " +
-                        "${String.format("%.2f", trip.totalDistance / 1000)} km, " +
-                        "vehicleId=${currentDefaultVehicleId ?: "none"}, " +
-                        "type=$tripType, " +
-                        "start: ${startAddress ?: "unknown"}, " +
-                        "end: ${endAddress ?: "unknown"}",
+                        "✅ Phase 1 SUCCESS: Trip saved immediately - ${trip.id}, " +
+                        "${trip.locations.size} points, ${String.format("%.2f", trip.totalDistance / 1000)} km",
                         "DatabaseSave"
                     )
-                    // Show "Trajet sauvegardé" notification (resets to standby after 3 seconds)
+
+                    // BUG FIX #3: Clear persisted trip data after successful save
+                    clearPersistedTrip()
+
+                    // Show notification
                     ActivityRecognitionService.updateNotificationState(TripNotificationState.TripSaved)
+
+                    // PHASE 2: ASYNC ENRICHMENT - Best effort geocoding
+                    enrichTripWithGeocoding(trip.id, trip.locations)
                 } else {
                     MotiumApplication.logger.w(
                         "⚠️ Trip NOT saved - subscription expired or no valid access. " +
                         "Trip: ${trip.locations.size} points, ${String.format("%.2f", trip.totalDistance / 1000)} km",
                         "DatabaseSave"
                     )
-                    // Show notification that trip was not saved due to no valid access
                     showTripLimitNotification()
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e(
-                    "Error saving trip: ${e.message}",
+                    "❌ Phase 1 FAILED: Error saving trip: ${e.message}",
                     "DatabaseSave",
                     e
+                )
+            }
+        }
+    }
+
+    /**
+     * Synchronous trip type determination using cached work schedules.
+     * Falls back to PERSONAL if anything fails - never blocks.
+     */
+    private fun determineTripTypeSync(): String {
+        return try {
+            // Use cached tracking mode if available
+            val trackingMode = tripRepository.getTrackingMode()
+            when (trackingMode) {
+                com.application.motium.domain.model.TrackingMode.ALWAYS -> "PROFESSIONAL"
+                com.application.motium.domain.model.TrackingMode.WORK_HOURS_ONLY -> {
+                    // Check cached work hours (fast, no DB call)
+                    val calendar = java.util.Calendar.getInstance()
+                    val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+                    // Simple heuristic: 8h-19h weekdays = PRO
+                    val dayOfWeek = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+                    val isWeekday = dayOfWeek != java.util.Calendar.SATURDAY && dayOfWeek != java.util.Calendar.SUNDAY
+                    val isWorkHours = hour in 8..18
+                    if (isWeekday && isWorkHours) "PROFESSIONAL" else "PERSONAL"
+                }
+                else -> "PERSONAL"
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.w("determineTripTypeSync failed, defaulting to PERSONAL: ${e.message}", "AutoTracking")
+            "PERSONAL"
+        }
+    }
+
+    /**
+     * Phase 2: Enrich saved trip with geocoded addresses.
+     * This runs asynchronously AFTER the trip is safely saved.
+     * If it fails, the trip still exists with null addresses.
+     */
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun enrichTripWithGeocoding(tripId: String, locations: List<TripLocation>) {
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                MotiumApplication.logger.i("🔄 Phase 2: Enriching trip with geocoding - $tripId", "Geocoding")
+
+                val nominatimService = com.application.motium.data.geocoding.NominatimService.getInstance()
+                var startAddress: String? = null
+                var endAddress: String? = null
+
+                // Geocode start address
+                val bestStartPoint = selectBestStartPoint()
+                bestStartPoint?.let { startPoint ->
+                    try {
+                        startAddress = nominatimService.reverseGeocode(startPoint.latitude, startPoint.longitude)
+                        MotiumApplication.logger.i(
+                            "📍 Start address geocoded: $startAddress",
+                            "Geocoding"
+                        )
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("Failed to geocode start address: ${e.message}", "Geocoding")
+                    }
+                } ?: run {
+                    getAverageLocation(locations, fromStart = true)?.let { (avgLat, avgLng) ->
+                        try {
+                            startAddress = nominatimService.reverseGeocode(avgLat, avgLng)
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.w("Failed to geocode start address (fallback): ${e.message}", "Geocoding")
+                        }
+                    }
+                }
+
+                // Geocode end address
+                val bestEndPoint = selectBestEndPoint()
+                bestEndPoint?.let { endPoint ->
+                    try {
+                        endAddress = nominatimService.reverseGeocode(endPoint.latitude, endPoint.longitude)
+                        MotiumApplication.logger.i(
+                            "📍 End address geocoded: $endAddress",
+                            "Geocoding"
+                        )
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.w("Failed to geocode end address: ${e.message}", "Geocoding")
+                    }
+                } ?: run {
+                    getAverageLocation(locations, fromStart = false)?.let { (avgLat, avgLng) ->
+                        try {
+                            endAddress = nominatimService.reverseGeocode(avgLat, avgLng)
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.w("Failed to geocode end address (fallback): ${e.message}", "Geocoding")
+                        }
+                    }
+                }
+
+                // Update trip with addresses if we got any
+                if (startAddress != null || endAddress != null) {
+                    val existingTrip = tripRepository.getTripById(tripId)
+                    if (existingTrip != null) {
+                        val enrichedTrip = existingTrip.copy(
+                            startAddress = startAddress ?: existingTrip.startAddress,
+                            endAddress = endAddress ?: existingTrip.endAddress
+                        )
+                        tripRepository.saveTrip(enrichedTrip)
+                        MotiumApplication.logger.i(
+                            "✅ Phase 2 SUCCESS: Trip enriched with addresses - $tripId",
+                            "Geocoding"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                // Phase 2 failure is NOT critical - trip is already saved
+                MotiumApplication.logger.w(
+                    "⚠️ Phase 2 failed (non-critical): ${e.message} - Trip $tripId still saved without addresses",
+                    "Geocoding"
                 )
             }
         }
