@@ -5,7 +5,6 @@ import android.os.SystemClock
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.application.motium.MotiumApplication
-import kotlinx.datetime.Instant
 
 /**
  * Provides trusted time validation to prevent clock manipulation attacks.
@@ -137,13 +136,6 @@ class TrustedTimeProvider private constructor(private val context: Context) {
     }
 
     /**
-     * Update server time from Instant
-     */
-    fun updateServerTime(serverTime: Instant) {
-        updateServerTime(serverTime.toEpochMilliseconds())
-    }
-
-    /**
      * Get the current time, validated against the trusted anchor.
      *
      * @return Validated time in milliseconds, or null if clock manipulation is suspected
@@ -236,54 +228,12 @@ class TrustedTimeProvider private constructor(private val context: Context) {
     }
 
     /**
-     * Get trusted time as Instant
-     */
-    fun getTrustedTime(): Instant? {
-        return getTrustedTimeMs()?.let { Instant.fromEpochMilliseconds(it) }
-    }
-
-    /**
      * Check if the current system time appears to be trustworthy.
      *
      * @return true if time is trusted, false if manipulation suspected
      */
     fun isTimeTrusted(): Boolean {
         return getTrustedTimeMs() != null
-    }
-
-    /**
-     * Get the best available current time - trusted if possible, system time as fallback.
-     *
-     * ⚠️ SECURITY WARNING: This method falls back to System.currentTimeMillis() which
-     * can be manipulated by the user. DO NOT use this for security-sensitive operations
-     * like expiration checks. Use [isExpiredFailSecure] or [getTrustedTimeMs] instead.
-     *
-     * Only use this for non-security-critical operations like:
-     * - Displaying timestamps to the user
-     * - Logging
-     * - Analytics
-     *
-     * @return Current time in milliseconds (trusted or system)
-     */
-    @Deprecated(
-        message = "Unsafe for security checks - falls back to manipulable system time. " +
-                "Use getTrustedTimeMs() with null check or isExpiredFailSecure() instead.",
-        replaceWith = ReplaceWith("getTrustedTimeMs()"),
-        level = DeprecationLevel.WARNING
-    )
-    fun getBestAvailableTimeMs(): Long {
-        return getTrustedTimeMs() ?: System.currentTimeMillis()
-    }
-
-    /**
-     * Check if an expiration date has passed, using trusted time.
-     *
-     * @param expirationMs Expiration time in milliseconds
-     * @return true if expired AND time is trusted, false if not expired, null if time untrusted
-     */
-    fun isExpired(expirationMs: Long): Boolean? {
-        val trustedTime = getTrustedTimeMs() ?: return null
-        return trustedTime > expirationMs
     }
 
     /**

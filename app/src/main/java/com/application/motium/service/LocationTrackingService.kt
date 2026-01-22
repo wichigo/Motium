@@ -273,24 +273,6 @@ class LocationTrackingService : Service() {
                 "LocationService"
             )
         }
-
-        // LEGACY: Compatibilité avec ancien code
-
-        /**
-         * @deprecated Utiliser confirmVehicle() à la place
-         */
-        @Deprecated("Use confirmVehicle() instead")
-        fun notifyVehicleMovementConfirmed(context: Context) {
-            confirmVehicle(context)
-        }
-
-        /**
-         * @deprecated Utiliser endTrip() à la place
-         */
-        @Deprecated("Use endTrip() instead")
-        fun notifyVehicleMovementEnded(context: Context) {
-            endTrip(context)
-        }
     }
 
     /**
@@ -339,11 +321,6 @@ class LocationTrackingService : Service() {
 
     // Buffer temporaire pour points GPS non confirmés
     private val gpsBuffer = mutableListOf<TripLocation>()
-
-    // LEGACY: Compatibilité - computed property sans backing field
-    @Deprecated("Use tripState instead")
-    private val isVehicleMovementConfirmed: Boolean
-        get() = tripState == TripState.TRIP_ACTIVE || tripState == TripState.FINALIZING
 
     // Système de surveillance des notifications
     private val notificationWatchHandler = Handler(Looper.getMainLooper())

@@ -198,7 +198,7 @@ class LicenseCacheManager private constructor(
                     // Update trusted time anchor from server response
                     // Use the most recent updatedAt from the licenses as server time reference
                     licenses.maxByOrNull { it.updatedAt }?.let { mostRecent ->
-                        trustedTimeProvider.updateServerTime(mostRecent.updatedAt)
+                        trustedTimeProvider.updateServerTime(mostRecent.updatedAt.toEpochMilliseconds())
                         MotiumApplication.logger.d(
                             "Trusted time anchor updated from license sync: ${mostRecent.updatedAt}",
                             TAG
@@ -334,7 +334,7 @@ class LicenseCacheManager private constructor(
 
                 // Update trusted time anchor from server response
                 licenses.maxByOrNull { it.updatedAt }?.let { mostRecent ->
-                    trustedTimeProvider.updateServerTime(mostRecent.updatedAt)
+                    trustedTimeProvider.updateServerTime(mostRecent.updatedAt.toEpochMilliseconds())
                     MotiumApplication.logger.d(
                         "Trusted time anchor updated from force refresh: ${mostRecent.updatedAt}",
                         TAG

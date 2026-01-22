@@ -156,18 +156,4 @@ object FrenchMileageCalculator {
         }
     }
 
-    /**
-     * Obtient le taux kilométrique préconfiguré selon la puissance
-     * (pour compatibilité avec l'enum existant)
-     */
-    fun getPresetRate(power: VehiclePower): Double {
-        return power.rate
-    }
-
-    /**
-     * Formatage du taux pour affichage
-     */
-    fun formatRate(rate: Double): String {
-        return String.format("%.3f €/km", rate)
-    }
 }
