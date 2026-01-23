@@ -179,9 +179,11 @@ class LicensesViewModel(
         _dialogState,
         _proAccountId
     ) { licenses, dialogState, proAccountId ->
+        // Sort licenses: assigned (linked) first, then unassigned
+        val sortedLicenses = licenses.sortedByDescending { it.isAssigned }
         LicensesUiState(
             isLoading = proAccountId == null,
-            licenses = licenses,
+            licenses = sortedLicenses,
             summary = LicensesSummary.fromLicenses(licenses),
             error = dialogState.error,
             successMessage = dialogState.successMessage,

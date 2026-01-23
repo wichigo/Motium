@@ -60,12 +60,14 @@ private val pendingSnapshots = mutableSetOf<String>()
 
 /**
  * Process bitmap with route overlay on background thread.
+ * Uses MapSnapshot's projection for accurate coordinate conversion.
  * This function is CPU-intensive and should NOT run on main thread.
  */
 private fun processBitmapWithRoute(
-    baseBitmap: Bitmap,
+    snapshot: MapSnapshot,
     allPoints: List<Pair<Double, Double>>
 ): Bitmap {
+    val baseBitmap = snapshot.bitmap
     val resultBitmap = baseBitmap.copy(Bitmap.Config.ARGB_8888, true)
     val canvas = AndroidCanvas(resultBitmap)
 
@@ -80,32 +82,10 @@ private fun processBitmapWithRoute(
             strokeJoin = Paint.Join.ROUND
         }
 
-        // Calculate pixel positions manually based on bounds and image size
-        val imgWidth = resultBitmap.width.toFloat()
-        val imgHeight = resultBitmap.height.toFloat()
-
-        val minLat = allPoints.minOf { it.first }
-        val maxLat = allPoints.maxOf { it.first }
-        val minLon = allPoints.minOf { it.second }
-        val maxLon = allPoints.maxOf { it.second }
-        val latRange = maxLat - minLat
-        val lonRange = maxLon - minLon
-        val padding = 0.2f // 20% padding
-
-        fun latLngToPixel(lat: Double, lon: Double): android.graphics.PointF {
-            val x = if (lonRange > 0) {
-                ((lon - minLon) / lonRange * (1 - 2 * padding) + padding) * imgWidth
-            } else imgWidth / 2
-            val y = if (latRange > 0) {
-                ((maxLat - lat) / latRange * (1 - 2 * padding) + padding) * imgHeight
-            } else imgHeight / 2
-
-            return android.graphics.PointF(x.toFloat(), y.toFloat())
-        }
-
+        // Use MapSnapshot's projection for accurate lat/lon to pixel conversion
         val path = android.graphics.Path()
         allPoints.forEachIndexed { index, (lat, lon) ->
-            val point = latLngToPixel(lat, lon)
+            val point = snapshot.pixelForLatLng(LatLng(lat, lon))
             if (index == 0) {
                 path.moveTo(point.x, point.y)
             } else {
@@ -115,7 +95,8 @@ private fun processBitmapWithRoute(
         canvas.drawPath(path, linePaint)
 
         // Draw start marker (green)
-        val startPoint = latLngToPixel(allPoints.first().first, allPoints.first().second)
+        val startLatLng = allPoints.first()
+        val startPoint = snapshot.pixelForLatLng(LatLng(startLatLng.first, startLatLng.second))
         val startPaint = Paint().apply {
             color = AndroidColor.parseColor("#4CAF50")
             isAntiAlias = true
@@ -130,7 +111,8 @@ private fun processBitmapWithRoute(
         canvas.drawCircle(startPoint.x, startPoint.y, 12f, startStroke)
 
         // Draw end marker (red)
-        val endPoint = latLngToPixel(allPoints.last().first, allPoints.last().second)
+        val endLatLng = allPoints.last()
+        val endPoint = snapshot.pixelForLatLng(LatLng(endLatLng.first, endLatLng.second))
         val endPaint = Paint().apply {
             color = AndroidColor.parseColor("#F44336")
             isAntiAlias = true
@@ -470,17 +452,21 @@ private fun CompactRoutePreview(
         try {
             val sizePx = with(density) { 166.dp.toPx().toInt() }
 
-            // Calculate bounds and zoom
+            // Calculate bounds and zoom with padding for markers
             val boundsBuilder = LatLngBounds.Builder()
             allPoints.forEach { (lat, lon) -> boundsBuilder.include(LatLng(lat, lon)) }
             val bounds = boundsBuilder.build()
             val maxSpan = maxOf(bounds.latitudeSpan, bounds.longitudeSpan)
+            // Adjusted zoom levels to ensure full route visibility with marker padding
             val zoom = when {
-                maxSpan > 0.5 -> 8.0
-                maxSpan > 0.1 -> 10.0
-                maxSpan > 0.05 -> 12.0
-                maxSpan > 0.01 -> 14.0
-                else -> 15.0
+                maxSpan > 5.0 -> 4.5   // Very long routes (Paris-Marseille ~5.5°)
+                maxSpan > 2.0 -> 5.5   // Long routes
+                maxSpan > 1.0 -> 6.5   // Medium-long routes
+                maxSpan > 0.5 -> 7.5   // Medium routes
+                maxSpan > 0.1 -> 9.0   // Short-medium routes
+                maxSpan > 0.05 -> 11.0 // Short routes
+                maxSpan > 0.01 -> 13.0 // Very short routes
+                else -> 14.0           // Minimal routes
             }
 
             val styleUrl = if (Constants.PrivateServer.USE_PRIVATE_TILES) {
@@ -494,7 +480,7 @@ private fun CompactRoutePreview(
                 .withCameraPosition(
                     CameraPosition.Builder()
                         .target(bounds.center)
-                        .zoom(zoom - 0.5)
+                        .zoom(zoom)
                         .build()
                 )
 
@@ -508,7 +494,7 @@ private fun CompactRoutePreview(
                 override fun onSnapshotReady(snapshot: MapSnapshot) {
                     coroutineScope.launch(Dispatchers.Default) {
                         try {
-                            val resultBitmap = processBitmapWithRoute(snapshot.bitmap, pointsCopy)
+                            val resultBitmap = processBitmapWithRoute(snapshot, pointsCopy)
 
                             // Store in cache
                             mapSnapshotCache.put(keyCopy, resultBitmap)
