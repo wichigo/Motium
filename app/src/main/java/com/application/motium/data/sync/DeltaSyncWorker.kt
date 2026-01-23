@@ -393,8 +393,8 @@ class DeltaSyncWorker(
                 TAG
             )
 
-            // Step 1: Process push results
-            processPushResults(syncResult.pushResults, pendingOps, now)
+            // Step 1: Process push results - returns entity types with VERSION_CONFLICT
+            val conflictedEntityTypes = processPushResults(syncResult.pushResults, pendingOps, now)
 
             // Step 2: Process pulled changes
             var success = true
@@ -412,12 +412,14 @@ class DeltaSyncWorker(
             success = processWorkScheduleChanges(changes.workSchedules.map { it.toOldFormat() }, userId) && success
             success = processAutoTrackingSettingsChanges(changes.autoTrackingSettings.map { it.toOldFormat() }, userId) && success
 
-            // Update sync metadata with max timestamp
+            // Step 3: Update sync metadata with max timestamp
+            // IMPORTANT: Skip entity types that had VERSION_CONFLICT - their timestamps were reset
+            // to 0 in resetEntityForPull() and must stay at 0 to force re-fetch in next sync
             if (success && changes.totalChanges > 0) {
-                updateAllLastSyncTimestamps(syncResult.maxTimestamp)
+                updateLastSyncTimestampsExcluding(syncResult.maxTimestamp, conflictedEntityTypes)
             } else if (success) {
-                // No changes but successful - update timestamps anyway
-                updateAllLastSyncTimestamps(System.currentTimeMillis())
+                // No changes but successful - update timestamps anyway (except conflicted ones)
+                updateLastSyncTimestampsExcluding(System.currentTimeMillis(), conflictedEntityTypes)
             }
 
             return success
@@ -436,12 +438,17 @@ class DeltaSyncWorker(
     /**
      * Process push results from sync_changes() RPC.
      * Mark successful operations as synced, failed ones are retried.
+     *
+     * @return Set of entity types that had VERSION_CONFLICT - these should NOT have their
+     *         SyncMetadata timestamps updated, so they get re-fetched in the next sync.
      */
     private suspend fun processPushResults(
         pushResults: List<SyncChangesRemoteDataSource.PushResult>,
         pendingOps: List<PendingOperationEntity>,
         timestamp: Long
-    ) {
+    ): Set<String> {
+        val conflictedEntityTypes = mutableSetOf<String>()
+
         // Create a map for quick lookup
         val resultsMap = pushResults.associateBy { "${it.entityType}:${it.entityId}" }
 
@@ -479,6 +486,8 @@ class DeltaSyncWorker(
                         )
                         pendingOpDao.deleteById(op.id)
                         resetEntityForPull(op.entityType, op.entityId)
+                        // Track this entity type so we don't overwrite its reset timestamp
+                        conflictedEntityTypes.add(op.entityType)
                     }
                     "ALREADY_PROCESSED" -> {
                         // Idempotent - already processed, safe to delete
@@ -499,6 +508,8 @@ class DeltaSyncWorker(
                 }
             }
         }
+
+        return conflictedEntityTypes
     }
 
     /**
@@ -534,16 +545,29 @@ class DeltaSyncWorker(
      * Reset an entity's syncStatus to SYNCED after VERSION_CONFLICT.
      * This allows the pull phase to update the entity with server's current version.
      * The stale local changes are discarded in favor of server's authoritative data.
+     *
+     * IMPORTANT: This function does TWO things to force re-fetch of the entity:
+     * 1. Resets the local entity's serverUpdatedAt to 0 (epoch)
+     * 2. Resets the SyncMetadataEntity timestamp to 0 for this entity type
+     *
+     * The second step is CRITICAL because the delta sync SQL uses:
+     *   WHERE updated_at > since
+     * Where 'since' comes from SyncMetadataEntity.lastSyncTimestamp (NOT from entity's serverUpdatedAt).
+     * Without resetting SyncMetadataEntity, if server's updated_at is older than 'since',
+     * the entity would never be re-fetched and the version conflict persists indefinitely.
      */
     private suspend fun resetEntityForPull(entityType: String, entityId: String) {
         try {
+            val epochForForcePull = 0L
             val now = System.currentTimeMillis()
+
+            // Step 1: Reset local entity's syncStatus and serverUpdatedAt
             when (entityType) {
-                PendingOperationEntity.TYPE_TRIP -> tripDao.markTripAsSynced(entityId, now)
-                PendingOperationEntity.TYPE_VEHICLE -> vehicleDao.markVehicleAsSynced(entityId, now)
+                PendingOperationEntity.TYPE_TRIP -> tripDao.markTripAsSynced(entityId, epochForForcePull)
+                PendingOperationEntity.TYPE_VEHICLE -> vehicleDao.markVehicleAsSynced(entityId, epochForForcePull)
                 PendingOperationEntity.TYPE_LICENSE -> licenseDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
                 PendingOperationEntity.TYPE_PRO_ACCOUNT -> proAccountDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
-                PendingOperationEntity.TYPE_USER -> database.userDao().updateSyncStatus(entityId, SyncStatus.SYNCED.name, now)
+                PendingOperationEntity.TYPE_USER -> database.userDao().updateSyncStatus(entityId, SyncStatus.SYNCED.name, epochForForcePull)
                 PendingOperationEntity.TYPE_CONSENT -> {
                     val parts = entityId.split(":")
                     if (parts.size == 2) {
@@ -555,7 +579,29 @@ class DeltaSyncWorker(
                     workScheduleDao.markAutoTrackingSettingsAsSynced(entityId, now)
                 }
             }
-            MotiumApplication.logger.i("Reset $entityType:$entityId syncStatus to SYNCED for pull phase", TAG)
+
+            // Step 2: CRITICAL - Reset the SyncMetadataEntity timestamp to force delta sync to re-fetch
+            // Map PendingOperationEntity types to SyncMetadataEntity types
+            val syncMetadataType = when (entityType) {
+                PendingOperationEntity.TYPE_TRIP -> SyncMetadataEntity.TYPE_TRIP
+                PendingOperationEntity.TYPE_VEHICLE -> SyncMetadataEntity.TYPE_VEHICLE
+                PendingOperationEntity.TYPE_USER -> SyncMetadataEntity.TYPE_USER
+                PendingOperationEntity.TYPE_LICENSE -> SyncMetadataEntity.TYPE_LICENSE
+                PendingOperationEntity.TYPE_PRO_ACCOUNT -> SyncMetadataEntity.TYPE_PRO_ACCOUNT
+                PendingOperationEntity.TYPE_CONSENT -> SyncMetadataEntity.TYPE_CONSENT
+                PendingOperationEntity.TYPE_AUTO_TRACKING_SETTINGS -> SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS
+                else -> null
+            }
+
+            syncMetadataType?.let {
+                syncMetadataDao.updateLastSyncTimestamp(it, epochForForcePull, 0)
+                MotiumApplication.logger.i(
+                    "Reset SyncMetadata.$it lastSyncTimestamp to 0 to force delta re-fetch",
+                    TAG
+                )
+            }
+
+            MotiumApplication.logger.i("Reset $entityType:$entityId for forced pull (syncStatus=SYNCED, timestamps=0)", TAG)
         } catch (e: Exception) {
             MotiumApplication.logger.w("Failed to reset $entityType:$entityId for pull: ${e.message}", TAG)
         }
@@ -1190,6 +1236,56 @@ class DeltaSyncWorker(
             SyncMetadataEntity.TYPE_COMPANY_LINK
         ).forEach { type ->
             syncMetadataDao.updateLastSyncTimestamp(type, timestamp, 0)
+        }
+    }
+
+    /**
+     * Update lastSyncTimestamp for all entity types EXCEPT those in the excludeTypes set.
+     *
+     * This is used after VERSION_CONFLICT: the conflicted entity type had its timestamp
+     * reset to 0 by resetEntityForPull(), and we must NOT overwrite that with the new
+     * timestamp. This ensures the next sync will re-fetch data for that entity type from epoch.
+     *
+     * @param timestamp The new lastSyncTimestamp to set
+     * @param excludeTypes Set of PendingOperationEntity types to exclude (e.g., "USER", "TRIP")
+     */
+    private suspend fun updateLastSyncTimestampsExcluding(timestamp: Long, excludeTypes: Set<String>) {
+        // Map PendingOperationEntity types to SyncMetadataEntity types
+        val excludeSyncTypes = excludeTypes.mapNotNull { pendingType ->
+            when (pendingType) {
+                PendingOperationEntity.TYPE_TRIP -> SyncMetadataEntity.TYPE_TRIP
+                PendingOperationEntity.TYPE_VEHICLE -> SyncMetadataEntity.TYPE_VEHICLE
+                PendingOperationEntity.TYPE_USER -> SyncMetadataEntity.TYPE_USER
+                PendingOperationEntity.TYPE_LICENSE -> SyncMetadataEntity.TYPE_LICENSE
+                PendingOperationEntity.TYPE_PRO_ACCOUNT -> SyncMetadataEntity.TYPE_PRO_ACCOUNT
+                PendingOperationEntity.TYPE_CONSENT -> SyncMetadataEntity.TYPE_CONSENT
+                PendingOperationEntity.TYPE_AUTO_TRACKING_SETTINGS -> SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS
+                else -> null
+            }
+        }.toSet()
+
+        if (excludeSyncTypes.isNotEmpty()) {
+            MotiumApplication.logger.i(
+                "Updating timestamps excluding conflicted types: $excludeSyncTypes",
+                TAG
+            )
+        }
+
+        listOf(
+            SyncMetadataEntity.TYPE_TRIP,
+            SyncMetadataEntity.TYPE_VEHICLE,
+            SyncMetadataEntity.TYPE_EXPENSE,
+            SyncMetadataEntity.TYPE_USER,
+            SyncMetadataEntity.TYPE_LICENSE,
+            SyncMetadataEntity.TYPE_PRO_ACCOUNT,
+            SyncMetadataEntity.TYPE_CONSENT,
+            SyncMetadataEntity.TYPE_WORK_SCHEDULE,
+            SyncMetadataEntity.TYPE_AUTO_TRACKING_SETTINGS,
+            SyncMetadataEntity.TYPE_COMPANY_LINK
+        ).forEach { type ->
+            if (type !in excludeSyncTypes) {
+                syncMetadataDao.updateLastSyncTimestamp(type, timestamp, 0)
+            }
         }
     }
 
