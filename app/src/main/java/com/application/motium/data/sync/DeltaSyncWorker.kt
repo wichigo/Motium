@@ -1,7 +1,12 @@
 package com.application.motium.data.sync
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
+import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
@@ -73,6 +78,10 @@ class DeltaSyncWorker(
         // BATTERY OPTIMIZATION (2026-01): Limit retries to prevent infinite sync loops
         // that drain battery when server is unreachable or auth is broken
         private const val MAX_RETRY_ATTEMPTS = 5
+
+        // Notification for expedited/foreground work (required on API 31+ for setExpedited)
+        private const val NOTIFICATION_CHANNEL_ID = "sync_channel"
+        private const val NOTIFICATION_ID = 1001
     }
 
     private val database = MotiumDatabase.getInstance(applicationContext)
@@ -104,6 +113,40 @@ class DeltaSyncWorker(
     private val supabaseGdprRepository = com.application.motium.data.supabase.SupabaseGdprRepository.getInstance(applicationContext)
     private val authRepository = SupabaseAuthRepository.getInstance(applicationContext)
     private val secureSessionStorage = SecureSessionStorage(applicationContext)
+
+    /**
+     * Required for expedited work on API 31+ (Android 12+).
+     * When setExpedited() is used and the system needs to run as foreground service,
+     * this provides the notification to show.
+     */
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Create notification channel (required on API 26+)
+        val channel = NotificationChannel(
+            NOTIFICATION_CHANNEL_ID,
+            "Synchronisation",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Synchronisation des données en arrière-plan"
+            setShowBadge(false)
+        }
+        notificationManager.createNotificationChannel(channel)
+
+        val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_popup_sync)
+            .setContentTitle("Motium")
+            .setContentText("Synchronisation en cours...")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
+
+        return ForegroundInfo(
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        )
+    }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         // BATTERY OPTIMIZATION (2026-01): Stop retrying after MAX_RETRY_ATTEMPTS to prevent battery drain
@@ -477,15 +520,16 @@ class DeltaSyncWorker(
                 when (result.errorCode) {
                     "VERSION_CONFLICT" -> {
                         // Version conflict - server has newer data
-                        // Delete the stale pending operation and reset entity status
-                        // so pull phase can update it with server's current version
+                        // Delete the stale pending operation and reset entity with server's version
+                        // FIX (2026-01-24): Pass serverVersion to update local entity version,
+                        // preventing infinite VERSION_CONFLICT loop where local version stays stale
                         MotiumApplication.logger.w(
                             "Version conflict for ${op.entityType}:${op.entityId} (server v${result.serverVersion}), " +
-                                    "deleting stale operation and resetting entity for pull",
+                                    "deleting stale operation and resetting entity with server version",
                             TAG
                         )
                         pendingOpDao.deleteById(op.id)
-                        resetEntityForPull(op.entityType, op.entityId)
+                        resetEntityForPull(op.entityType, op.entityId, result.serverVersion)
                         // Track this entity type so we don't overwrite its reset timestamp
                         conflictedEntityTypes.add(op.entityType)
                     }
@@ -556,18 +600,31 @@ class DeltaSyncWorker(
      * Without resetting SyncMetadataEntity, if server's updated_at is older than 'since',
      * the entity would never be re-fetched and the version conflict persists indefinitely.
      */
-    private suspend fun resetEntityForPull(entityType: String, entityId: String) {
+    private suspend fun resetEntityForPull(entityType: String, entityId: String, serverVersion: Int? = null) {
         try {
             val epochForForcePull = 0L
             val now = System.currentTimeMillis()
 
-            // Step 1: Reset local entity's syncStatus and serverUpdatedAt
+            // Step 1: Reset local entity's syncStatus, serverUpdatedAt, and version (if provided)
+            // FIX (2026-01-24): For USER entity, update version to match server to prevent
+            // infinite VERSION_CONFLICT loop where local version stays stale
             when (entityType) {
                 PendingOperationEntity.TYPE_TRIP -> tripDao.markTripAsSynced(entityId, epochForForcePull)
                 PendingOperationEntity.TYPE_VEHICLE -> vehicleDao.markVehicleAsSynced(entityId, epochForForcePull)
                 PendingOperationEntity.TYPE_LICENSE -> licenseDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
                 PendingOperationEntity.TYPE_PRO_ACCOUNT -> proAccountDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
-                PendingOperationEntity.TYPE_USER -> database.userDao().updateSyncStatus(entityId, SyncStatus.SYNCED.name, epochForForcePull)
+                PendingOperationEntity.TYPE_USER -> {
+                    if (serverVersion != null) {
+                        // Use new resetForPull that updates version to prevent conflict loop
+                        database.userDao().resetForPull(entityId, SyncStatus.SYNCED.name, epochForForcePull, serverVersion)
+                        MotiumApplication.logger.i(
+                            "Reset USER:$entityId version to $serverVersion (from server)",
+                            TAG
+                        )
+                    } else {
+                        database.userDao().updateSyncStatus(entityId, SyncStatus.SYNCED.name, epochForForcePull)
+                    }
+                }
                 PendingOperationEntity.TYPE_CONSENT -> {
                     val parts = entityId.split(":")
                     if (parts.size == 2) {

@@ -90,4 +90,24 @@ interface UserDao {
         syncStatus: String,
         serverUpdatedAt: Long
     )
+
+    /**
+     * Reset user for forced pull after VERSION_CONFLICT.
+     * Updates the local version to match server version to prevent infinite conflict loop.
+     * Sets syncStatus to SYNCED and resets timestamps to force re-fetch.
+     */
+    @Query("""
+        UPDATE users
+        SET syncStatus = :syncStatus,
+            serverUpdatedAt = :serverUpdatedAt,
+            localUpdatedAt = :serverUpdatedAt,
+            version = :serverVersion
+        WHERE id = :userId
+    """)
+    suspend fun resetForPull(
+        userId: String,
+        syncStatus: String,
+        serverUpdatedAt: Long,
+        serverVersion: Int
+    )
 }

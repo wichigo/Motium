@@ -7,6 +7,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.application.motium.MotiumApplication
@@ -155,8 +156,8 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
                         "Merged UPDATE into existing CREATE for $entityType:$entityId",
                         TAG
                     )
-                    // Trigger sync if needed
-                    if (priority > 0 && networkManager.isConnected.value) {
+                    // Trigger sync if needed (WorkManager handles network constraint)
+                    if (priority > 0) {
                         triggerImmediateSync()
                     }
                     return
@@ -210,9 +211,10 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
             TAG
         )
 
-        // BATTERY OPTIMIZATION: Only trigger immediate sync for high-priority operations
-        // Normal operations will be synced by the periodic WorkManager task
-        if (priority > 0 && networkManager.isConnected.value) {
+        // Trigger immediate sync for high-priority operations
+        // Normal operations (priority=0) will be synced by the periodic WorkManager task
+        // Note: WorkManager handles network constraint, no need to check isConnected here
+        if (priority > 0) {
             triggerImmediateSync()
         }
     }
@@ -274,38 +276,66 @@ class OfflineFirstSyncManager private constructor(private val context: Context) 
      * Uses a one-time work request with network constraint.
      *
      * BATTERY OPTIMIZATION: Rate-limited to at most once per minute to prevent battery drain.
+     * EXCEPTION: Always sync if there are pending operations (user just made a change).
      */
     fun triggerImmediateSync() {
         val now = System.currentTimeMillis()
         val timeSinceLastSync = now - lastImmediateSyncTriggerTime
 
         // BATTERY OPTIMIZATION: Rate limit immediate syncs to once per minute
+        // FIX (2026-01-24): Skip rate-limiting if there are pending operations
+        // This handles the case where a new change is queued DURING a sync and
+        // the next sync attempt is blocked by rate-limiting
         if (timeSinceLastSync < MIN_SYNC_INTERVAL_MS) {
-            MotiumApplication.logger.d(
-                "Skipping immediate sync - last trigger was ${timeSinceLastSync / 1000}s ago (min ${MIN_SYNC_INTERVAL_MS / 1000}s)",
-                TAG
-            )
+            // Check if there are pending operations - if so, allow the sync
+            scope.launch {
+                val pendingCount = pendingOpDao.getCount()
+                if (pendingCount > 0) {
+                    MotiumApplication.logger.i(
+                        "Rate-limit bypassed: $pendingCount pending operations need sync",
+                        TAG
+                    )
+                    doTriggerImmediateSync(now)
+                } else {
+                    MotiumApplication.logger.d(
+                        "Skipping immediate sync - last trigger was ${timeSinceLastSync / 1000}s ago, no pending ops",
+                        TAG
+                    )
+                }
+            }
             return
         }
 
+        doTriggerImmediateSync(now)
+    }
+
+    /**
+     * Actually trigger the sync (called after rate-limit check).
+     */
+    private fun doTriggerImmediateSync(now: Long) {
         lastImmediateSyncTriggerTime = now
 
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // FIX (2026-01-24): Use setExpedited() to bypass Doze mode and App Standby restrictions
+        // Without this, WorkManager delays execution when app is backgrounded, causing sync
+        // to only happen when user returns to HomeScreen (sometimes 10+ minutes later)
+        // OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST: Falls back to normal if quota exhausted
         val request = OneTimeWorkRequestBuilder<DeltaSyncWorker>()
             .setConstraints(constraints)
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .addTag(IMMEDIATE_SYNC_WORK_NAME)
             .build()
 
         workManager.enqueueUniqueWork(
             IMMEDIATE_SYNC_WORK_NAME,
-            ExistingWorkPolicy.KEEP, // Keep existing if already pending (don't replace)
+            ExistingWorkPolicy.REPLACE, // Replace existing to include newly queued operations
             request
         )
 
-        MotiumApplication.logger.i("Triggered immediate sync (rate-limited)", TAG)
+        MotiumApplication.logger.i("Triggered immediate sync (expedited)", TAG)
     }
 
     /**

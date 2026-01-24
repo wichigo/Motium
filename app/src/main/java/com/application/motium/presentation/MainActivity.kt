@@ -49,6 +49,7 @@ import com.application.motium.service.DozeModeFix
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.data.TripRepository
 import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
@@ -118,6 +119,13 @@ class MainActivity : ComponentActivity() {
                 if (authRepository.isUserAuthenticated()) {
                     MotiumApplication.logger.i("🔗 User authenticated - starting connection service", "MainActivity")
                     SupabaseConnectionService.startService(this@MainActivity)
+
+                    // FIX (2026-01-24): Trigger sync when app comes to foreground (not just HomeScreen)
+                    // This ensures pending operations are synced when user returns from ANY screen
+                    // Rate-limiting in triggerImmediateSync() prevents excessive syncs (1 min minimum)
+                    val syncManager = OfflineFirstSyncManager.getInstance(this@MainActivity)
+                    syncManager.triggerImmediateSync()
+                    MotiumApplication.logger.i("🔄 Triggered sync on app resume", "MainActivity")
 
                     val tripRepository = TripRepository.getInstance(this@MainActivity)
                     val localUserRepository = LocalUserRepository.getInstance(this@MainActivity)

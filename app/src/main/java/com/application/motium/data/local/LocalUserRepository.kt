@@ -151,7 +151,7 @@ class LocalUserRepository(context: Context) {
             entityId = user.id,
             action = PendingOperationEntity.ACTION_UPDATE,
             payload = userPayload,
-            priority = 0
+            priority = 1 // Trigger immediate sync for user preference changes
         )
     }
 
