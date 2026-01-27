@@ -73,6 +73,7 @@ fun UserEntity.toDomainModel(): User {
         } catch (e: Exception) {
             emptyList()
         },
+        version = version,
         createdAt = Instant.parse(createdAt),
         updatedAt = Instant.parse(updatedAt)
     )
@@ -101,6 +102,7 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString(),
         lastSyncedAt = lastSyncedAt,
-        isLocallyConnected = isLocallyConnected
+        isLocallyConnected = isLocallyConnected,
+        version = version
     )
 }

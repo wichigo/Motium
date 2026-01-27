@@ -115,6 +115,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val address: String = "",
         val consider_full_distance: Boolean = false,
         val favorite_colors: List<String> = emptyList(), // JSON array of color strings
+        val version: Int = 1, // Optimistic locking version (synced from server)
         // Note: Pro link fields (linked_pro_account_id, link_status, sharing preferences, etc.)
         // are now managed in the company_links table
         val created_at: String,
@@ -1453,6 +1454,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             deviceFingerprintId = device_fingerprint_id,
             considerFullDistance = consider_full_distance,
             favoriteColors = favorite_colors,
+            version = version,
             createdAt = parseInstantSafe(created_at) ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
             updatedAt = parseInstantSafe(updated_at) ?: Instant.fromEpochMilliseconds(System.currentTimeMillis())
         )
@@ -1475,6 +1477,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         device_fingerprint_id = deviceFingerprintId,
         consider_full_distance = considerFullDistance,
         favorite_colors = favoriteColors,
+        version = version,
         created_at = createdAt.toString(),
         updated_at = updatedAt.toString()
     )

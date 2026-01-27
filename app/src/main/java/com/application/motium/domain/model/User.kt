@@ -20,6 +20,9 @@ data class User(
     // Couleurs favorites de l'utilisateur (pour personnalisation UI)
     val favoriteColors: List<String> = emptyList(),
 
+    // Version for optimistic locking (synced from server to prevent VERSION_CONFLICT)
+    val version: Int = 1,
+
     val createdAt: Instant,
     val updatedAt: Instant
 )

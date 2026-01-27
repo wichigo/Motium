@@ -213,7 +213,7 @@ fun VehiclesScreen(
                 contentColor = Color.White,
                 shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
-                    .padding(bottom = 16.dp)
+                    .padding(bottom = if (isPro) 120.dp else 100.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,

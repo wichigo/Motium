@@ -375,7 +375,8 @@ fun AddVehicleScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Extra space to scroll past bottom navigation overlay
+            Spacer(modifier = Modifier.height(120.dp))
         }
     }
 }

@@ -227,14 +227,29 @@
       "mcp__supabase__supabase_delete",
       "Bash(supabase functions deploy:*)",
       "Bash(cmd /c \"type C:\\\\Users\\\\Wylde_2y5smzd\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Wylde-2y5smzd-AndroidStudioProjects-Motium\\\\tasks\\\\a6098cd.output | findstr /i motium\")",
-      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\Wylde_2y5smzd\\\\AndroidStudioProjects\\\\Motium''; .\\\\gradlew.bat assembleDebug --no-daemon 2>&1\")"
+      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\Wylde_2y5smzd\\\\AndroidStudioProjects\\\\Motium''; .\\\\gradlew.bat assembleDebug --no-daemon 2>&1\")",
+      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\Wylde_2y5smzd\\\\AndroidStudioProjects\\\\Motium''; .\\\\gradlew.bat assembleDebug 2>&1\")",
+      "Bash(.\\\\gradlew.bat assembleDebug:*)",
+      "Bash(\"C:\\\\Users\\\\Wylde_2y5smzd\\\\AndroidStudioProjects\\\\Motium\\\\gradlew.bat\" assembleDebug)",
+      "mcp__appium-lite__long_press",
+      "Bash(.gradlew.bat assembleDebug)",
+      "Bash(cmd /c \"gradlew assembleDebug\")",
+      "Bash(C:/Users/Wylde_2y5smzd/AndroidStudioProjects/Motium/gradlew.bat assembleDebug:*)",
+      "Bash(git status:*)"
     ],
     "deny": [],
     "ask": []
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
-    "context7"
+    "context7",
+    "cloudflare-observability",
+    "cloudflare-bindings",
+    "next-devtools",
+    "playwright",
+    "supabase",
+    "appium-lite",
+    "resend"
   ],
   "outputStyle": "default"
 }

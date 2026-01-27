@@ -13,7 +13,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -715,18 +717,28 @@ fun SettingsScreen(
                         phoneNumber = phoneNumber,
                         address = address
                     )
-                    authViewModel.updateUserProfile(
-                        user = updatedUser,
-                        onSuccess = {
-                            isSavingProfile = false
-                            showEditProfileDialog = false
-                            Toast.makeText(context, "Profil mis à jour", Toast.LENGTH_SHORT).show()
-                        },
-                        onError = { error ->
-                            isSavingProfile = false
-                            profileSaveError = error
+                    // FIX: Use offline-first sync pattern (same as consider_full_distance)
+                    // instead of direct Supabase update which silently fails
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            localUserRepository.updateUser(updatedUser)
+                            MotiumApplication.logger.i(
+                                "✅ Profile update queued for sync: name=${updatedUser.name}, phone=${updatedUser.phoneNumber}, address=${updatedUser.address}",
+                                "SettingsScreen"
+                            )
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                isSavingProfile = false
+                                showEditProfileDialog = false
+                                Toast.makeText(context, "Profil mis à jour", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Error updating profile: ${e.message}", "SettingsScreen", e)
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                isSavingProfile = false
+                                profileSaveError = e.message ?: "Erreur lors de la mise à jour"
+                            }
                         }
-                    )
+                    }
                 }
             },
             onDismiss = {
@@ -1047,10 +1059,10 @@ fun ProfileInformationSection(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Phone Number
+                // Phone Number (read-only, edit via Edit Profile dialog)
                 OutlinedTextField(
                     value = phoneNumber,
-                    onValueChange = onPhoneChange,
+                    onValueChange = {},
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Phone Number") },
                     placeholder = {
@@ -1074,13 +1086,14 @@ fun ProfileInformationSection(
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
                         focusedBorderColor = MotiumPrimary
                     ),
-                    singleLine = true
+                    singleLine = true,
+                    readOnly = true
                 )
 
-                // Address
+                // Address (read-only, edit via Edit Profile dialog)
                 OutlinedTextField(
                     value = address,
-                    onValueChange = onAddressChange,
+                    onValueChange = {},
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Address") },
                     placeholder = {
@@ -1104,7 +1117,8 @@ fun ProfileInformationSection(
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.3f),
                         focusedBorderColor = MotiumPrimary
                     ),
-                    singleLine = true
+                    singleLine = true,
+                    readOnly = true
                 )
             }
         }
@@ -4053,6 +4067,7 @@ fun EditProfileDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
