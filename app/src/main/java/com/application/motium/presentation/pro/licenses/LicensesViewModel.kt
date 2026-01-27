@@ -14,6 +14,7 @@ import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicensesSummary
+import com.application.motium.domain.model.LinkStatus
 import com.stripe.android.paymentsheet.PaymentSheetResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -560,9 +561,15 @@ class LicensesViewModel(
                         .mapNotNull { it.linkedAccountId }
                         .toSet()
 
-                    // Filter to only show accounts without a license
+                    // Filter to show accounts eligible for license assignment:
+                    // - Has a userId (not a pending invitation)
+                    // - Not already licensed
+                    // - Not in unlinking process or revoked
                     val unlicensedAccounts = linkedUsers.filter { user ->
-                        user.userId !in licensedAccountIds && user.isActive
+                        user.userId != null &&
+                        user.userId !in licensedAccountIds &&
+                        user.status != LinkStatus.PENDING_UNLINK &&
+                        user.status != LinkStatus.REVOKED
                     }
 
                     _dialogState.update { it.copy(
