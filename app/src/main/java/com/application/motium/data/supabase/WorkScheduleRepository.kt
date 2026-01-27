@@ -211,119 +211,110 @@ class WorkScheduleRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Sauvegarde un nouveau créneau horaire localement et synchronise avec Supabase.
+     * Sauvegarde un nouveau créneau horaire localement et queue pour sync atomique via sync_changes() RPC.
      */
     suspend fun saveWorkSchedule(schedule: WorkSchedule): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Saving work schedule for day ${schedule.dayOfWeek}", "WorkScheduleRepository")
 
-            // Sauvegarder localement d'abord (offline-first)
+            // Sauvegarder localement avec PENDING_UPLOAD
             val entity = schedule.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             workScheduleDao.insertWorkSchedule(entity)
-            MotiumApplication.logger.i("✅ Work schedule saved locally", "WorkScheduleRepository")
+            MotiumApplication.logger.i("Work schedule saved locally", "WorkScheduleRepository")
 
-            // Essayer de synchroniser avec Supabase
-            try {
-                val dto = WorkScheduleDto(
-                    id = schedule.id.ifEmpty { null },
-                    user_id = schedule.userId,
-                    day_of_week = schedule.dayOfWeek,
-                    start_hour = schedule.startHour,
-                    start_minute = schedule.startMinute,
-                    end_hour = schedule.endHour,
-                    end_minute = schedule.endMinute,
-                    is_overnight = schedule.isOvernight,
-                    is_active = schedule.isActive
-                )
-
-                postgres.from("work_schedules").insert(dto)
-                workScheduleDao.markWorkScheduleAsSynced(schedule.id, System.currentTimeMillis())
-                MotiumApplication.logger.i("✅ Work schedule synced to Supabase", "WorkScheduleRepository")
-            } catch (e: Exception) {
-                MotiumApplication.logger.w("⚠️ Work schedule saved locally, will sync later: ${e.message}", "WorkScheduleRepository")
-            }
+            // Queue pour sync atomique (version=1 for new record)
+            val payload = buildWorkSchedulePayload(schedule, version = 1)
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_WORK_SCHEDULE,
+                entityId = schedule.id,
+                action = PendingOperationEntity.ACTION_CREATE,
+                payload = payload,
+                priority = 1
+            )
+            MotiumApplication.logger.i("Work schedule queued for sync: ${schedule.id}", "WorkScheduleRepository")
 
             true
         } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Error saving work schedule: ${e.message}", "WorkScheduleRepository", e)
+            MotiumApplication.logger.e("Error saving work schedule: ${e.message}", "WorkScheduleRepository", e)
             false
         }
     }
 
     /**
-     * Met à jour un créneau existant localement et synchronise avec Supabase.
+     * Met à jour un créneau existant localement et queue pour sync atomique via sync_changes() RPC.
      */
     suspend fun updateWorkSchedule(schedule: WorkSchedule): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Updating work schedule ${schedule.id}", "WorkScheduleRepository")
 
-            // Mettre à jour localement d'abord (offline-first)
+            // Read existing version and increment
+            val existingEntity = workScheduleDao.getWorkScheduleById(schedule.id)
+            val newVersion = (existingEntity?.version ?: 0) + 1
+
+            // Mettre à jour localement avec PENDING_UPLOAD
             val entity = schedule.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
             workScheduleDao.updateWorkSchedule(entity)
-            MotiumApplication.logger.i("✅ Work schedule updated locally", "WorkScheduleRepository")
+            MotiumApplication.logger.i("Work schedule updated locally (version=$newVersion)", "WorkScheduleRepository")
 
-            // Essayer de synchroniser avec Supabase
-            try {
-                val dto = WorkScheduleDto(
-                    user_id = schedule.userId,
-                    day_of_week = schedule.dayOfWeek,
-                    start_hour = schedule.startHour,
-                    start_minute = schedule.startMinute,
-                    end_hour = schedule.endHour,
-                    end_minute = schedule.endMinute,
-                    is_overnight = schedule.isOvernight,
-                    is_active = schedule.isActive
-                )
-
-                postgres.from("work_schedules")
-                    .update(dto) {
-                        filter {
-                            eq("id", schedule.id)
-                        }
-                    }
-
-                workScheduleDao.markWorkScheduleAsSynced(schedule.id, System.currentTimeMillis())
-                MotiumApplication.logger.i("✅ Work schedule synced to Supabase", "WorkScheduleRepository")
-            } catch (e: Exception) {
-                MotiumApplication.logger.w("⚠️ Work schedule updated locally, will sync later: ${e.message}", "WorkScheduleRepository")
-            }
+            // Queue pour sync atomique with version
+            val payload = buildWorkSchedulePayload(schedule, version = newVersion)
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_WORK_SCHEDULE,
+                entityId = schedule.id,
+                action = PendingOperationEntity.ACTION_UPDATE,
+                payload = payload,
+                priority = 1
+            )
+            MotiumApplication.logger.i("Work schedule update queued for sync: ${schedule.id}", "WorkScheduleRepository")
 
             true
         } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Error updating work schedule: ${e.message}", "WorkScheduleRepository", e)
+            MotiumApplication.logger.e("Error updating work schedule: ${e.message}", "WorkScheduleRepository", e)
             false
         }
     }
 
     /**
-     * Supprime un créneau horaire localement et de Supabase.
+     * Supprime un créneau horaire localement et queue la suppression pour sync atomique.
      */
     suspend fun deleteWorkSchedule(scheduleId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             MotiumApplication.logger.i("Deleting work schedule $scheduleId", "WorkScheduleRepository")
 
-            // Supprimer localement d'abord (offline-first)
-            workScheduleDao.deleteWorkScheduleById(scheduleId)
-            MotiumApplication.logger.i("✅ Work schedule deleted locally", "WorkScheduleRepository")
+            // Queue l'opération DELETE AVANT la suppression locale
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_WORK_SCHEDULE,
+                entityId = scheduleId,
+                action = PendingOperationEntity.ACTION_DELETE,
+                payload = null,
+                priority = 1
+            )
 
-            // Essayer de supprimer de Supabase
-            try {
-                postgres.from("work_schedules")
-                    .delete {
-                        filter {
-                            eq("id", scheduleId)
-                        }
-                    }
-                MotiumApplication.logger.i("✅ Work schedule deleted from Supabase", "WorkScheduleRepository")
-            } catch (e: Exception) {
-                MotiumApplication.logger.w("⚠️ Could not delete from Supabase: ${e.message}", "WorkScheduleRepository")
-            }
+            // Supprimer localement
+            workScheduleDao.deleteWorkScheduleById(scheduleId)
+            MotiumApplication.logger.i("Work schedule deleted and queued for sync: $scheduleId", "WorkScheduleRepository")
 
             true
         } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Error deleting work schedule: ${e.message}", "WorkScheduleRepository", e)
+            MotiumApplication.logger.e("Error deleting work schedule: ${e.message}", "WorkScheduleRepository", e)
             false
         }
+    }
+
+    /**
+     * Build JSON payload matching push_work_schedule_change() SQL fields.
+     */
+    private fun buildWorkSchedulePayload(schedule: WorkSchedule, version: Int): String {
+        return buildJsonObject {
+            put("day_of_week", schedule.dayOfWeek)
+            put("start_hour", schedule.startHour)
+            put("start_minute", schedule.startMinute)
+            put("end_hour", schedule.endHour)
+            put("end_minute", schedule.endMinute)
+            put("is_active", schedule.isActive)
+            put("is_overnight", schedule.isOvernight)
+            put("version", version)
+        }.toString()
     }
 
     /**

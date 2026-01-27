@@ -85,6 +85,25 @@ interface VehicleDao {
     suspend fun markVehicleAsNeedingSync(vehicleId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
+     * Reset vehicle for re-pull after VERSION_CONFLICT resolution.
+     * Updates syncStatus, serverUpdatedAt, localUpdatedAt, and version to match server.
+     */
+    @Query("""
+        UPDATE vehicles
+        SET syncStatus = :syncStatus,
+            serverUpdatedAt = :serverUpdatedAt,
+            localUpdatedAt = :serverUpdatedAt,
+            version = :serverVersion
+        WHERE id = :vehicleId
+    """)
+    suspend fun resetForPull(
+        vehicleId: String,
+        syncStatus: String,
+        serverUpdatedAt: Long,
+        serverVersion: Int
+    )
+
+    /**
      * Unset all default vehicles for a user (before setting a new default).
      */
     @Query("UPDATE vehicles SET isDefault = 0 WHERE userId = :userId")

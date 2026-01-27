@@ -40,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
@@ -82,6 +83,13 @@ class DeltaSyncWorker(
         // Notification for expedited/foreground work (required on API 31+ for setExpedited)
         private const val NOTIFICATION_CHANNEL_ID = "sync_channel"
         private const val NOTIFICATION_ID = 1001
+
+        // FIX (2026-01-26): Mutex to prevent concurrent sync execution.
+        // The periodic worker (delta_sync_periodic) and immediate worker (delta_sync_immediate)
+        // use different unique work names, so WorkManager can run them concurrently.
+        // This causes race conditions where one worker's pull overwrites data that another
+        // worker's push just committed (e.g., consider_full_distance toggle).
+        private val syncMutex = kotlinx.coroutines.sync.Mutex()
     }
 
     private val database = MotiumDatabase.getInstance(applicationContext)
@@ -186,6 +194,19 @@ class DeltaSyncWorker(
 
             if (fileUploadSuccess && syncSuccess) {
                 MotiumApplication.logger.i("Delta sync completed successfully", TAG)
+
+                // FIX (2026-01-26): Check if new operations were queued during sync.
+                // If so, trigger a follow-up immediate sync so changes made on any screen
+                // (not just Home) are pushed to Supabase without waiting for the periodic worker.
+                val remainingOps = pendingOpDao.getCount()
+                if (remainingOps > 0) {
+                    MotiumApplication.logger.i(
+                        "$remainingOps pending operations remain after sync, triggering follow-up sync",
+                        TAG
+                    )
+                    OfflineFirstSyncManager.getInstance(applicationContext).triggerImmediateSync()
+                }
+
                 Result.success()
             } else {
                 MotiumApplication.logger.w("Delta sync completed with errors, will retry", TAG)
@@ -391,6 +412,15 @@ class DeltaSyncWorker(
      * @return true if sync completed successfully
      */
     private suspend fun performAtomicSync(userId: String): Boolean {
+        // FIX (2026-01-26): Acquire mutex to prevent concurrent sync execution.
+        // Without this, periodic and immediate workers can race: one worker's pull
+        // overwrites local changes that haven't been pushed yet by the other worker.
+        return syncMutex.withLock {
+            performAtomicSyncLocked(userId)
+        }
+    }
+
+    private suspend fun performAtomicSyncLocked(userId: String): Boolean {
         // Calculate backoff threshold (operations ready for retry)
         val now = System.currentTimeMillis()
         val backoffThreshold = now - PendingOperationEntity.calculateBackoffMs(0)
@@ -519,17 +549,95 @@ class DeltaSyncWorker(
                 // Failed - check error code for retry strategy
                 when (result.errorCode) {
                     "VERSION_CONFLICT" -> {
-                        // Version conflict - server has newer data
-                        // Delete the stale pending operation and reset entity with server's version
-                        // FIX (2026-01-24): Pass serverVersion to update local entity version,
-                        // preventing infinite VERSION_CONFLICT loop where local version stays stale
-                        MotiumApplication.logger.w(
-                            "Version conflict for ${op.entityType}:${op.entityId} (server v${result.serverVersion}), " +
-                                    "deleting stale operation and resetting entity with server version",
-                            TAG
+                        // Version conflict - server has newer version than what we sent.
+                        // FIX (2026-01-26): For entities with user-editable fields,
+                        // re-queue the operation with the correct server version instead of
+                        // discarding the user's local changes. This ensures local changes persist.
+                        val serverVer = result.serverVersion
+                        val reQueueableTypes = setOf(
+                            PendingOperationEntity.TYPE_USER,
+                            PendingOperationEntity.TYPE_VEHICLE,
+                            PendingOperationEntity.TYPE_TRIP
                         )
-                        pendingOpDao.deleteById(op.id)
-                        resetEntityForPull(op.entityType, op.entityId, result.serverVersion)
+                        if (op.entityType in reQueueableTypes && serverVer != null && op.payload != null) {
+                            // Re-queue with corrected version: serverVersion + 1
+                            val correctedVersion = serverVer + 1
+                            MotiumApplication.logger.w(
+                                "Version conflict for ${op.entityType}:${op.entityId} (server v$serverVer), " +
+                                        "re-queuing with corrected version v$correctedVersion to preserve local changes",
+                                TAG
+                            )
+                            // Update local entity version to corrected version
+                            when (op.entityType) {
+                                PendingOperationEntity.TYPE_USER ->
+                                    database.userDao().resetForPull(op.entityId, SyncStatus.PENDING_UPLOAD.name, 0L, correctedVersion)
+                                PendingOperationEntity.TYPE_VEHICLE ->
+                                    vehicleDao.resetForPull(op.entityId, SyncStatus.PENDING_UPLOAD.name, 0L, correctedVersion)
+                                PendingOperationEntity.TYPE_TRIP ->
+                                    tripDao.resetForPull(op.entityId, SyncStatus.PENDING_UPLOAD.name, 0L, correctedVersion)
+                            }
+                            // Reset SyncMetadata to force full re-fetch after the re-queued push succeeds
+                            val syncMetadataType = when (op.entityType) {
+                                PendingOperationEntity.TYPE_USER -> SyncMetadataEntity.TYPE_USER
+                                PendingOperationEntity.TYPE_VEHICLE -> SyncMetadataEntity.TYPE_VEHICLE
+                                PendingOperationEntity.TYPE_TRIP -> SyncMetadataEntity.TYPE_TRIP
+                                else -> null
+                            }
+                            syncMetadataType?.let {
+                                syncMetadataDao.updateLastSyncTimestamp(it, 0L, 0)
+                            }
+
+                            // Rewrite the payload with the corrected version
+                            try {
+                                val payloadJson = kotlinx.serialization.json.Json.parseToJsonElement(op.payload)
+                                if (payloadJson is kotlinx.serialization.json.JsonObject) {
+                                    val correctedPayload = kotlinx.serialization.json.buildJsonObject {
+                                        payloadJson.forEach { (k, v) ->
+                                            if (k == "version") {
+                                                put("version", correctedVersion)
+                                            } else {
+                                                put(k, v)
+                                            }
+                                        }
+                                    }.toString()
+                                    // Replace the pending operation with corrected payload
+                                    pendingOpDao.deleteById(op.id)
+                                    val correctedOp = op.copy(
+                                        id = java.util.UUID.randomUUID().toString(),
+                                        payload = correctedPayload,
+                                        idempotencyKey = "${op.entityType}:${op.entityId}:${op.action}:${System.currentTimeMillis()}",
+                                        retryCount = 0,
+                                        lastAttemptAt = null,
+                                        lastError = null
+                                    )
+                                    pendingOpDao.insert(correctedOp)
+                                    MotiumApplication.logger.i(
+                                        "Re-queued ${op.entityType}:${op.entityId} with version=$correctedVersion",
+                                        TAG
+                                    )
+                                } else {
+                                    // Payload not a JSON object - fall through to default handling
+                                    pendingOpDao.deleteById(op.id)
+                                    resetEntityForPull(op.entityType, op.entityId, serverVer)
+                                }
+                            } catch (e: Exception) {
+                                MotiumApplication.logger.w(
+                                    "Failed to rewrite payload for ${op.entityType}:${op.entityId}, falling back to reset: ${e.message}",
+                                    TAG
+                                )
+                                pendingOpDao.deleteById(op.id)
+                                resetEntityForPull(op.entityType, op.entityId, serverVer)
+                            }
+                        } else {
+                            // Non re-queueable entity or no server version: original behavior
+                            MotiumApplication.logger.w(
+                                "Version conflict for ${op.entityType}:${op.entityId} (server v$serverVer), " +
+                                        "deleting stale operation and resetting entity with server version",
+                                TAG
+                            )
+                            pendingOpDao.deleteById(op.id)
+                            resetEntityForPull(op.entityType, op.entityId, serverVer)
+                        }
                         // Track this entity type so we don't overwrite its reset timestamp
                         conflictedEntityTypes.add(op.entityType)
                     }
@@ -609,8 +717,28 @@ class DeltaSyncWorker(
             // FIX (2026-01-24): For USER entity, update version to match server to prevent
             // infinite VERSION_CONFLICT loop where local version stays stale
             when (entityType) {
-                PendingOperationEntity.TYPE_TRIP -> tripDao.markTripAsSynced(entityId, epochForForcePull)
-                PendingOperationEntity.TYPE_VEHICLE -> vehicleDao.markVehicleAsSynced(entityId, epochForForcePull)
+                PendingOperationEntity.TYPE_TRIP -> {
+                    if (serverVersion != null) {
+                        tripDao.resetForPull(entityId, SyncStatus.SYNCED.name, epochForForcePull, serverVersion)
+                        MotiumApplication.logger.i(
+                            "Reset TRIP:$entityId version to $serverVersion (from server)",
+                            TAG
+                        )
+                    } else {
+                        tripDao.markTripAsSynced(entityId, epochForForcePull)
+                    }
+                }
+                PendingOperationEntity.TYPE_VEHICLE -> {
+                    if (serverVersion != null) {
+                        vehicleDao.resetForPull(entityId, SyncStatus.SYNCED.name, epochForForcePull, serverVersion)
+                        MotiumApplication.logger.i(
+                            "Reset VEHICLE:$entityId version to $serverVersion (from server)",
+                            TAG
+                        )
+                    } else {
+                        vehicleDao.markVehicleAsSynced(entityId, epochForForcePull)
+                    }
+                }
                 PendingOperationEntity.TYPE_LICENSE -> licenseDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
                 PendingOperationEntity.TYPE_PRO_ACCOUNT -> proAccountDao.updateSyncStatus(entityId, SyncStatus.SYNCED.name)
                 PendingOperationEntity.TYPE_USER -> {
@@ -1568,8 +1696,14 @@ class DeltaSyncWorker(
                                 expenseDao.insertExpense(entity)
                                 syncedCount++
                             } else {
-                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
-                                if (serverTimestamp > localExpense.localUpdatedAt) {
+                                // Check for pending operations before overwriting
+                                val hasPendingOp = pendingOpDao.getByEntity(entity.id, PendingOperationEntity.TYPE_EXPENSE).isNotEmpty()
+                                if (hasPendingOp) {
+                                    MotiumApplication.logger.i(
+                                        "Skipping pull overwrite for EXPENSE:${entity.id} - has pending local changes",
+                                        TAG
+                                    )
+                                } else {
                                     expenseDao.insertExpense(entity)
                                     syncedCount++
                                 }
@@ -1612,8 +1746,20 @@ class DeltaSyncWorker(
                             ))
                             syncedCount++
                         } else {
-                            val serverTimestamp = entity.serverUpdatedAt ?: 0L
-                            if (serverTimestamp > localUser.localUpdatedAt) {
+                            // FIX (2026-01-26): Don't overwrite local changes that have pending operations.
+                            // When syncStatus is PENDING_UPLOAD, there's a pending operation in the queue
+                            // that will push the local changes to the server on the next sync.
+                            // Overwriting here would discard the user's local change (e.g., consider_full_distance toggle)
+                            // and the pending op would push stale data or be lost in race conditions.
+                            val hasPendingOp = pendingOpDao.getByEntity(entity.id, PendingOperationEntity.TYPE_USER).isNotEmpty()
+                            if (hasPendingOp) {
+                                MotiumApplication.logger.i(
+                                    "Skipping pull overwrite for USER:${entity.id} - has pending local changes (syncStatus=${localUser.syncStatus})",
+                                    TAG
+                                )
+                            } else {
+                                // No pending operation but entity is not SYNCED - apply server data
+                                // This handles cases where syncStatus was left stale (e.g., after conflict resolution)
                                 database.userDao().updateUser(entity.copy(
                                     isLocallyConnected = localUser.isLocallyConnected
                                 ))
@@ -1847,9 +1993,14 @@ class DeltaSyncWorker(
                                 workScheduleDao.insertWorkSchedule(entity)
                                 syncedCount++
                             } else {
-                                // Conflict - last-write-wins
-                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
-                                if (serverTimestamp > localSchedule.localUpdatedAt) {
+                                // Check for pending operations before overwriting
+                                val hasPendingOp = pendingOpDao.getByEntity(entity.id, PendingOperationEntity.TYPE_WORK_SCHEDULE).isNotEmpty()
+                                if (hasPendingOp) {
+                                    MotiumApplication.logger.i(
+                                        "Skipping pull overwrite for WORK_SCHEDULE:${entity.id} - has pending local changes",
+                                        TAG
+                                    )
+                                } else {
                                     workScheduleDao.insertWorkSchedule(entity)
                                     syncedCount++
                                 }
@@ -1892,9 +2043,15 @@ class DeltaSyncWorker(
                                 workScheduleDao.insertAutoTrackingSettings(entity)
                                 syncedCount++
                             } else {
-                                // Conflict - last-write-wins
-                                val serverTimestamp = entity.serverUpdatedAt ?: 0L
-                                if (serverTimestamp > localSettings.localUpdatedAt) {
+                                // Check for pending operations before overwriting
+                                // entityId for auto tracking settings is the userId
+                                val hasPendingOp = pendingOpDao.getByEntity(userId, PendingOperationEntity.TYPE_AUTO_TRACKING_SETTINGS).isNotEmpty()
+                                if (hasPendingOp) {
+                                    MotiumApplication.logger.i(
+                                        "Skipping pull overwrite for AUTO_TRACKING_SETTINGS:$userId - has pending local changes",
+                                        TAG
+                                    )
+                                } else {
                                     workScheduleDao.insertAutoTrackingSettings(entity)
                                     syncedCount++
                                 }
@@ -1935,12 +2092,13 @@ class DeltaSyncWorker(
         val localHasTripTypeChange = local.tripType != server.tripType
         val localHasVehicleChange = local.vehicleId != server.vehicleId
         val localHasWorkHomeFlagChange = local.isWorkHomeTrip != server.isWorkHomeTrip
+        val localHasValidationChange = local.isValidated != server.isValidated
 
         // CRITICAL: If we preserved any local changes, mark as PENDING_UPLOAD
         // so the upload phase will push these merged changes to the server.
         // Otherwise, local changes would be silently lost.
         val hasPreservedLocalChanges = localHasNotesChange || localHasTripTypeChange ||
-                localHasVehicleChange || localHasWorkHomeFlagChange
+                localHasVehicleChange || localHasWorkHomeFlagChange || localHasValidationChange
 
         return server.copy(
             // ===== USER-EDITABLE FIELDS: Prefer local if changed =====
@@ -1948,6 +2106,7 @@ class DeltaSyncWorker(
             tripType = if (localHasTripTypeChange) local.tripType else server.tripType,
             vehicleId = if (localHasVehicleChange) local.vehicleId else server.vehicleId,
             isWorkHomeTrip = if (localHasWorkHomeFlagChange) local.isWorkHomeTrip else server.isWorkHomeTrip,
+            isValidated = if (localHasValidationChange) local.isValidated else server.isValidated,
 
             // ===== AUTHORITATIVE FIELDS: Always from server =====
             // (locations, distance, times, addresses are system-generated)

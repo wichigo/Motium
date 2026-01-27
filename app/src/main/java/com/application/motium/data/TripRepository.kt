@@ -292,11 +292,16 @@ class TripRepository private constructor(context: Context) {
                 // OFFLINE-FIRST: Determine if this is a new trip or update
                 val isNewTrip = oldTrip == null
 
-                // OFFLINE-FIRST: Create entity with sync status
+                // Read existing entity version and increment
+                val existingEntity = tripDao.getTripById(tripWithUserId.id)
+                val newVersion = (existingEntity?.version ?: 0) + 1
+
+                // OFFLINE-FIRST: Create entity with sync status and version
                 val tripEntity = tripWithUserId.toEntity(
                     userId = userId,
                     syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name,
-                    localUpdatedAt = System.currentTimeMillis()
+                    localUpdatedAt = System.currentTimeMillis(),
+                    version = newVersion
                 )
                 tripDao.insertTrip(tripEntity)
 
@@ -376,6 +381,9 @@ class TripRepository private constructor(context: Context) {
                         // Timestamps
                         put("created_at", isoDateFormat.format(Date(tripWithUserId.createdAt)))
 
+                        // Version for optimistic locking
+                        put("version", newVersion)
+
                         // GPS trace as JSON array
                         if (tripWithUserId.locations.isNotEmpty()) {
                             putJsonArray("trace_gps") {
@@ -402,7 +410,8 @@ class TripRepository private constructor(context: Context) {
                         } else {
                             com.application.motium.data.local.entities.PendingOperationEntity.ACTION_UPDATE
                         },
-                        payload = tripPayload
+                        payload = tripPayload,
+                        priority = 1
                     )
 
                     MotiumApplication.logger.i(
@@ -861,6 +870,67 @@ class TripRepository private constructor(context: Context) {
     }
 
     /**
+     * Build a JSON payload for a TripEntity for sync.
+     * Reusable helper for both saveTrip() and recalculateReimbursementsForVehicle().
+     */
+    private fun buildTripPayload(tripEntity: com.application.motium.data.local.entities.TripEntity, version: Int): String {
+        val isoDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+
+        val startLoc = tripEntity.locations.firstOrNull()
+        val endLoc = tripEntity.locations.lastOrNull()
+
+        return buildJsonObject {
+            put("start_time", isoDateFormat.format(Date(tripEntity.startTime)))
+            tripEntity.endTime?.let { put("end_time", isoDateFormat.format(Date(it))) }
+
+            startLoc?.let {
+                put("start_latitude", it.latitude)
+                put("start_longitude", it.longitude)
+            }
+            endLoc?.let {
+                put("end_latitude", it.latitude)
+                put("end_longitude", it.longitude)
+            }
+
+            tripEntity.startAddress?.let { put("start_address", it) }
+            tripEntity.endAddress?.let { put("end_address", it) }
+
+            put("distance_km", tripEntity.totalDistance / 1000.0)
+            val durationMs = (tripEntity.endTime ?: System.currentTimeMillis()) - tripEntity.startTime
+            put("duration_ms", durationMs)
+
+            put("type", tripEntity.tripType ?: "PERSONAL")
+            put("is_validated", tripEntity.isValidated)
+            put("is_work_home_trip", tripEntity.isWorkHomeTrip)
+            tripEntity.vehicleId?.let { put("vehicle_id", it) }
+            tripEntity.reimbursementAmount?.let { put("reimbursement_amount", it) }
+            tripEntity.notes?.let { put("notes", it) }
+            tripEntity.matchedRouteCoordinates?.let { put("matched_route_coordinates", it) }
+
+            put("created_at", isoDateFormat.format(Date(tripEntity.createdAt)))
+            put("version", version)
+
+            if (tripEntity.locations.isNotEmpty()) {
+                putJsonArray("trace_gps") {
+                    tripEntity.locations.forEach { loc ->
+                        add(buildJsonObject {
+                            put("lat", loc.latitude)
+                            put("lon", loc.longitude)
+                            put("ts", loc.timestamp)
+                            put("acc", loc.accuracy.toDouble())
+                            if (loc.speed > 0) put("spd", loc.speed.toDouble())
+                            if (loc.bearing > 0) put("brg", loc.bearing.toDouble())
+                            if (loc.altitude != 0.0) put("alt", loc.altitude)
+                        })
+                    }
+                }
+            }
+        }.toString()
+    }
+
+    /**
      * REIMBURSEMENT: Recalcule les montants de remboursement pour tous les trajets d'un véhicule.
      * Utilise le calcul progressif par tranches basé sur l'ordre chronologique des trajets.
      * À appeler quand la puissance fiscale d'un véhicule change.
@@ -931,13 +1001,25 @@ class TripRepository private constructor(context: Context) {
 
                 // Mettre à jour le trajet si le montant a changé
                 if (tripEntity.reimbursementAmount != reimbursement) {
+                    val newVersion = (tripEntity.version ?: 0) + 1
                     val updatedTrip = tripEntity.copy(
                         reimbursementAmount = reimbursement,
                         syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name,
                         localUpdatedAt = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis()
+                        updatedAt = System.currentTimeMillis(),
+                        version = newVersion
                     )
                     tripDao.insertTrip(updatedTrip)
+
+                    // Queue sync operation to avoid orphan PENDING_UPLOAD
+                    val syncManager = OfflineFirstSyncManager.getInstance(appContext)
+                    syncManager.queueOperation(
+                        entityType = com.application.motium.data.local.entities.PendingOperationEntity.TYPE_TRIP,
+                        entityId = tripEntity.id,
+                        action = com.application.motium.data.local.entities.PendingOperationEntity.ACTION_UPDATE,
+                        payload = buildTripPayload(updatedTrip, newVersion),
+                        priority = 0  // Low priority - batch with periodic sync
+                    )
                     updatedCount++
                 }
 

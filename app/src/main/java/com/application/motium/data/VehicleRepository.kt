@@ -5,15 +5,17 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.local.entities.PendingOperationEntity
+import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
-import com.application.motium.data.supabase.VehicleRemoteDataSource
 import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.domain.model.Vehicle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.Calendar
 
 /**
@@ -39,8 +41,8 @@ class VehicleRepository private constructor(context: Context) {
     private val database = MotiumDatabase.getInstance(context)
     private val vehicleDao = database.vehicleDao()
     private val tripDao = database.tripDao()
-    private val vehicleRemoteDataSource = VehicleRemoteDataSource.getInstance(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
+    private val syncManager by lazy { OfflineFirstSyncManager.getInstance(appContext) }
 
     /**
      * Get the start of the current year in milliseconds.
@@ -222,7 +224,7 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * Ajoute un nouveau véhicule.
-     * Sauvegarde d'abord localement, puis synchronise avec Supabase si possible.
+     * Sauvegarde localement puis queue pour sync atomique via sync_changes() RPC.
      */
     suspend fun insertVehicle(vehicle: Vehicle) = withContext(Dispatchers.IO) {
         try {
@@ -232,37 +234,27 @@ class VehicleRepository private constructor(context: Context) {
                 MotiumApplication.logger.i("Unset default from all vehicles for user: ${vehicle.userId}", "VehicleRepository")
             }
 
-            // 1. Sauvegarder localement dans Room
-            val vehicleEntity = vehicle.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
+            // 1. Sauvegarder localement dans Room avec PENDING_UPLOAD
+            val version = 1
+            val vehicleEntity = vehicle.toEntity(
+                syncStatus = SyncStatus.PENDING_UPLOAD.name,
+                version = version
+            )
             vehicleDao.insertVehicle(vehicleEntity)
 
-            MotiumApplication.logger.i("✅ Vehicle saved to Room Database: ${vehicle.id}", "VehicleRepository")
+            MotiumApplication.logger.i("Vehicle saved to Room Database: ${vehicle.id}", "VehicleRepository")
 
-            // 2. Synchroniser avec Supabase si l'utilisateur est connecté
-            try {
-                val localUser = localUserRepository.getLoggedInUser()
-                if (localUser != null) {
-                    // Si le véhicule est défaut, d'abord unset les autres sur Supabase
-                    if (vehicle.isDefault) {
-                        vehicleRemoteDataSource.setDefaultVehicle(vehicle.userId, vehicle.id)
-                    }
+            // 2. Queue pour sync atomique via sync_changes() RPC
+            val payload = buildVehiclePayload(vehicle, version)
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_VEHICLE,
+                entityId = vehicle.id,
+                action = PendingOperationEntity.ACTION_CREATE,
+                payload = payload,
+                priority = 1
+            )
 
-                    vehicleRemoteDataSource.insertVehicle(vehicle)
-
-                    // Marquer comme synchronisé
-                    vehicleDao.markVehicleAsSynced(vehicle.id, System.currentTimeMillis())
-
-                    MotiumApplication.logger.i("✅ Vehicle synced to Supabase: ${vehicle.id}", "VehicleRepository")
-                } else {
-                    // OFFLINE-FIRST: Queue operation for background sync
-                    queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_CREATE)
-                    MotiumApplication.logger.w("⚠️ Vehicle saved locally only - queued for background sync", "VehicleRepository")
-                }
-            } catch (e: Exception) {
-                // OFFLINE-FIRST: Queue operation for retry when sync fails
-                queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_CREATE)
-                MotiumApplication.logger.e("❌ Failed to sync vehicle to Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
-            }
+            MotiumApplication.logger.i("Vehicle queued for sync: ${vehicle.id}", "VehicleRepository")
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error inserting vehicle: ${e.message}", "VehicleRepository", e)
             throw e
@@ -271,6 +263,7 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * Met à jour un véhicule existant.
+     * Sauvegarde localement puis queue pour sync atomique via sync_changes() RPC.
      */
     suspend fun updateVehicle(vehicle: Vehicle) = withContext(Dispatchers.IO) {
         try {
@@ -280,37 +273,29 @@ class VehicleRepository private constructor(context: Context) {
                 MotiumApplication.logger.i("Unset default from all vehicles for user: ${vehicle.userId}", "VehicleRepository")
             }
 
-            // 1. Mettre à jour localement dans Room
-            val vehicleEntity = vehicle.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
+            // 1. Mettre à jour localement avec version incrémentée
+            val currentEntity = vehicleDao.getVehicleById(vehicle.id)
+            val newVersion = (currentEntity?.version ?: 0) + 1
+
+            val vehicleEntity = vehicle.toEntity(
+                syncStatus = SyncStatus.PENDING_UPLOAD.name,
+                version = newVersion
+            )
             vehicleDao.updateVehicle(vehicleEntity)
 
-            MotiumApplication.logger.i("✅ Vehicle updated in Room Database: ${vehicle.id}, isDefault=${vehicle.isDefault}", "VehicleRepository")
+            MotiumApplication.logger.i("Vehicle updated in Room Database: ${vehicle.id}, isDefault=${vehicle.isDefault}", "VehicleRepository")
 
-            // 2. Synchroniser avec Supabase si possible
-            try {
-                val localUser = localUserRepository.getLoggedInUser()
-                if (localUser != null) {
-                    // Si le véhicule est défaut, utiliser setDefaultVehicle pour unset les autres sur Supabase aussi
-                    if (vehicle.isDefault) {
-                        vehicleRemoteDataSource.setDefaultVehicle(vehicle.userId, vehicle.id)
-                    }
-                    // Puis mettre à jour toutes les autres propriétés
-                    vehicleRemoteDataSource.updateVehicle(vehicle)
+            // 2. Queue pour sync atomique via sync_changes() RPC
+            val payload = buildVehiclePayload(vehicle, newVersion)
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_VEHICLE,
+                entityId = vehicle.id,
+                action = PendingOperationEntity.ACTION_UPDATE,
+                payload = payload,
+                priority = 1
+            )
 
-                    // Marquer comme synchronisé
-                    vehicleDao.markVehicleAsSynced(vehicle.id, System.currentTimeMillis())
-
-                    MotiumApplication.logger.i("✅ Vehicle synced to Supabase: ${vehicle.id}", "VehicleRepository")
-                } else {
-                    // OFFLINE-FIRST: Queue operation for background sync
-                    queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_UPDATE)
-                    MotiumApplication.logger.w("⚠️ Vehicle updated locally only - queued for background sync", "VehicleRepository")
-                }
-            } catch (e: Exception) {
-                // OFFLINE-FIRST: Queue operation for retry when sync fails
-                queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_UPDATE)
-                MotiumApplication.logger.e("❌ Failed to sync vehicle to Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
-            }
+            MotiumApplication.logger.i("Vehicle update queued for sync: ${vehicle.id}", "VehicleRepository")
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error updating vehicle: ${e.message}", "VehicleRepository", e)
             throw e
@@ -319,35 +304,53 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * Définit un véhicule comme véhicule par défaut.
+     * Sauvegarde localement puis queue pour sync atomique via sync_changes() RPC.
      */
     suspend fun setDefaultVehicle(userId: String, vehicleId: String) = withContext(Dispatchers.IO) {
         try {
-            // 1. Mettre à jour localement dans Room
+            // 1. Get old default vehicle BEFORE unsetting (to queue its sync later)
+            val oldDefault = vehicleDao.getDefaultVehicle(userId)
+
+            // 2. Mettre à jour localement dans Room
             vehicleDao.unsetAllDefaultVehicles(userId)
             vehicleDao.setVehicleAsDefault(vehicleId)
+
+            // 3. Queue sync for old default vehicle (isDefault=false)
+            if (oldDefault != null && oldDefault.id != vehicleId) {
+                vehicleDao.markVehicleAsNeedingSync(oldDefault.id)
+                val oldEntity = vehicleDao.getVehicleById(oldDefault.id)
+                if (oldEntity != null) {
+                    val payload = buildVehiclePayload(oldEntity.toDomainModel(), oldEntity.version ?: 1)
+                    syncManager.queueOperation(
+                        entityType = PendingOperationEntity.TYPE_VEHICLE,
+                        entityId = oldDefault.id,
+                        action = PendingOperationEntity.ACTION_UPDATE,
+                        payload = payload,
+                        priority = 1
+                    )
+                    MotiumApplication.logger.i("Old default vehicle queued for sync: ${oldDefault.id}", "VehicleRepository")
+                }
+            }
+
+            // 4. Incrémenter la version pour sync du nouveau default
+            val currentEntity = vehicleDao.getVehicleById(vehicleId)
+            val newVersion = (currentEntity?.version ?: 0) + 1
             vehicleDao.markVehicleAsNeedingSync(vehicleId)
 
-            MotiumApplication.logger.i("✅ Default vehicle set in Room Database: $vehicleId", "VehicleRepository")
+            MotiumApplication.logger.i("Default vehicle set in Room Database: $vehicleId", "VehicleRepository")
 
-            // 2. Synchroniser avec Supabase si possible
-            try {
-                val localUser = localUserRepository.getLoggedInUser()
-                if (localUser != null) {
-                    vehicleRemoteDataSource.setDefaultVehicle(userId, vehicleId)
-
-                    // Marquer comme synchronisé
-                    vehicleDao.markVehicleAsSynced(vehicleId, System.currentTimeMillis())
-
-                    MotiumApplication.logger.i("✅ Default vehicle synced to Supabase: $vehicleId", "VehicleRepository")
-                } else {
-                    // OFFLINE-FIRST: Queue operation for background sync
-                    queueVehicleOperation(vehicleId, PendingOperationEntity.ACTION_UPDATE)
-                    MotiumApplication.logger.w("⚠️ Default vehicle set locally only - queued for background sync", "VehicleRepository")
-                }
-            } catch (e: Exception) {
-                // OFFLINE-FIRST: Queue operation for retry when sync fails
-                queueVehicleOperation(vehicleId, PendingOperationEntity.ACTION_UPDATE)
-                MotiumApplication.logger.e("❌ Failed to sync default vehicle to Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
+            // 5. Queue pour sync - on a besoin du véhicule complet pour le payload
+            if (currentEntity != null) {
+                val vehicle = currentEntity.copy(isDefault = true).toDomainModel()
+                val payload = buildVehiclePayload(vehicle, newVersion)
+                syncManager.queueOperation(
+                    entityType = PendingOperationEntity.TYPE_VEHICLE,
+                    entityId = vehicleId,
+                    action = PendingOperationEntity.ACTION_UPDATE,
+                    payload = payload,
+                    priority = 1
+                )
+                MotiumApplication.logger.i("New default vehicle queued for sync: $vehicleId", "VehicleRepository")
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error setting default vehicle: ${e.message}", "VehicleRepository", e)
@@ -357,114 +360,30 @@ class VehicleRepository private constructor(context: Context) {
 
     /**
      * Supprime un véhicule.
+     * Queue la suppression pour sync atomique via sync_changes() RPC, puis supprime localement.
      */
     suspend fun deleteVehicle(vehicle: Vehicle) = withContext(Dispatchers.IO) {
         try {
-            // 1. Tenter la suppression sur Supabase d'abord si possible
-            var needsQueueing = false
-            try {
-                val localUser = localUserRepository.getLoggedInUser()
-                if (localUser != null) {
-                    vehicleRemoteDataSource.deleteVehicle(vehicle)
-                    MotiumApplication.logger.i("✅ Vehicle deleted from Supabase: ${vehicle.id}", "VehicleRepository")
-                } else {
-                    // OFFLINE-FIRST: Queue operation for background sync BEFORE deleting locally
-                    needsQueueing = true
-                    MotiumApplication.logger.w("⚠️ User offline - queuing vehicle deletion for background sync", "VehicleRepository")
-                }
-            } catch (e: Exception) {
-                // OFFLINE-FIRST: Queue operation for retry when sync fails
-                needsQueueing = true
-                MotiumApplication.logger.e("❌ Failed to delete vehicle from Supabase, queued for retry: ${e.message}", "VehicleRepository", e)
-            }
+            // 1. Récupérer la version avant suppression
+            val currentEntity = vehicleDao.getVehicleById(vehicle.id)
+            val version = (currentEntity?.version ?: 0) + 1
 
-            // 2. Queue the delete operation if needed (BEFORE local deletion)
-            if (needsQueueing) {
-                queueVehicleOperation(vehicle.id, PendingOperationEntity.ACTION_DELETE)
-            }
+            // 2. Queue l'opération DELETE AVANT la suppression locale
+            syncManager.queueOperation(
+                entityType = PendingOperationEntity.TYPE_VEHICLE,
+                entityId = vehicle.id,
+                action = PendingOperationEntity.ACTION_DELETE,
+                payload = buildJsonObject { put("version", version) }.toString(),
+                priority = 1
+            )
 
             // 3. Supprimer localement de Room
             vehicleDao.deleteVehicleById(vehicle.id)
-            MotiumApplication.logger.i("✅ Vehicle deleted from Room Database: ${vehicle.id}", "VehicleRepository")
+            MotiumApplication.logger.i("Vehicle deleted from Room and queued for sync: ${vehicle.id}", "VehicleRepository")
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error deleting vehicle: ${e.message}", "VehicleRepository", e)
             throw e
-        }
-    }
-
-    /**
-     * SYNC: Synchronise tous les véhicules non synchronisés avec Supabase.
-     */
-    suspend fun syncVehiclesToSupabase(): Result<Int> = withContext(Dispatchers.IO) {
-        try {
-            val localUser = localUserRepository.getLoggedInUser()
-            if (localUser == null) {
-                MotiumApplication.logger.w("⚠️ User not authenticated, cannot sync vehicles", "VehicleRepository")
-                return@withContext Result.failure(Exception("User not authenticated"))
-            }
-
-            val vehiclesNeedingSync = vehicleDao.getVehiclesNeedingSync(localUser.id)
-
-            if (vehiclesNeedingSync.isEmpty()) {
-                MotiumApplication.logger.i("✓ No vehicles to sync", "VehicleRepository")
-                return@withContext Result.success(0)
-            }
-
-            MotiumApplication.logger.i("🔄 Syncing ${vehiclesNeedingSync.size} vehicles to Supabase", "VehicleRepository")
-
-            var syncedCount = 0
-            vehiclesNeedingSync.forEach { entity ->
-                try {
-                    val vehicle = entity.toDomainModel()
-                    vehicleRemoteDataSource.updateVehicle(vehicle)
-
-                    // Marquer comme synchronisé
-                    vehicleDao.markVehicleAsSynced(vehicle.id, System.currentTimeMillis())
-                    syncedCount++
-                } catch (e: Exception) {
-                    MotiumApplication.logger.e("❌ Failed to sync vehicle ${entity.id}: ${e.message}", "VehicleRepository", e)
-                }
-            }
-
-            MotiumApplication.logger.i("✅ Successfully synced $syncedCount vehicles to Supabase", "VehicleRepository")
-            Result.success(syncedCount)
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Error syncing vehicles to Supabase: ${e.message}", "VehicleRepository", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * SYNC: Récupère les véhicules depuis Supabase et les sauvegarde localement.
-     */
-    suspend fun syncVehiclesFromSupabase() = withContext(Dispatchers.IO) {
-        try {
-            val localUser = localUserRepository.getLoggedInUser()
-            if (localUser == null) {
-                MotiumApplication.logger.i("User not authenticated, skipping Supabase vehicle sync", "VehicleRepository")
-                return@withContext
-            }
-
-            MotiumApplication.logger.i("🔄 Fetching vehicles from Supabase for user: ${localUser.id}", "VehicleRepository")
-
-            val supabaseVehicles = vehicleRemoteDataSource.getAllVehiclesForUser(localUser.id)
-
-            if (supabaseVehicles.isNotEmpty()) {
-                // Convertir en entités et sauvegarder dans Room
-                val entities = supabaseVehicles.map { it.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis()) }
-                vehicleDao.insertVehicles(entities)
-
-                MotiumApplication.logger.i("✅ Synced ${supabaseVehicles.size} vehicles from Supabase to Room Database", "VehicleRepository")
-            } else {
-                MotiumApplication.logger.i("No vehicles found on Supabase for user ${localUser.id}", "VehicleRepository")
-            }
-        } catch (e: java.util.concurrent.CancellationException) {
-            // Normal cancellation (e.g., user navigated away) - don't log as error
-            MotiumApplication.logger.d("Vehicle sync cancelled (user navigated away)", "VehicleRepository")
-            throw e // Rethrow to properly propagate cancellation
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Error syncing vehicles from Supabase: ${e.message}", "VehicleRepository", e)
         }
     }
 
@@ -482,26 +401,22 @@ class VehicleRepository private constructor(context: Context) {
     }
 
     /**
-     * OFFLINE-FIRST: Queue a vehicle operation for background sync.
-     * This ensures that vehicle changes are synchronized even when offline.
-     *
-     * @param vehicleId The ID of the vehicle
-     * @param action The action to perform (ACTION_CREATE, ACTION_UPDATE, ACTION_DELETE)
+     * Build JSON payload matching push_vehicle_change() SQL fields.
      */
-    private suspend fun queueVehicleOperation(vehicleId: String, action: String) {
-        try {
-            val syncManager = OfflineFirstSyncManager.getInstance(appContext)
-            syncManager.queueOperation(
-                entityType = PendingOperationEntity.TYPE_VEHICLE,
-                entityId = vehicleId,
-                action = action,
-                payload = null,
-                priority = 0
-            )
-            MotiumApplication.logger.i("🔄 Vehicle operation queued: $vehicleId ($action)", "VehicleRepository")
-        } catch (e: Exception) {
-            MotiumApplication.logger.e("❌ Failed to queue vehicle operation: ${e.message}", "VehicleRepository", e)
-        }
+    private fun buildVehiclePayload(vehicle: Vehicle, version: Int): String {
+        return buildJsonObject {
+            put("name", vehicle.name)
+            put("type", vehicle.type.name)
+            put("license_plate", vehicle.licensePlate ?: "")
+            put("power", vehicle.power?.name ?: "")
+            put("fuel_type", vehicle.fuelType?.name ?: "")
+            put("mileage_rate", vehicle.mileageRate)
+            put("is_default", vehicle.isDefault)
+            put("total_mileage_perso", vehicle.totalMileagePerso)
+            put("total_mileage_pro", vehicle.totalMileagePro)
+            put("total_mileage_work_home", vehicle.totalMileageWorkHome)
+            put("version", version)
+        }.toString()
     }
 
     /**
@@ -547,13 +462,19 @@ class VehicleRepository private constructor(context: Context) {
             // OFFLINE-FIRST: Queue sync operation for immediate upload
             try {
                 val syncManager = OfflineFirstSyncManager.getInstance(appContext)
-                syncManager.queueOperation(
-                    entityType = PendingOperationEntity.TYPE_VEHICLE,
-                    entityId = vehicleId,
-                    action = PendingOperationEntity.ACTION_UPDATE,
-                    payload = null,
-                    priority = 0
-                )
+                // Re-read the entity after markVehicleAsNeedingSync (which incremented version)
+                val updatedEntity = vehicleDao.getVehicleById(vehicleId)
+                if (updatedEntity != null) {
+                    val updatedVehicle = updatedEntity.toDomainModel()
+                    val payload = buildVehiclePayload(updatedVehicle, updatedEntity.version ?: 1)
+                    syncManager.queueOperation(
+                        entityType = PendingOperationEntity.TYPE_VEHICLE,
+                        entityId = vehicleId,
+                        action = PendingOperationEntity.ACTION_UPDATE,
+                        payload = payload,
+                        priority = 1
+                    )
+                }
                 MotiumApplication.logger.i(
                     "🔄 Vehicle mileage queued for sync: $vehicleId",
                     "VehicleRepository"

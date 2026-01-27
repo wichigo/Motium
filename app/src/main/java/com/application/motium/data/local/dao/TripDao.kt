@@ -88,6 +88,25 @@ interface TripDao {
     suspend fun markTripAsConflict(tripId: String, timestamp: Long = System.currentTimeMillis())
 
     /**
+     * Reset trip for re-pull after VERSION_CONFLICT resolution.
+     * Updates syncStatus, serverUpdatedAt, localUpdatedAt, and version to match server.
+     */
+    @Query("""
+        UPDATE trips
+        SET syncStatus = :syncStatus,
+            serverUpdatedAt = :serverUpdatedAt,
+            localUpdatedAt = :serverUpdatedAt,
+            version = :serverVersion
+        WHERE id = :tripId
+    """)
+    suspend fun resetForPull(
+        tripId: String,
+        syncStatus: String,
+        serverUpdatedAt: Long,
+        serverVersion: Int
+    )
+
+    /**
      * Delete all trips for a user.
      */
     @Query("DELETE FROM trips WHERE userId = :userId")
