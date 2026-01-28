@@ -240,9 +240,10 @@ class OfflineFirstLicenseRepository private constructor(
         val now = System.currentTimeMillis()
         licenseDao.assignLicense(licenseId, linkedAccountId, now, now)
 
-        // Build payload for server sync
+        // Build payload for server sync - include status = active to match LicenseDao.assignLicense()
         val payload = buildJsonObject {
             put("linked_account_id", linkedAccountId)
+            put("status", "active")
         }.toString()
 
         // Queue for sync with payload

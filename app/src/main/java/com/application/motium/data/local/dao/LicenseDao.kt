@@ -41,7 +41,7 @@ interface LicenseDao {
     @Query("UPDATE licenses SET syncStatus = :status WHERE id = :id")
     suspend fun updateSyncStatus(id: String, status: String)
 
-    @Query("UPDATE licenses SET linkedAccountId = :userId, linkedAt = :linkedAt, syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :now, version = version + 1 WHERE id = :licenseId")
+    @Query("UPDATE licenses SET linkedAccountId = :userId, linkedAt = :linkedAt, status = 'active', syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :now, version = version + 1 WHERE id = :licenseId")
     suspend fun assignLicense(licenseId: String, userId: String, linkedAt: Long, now: Long)
 
     @Query("UPDATE licenses SET linkedAccountId = NULL, linkedAt = NULL, syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :now, version = version + 1 WHERE id = :licenseId")
