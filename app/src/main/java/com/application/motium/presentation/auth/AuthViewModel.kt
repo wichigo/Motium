@@ -321,7 +321,7 @@ class AuthViewModel(
 
     fun signIn(email: String, password: String) {
         viewModelScope.launch {
-            _loginState.value = _loginState.value.copy(isLoading = true, error = null)
+            _loginState.value = _loginState.value.copy(isLoading = true, error = null, emailNotVerified = false)
 
             val result = authRepository.signIn(LoginRequest(email, password))
             when (result) {
@@ -341,16 +341,80 @@ class AuthViewModel(
                     triggerProDataSyncIfNeeded()
                 }
                 is AuthResult.Error -> {
-                    _loginState.value = _loginState.value.copy(
-                        isLoading = false,
-                        error = result.message
-                    )
+                    MotiumApplication.logger.w("🔴 signIn error: ${result.message}", "AuthViewModel")
+                    // Check for EMAIL_NOT_VERIFIED special error
+                    if (result.message.startsWith("EMAIL_NOT_VERIFIED:")) {
+                        val parts = result.message.split(":")
+                        val unverifiedEmail = parts.getOrNull(1) ?: email
+                        val unverifiedUserId = parts.getOrNull(2)
+                        MotiumApplication.logger.w(
+                            "Login blocked - email not verified: $unverifiedEmail",
+                            "AuthViewModel"
+                        )
+                        _loginState.value = _loginState.value.copy(
+                            isLoading = false,
+                            emailNotVerified = true,
+                            unverifiedEmail = unverifiedEmail,
+                            unverifiedUserId = unverifiedUserId,
+                            error = null
+                        )
+                    } else {
+                        _loginState.value = _loginState.value.copy(
+                            isLoading = false,
+                            error = result.message
+                        )
+                    }
                 }
                 AuthResult.Loading -> {
                     _loginState.value = _loginState.value.copy(isLoading = true)
                 }
             }
         }
+    }
+
+    /**
+     * Resend verification email to the unverified user.
+     * Called when user clicks "Resend email" in the verification dialog.
+     * Uses Supabase's native resend method which only requires email.
+     */
+    fun resendVerificationEmail(
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val email = _loginState.value.unverifiedEmail
+
+        if (email == null) {
+            onError("Adresse email manquante")
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                // Use Supabase's native resend method
+                val supabaseAuth = (authRepository as? SupabaseAuthRepository)
+                if (supabaseAuth != null) {
+                    supabaseAuth.resendConfirmationEmail(email)
+                    MotiumApplication.logger.i("✅ Verification email resent to $email", "AuthViewModel")
+                    onSuccess()
+                } else {
+                    onError("Erreur de configuration")
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.e("❌ Error resending verification email: ${e.message}", "AuthViewModel", e)
+                onError(e.message ?: "Erreur lors de l'envoi")
+            }
+        }
+    }
+
+    /**
+     * Dismiss the email verification dialog.
+     */
+    fun dismissEmailVerificationDialog() {
+        _loginState.value = _loginState.value.copy(
+            emailNotVerified = false,
+            unverifiedEmail = null,
+            unverifiedUserId = null
+        )
     }
 
     fun signUp(email: String, password: String, name: String, isProfessional: Boolean = false, organizationName: String = "") {
@@ -449,88 +513,31 @@ class AuthViewModel(
             _registerState.value = _registerState.value.copy(isLoading = true, error = null)
 
             try {
-                val deviceId = deviceFingerprintManager.getDeviceId()
                 val userRole = if (isProfessional) UserRole.ENTERPRISE else UserRole.INDIVIDUAL
                 val result = authRepository.signUp(RegisterRequest(email, password, name, userRole))
 
                 when (result) {
                     is AuthResult.Success -> {
-                        val userId = result.data.id
-
-                        // Step 1: Create profile first (without device_fingerprint_id)
-                        // This must happen BEFORE registerDevice because device_fingerprints.user_id
-                        // has a FK to public.users.id
-                        val profileResult = authRepository.createUserProfileWithTrial(
-                            userId = userId,
-                            name = name,
-                            isProfessional = isProfessional,
-                            organizationName = organizationName,
-                            verifiedPhone = "",
-                            deviceFingerprintId = null
+                        // SUCCESS: Account created in auth.users
+                        // Profile will be created when user confirms email and logs in
+                        MotiumApplication.logger.i(
+                            "✅ Registration successful - email verification pending for: $email",
+                            "AuthViewModel"
                         )
 
-                        when (profileResult) {
-                            is AuthResult.Success -> {
-                                // Step 2: Now register device (profile exists, FK constraint satisfied)
-                                if (deviceId != null) {
-                                    deviceFingerprintRepository.registerDevice(profileResult.data.id)
-                                        .onSuccess { fingerprintId ->
-                                            // Step 3: Update user profile with device_fingerprint_id
-                                            viewModelScope.launch {
-                                                val updatedUser = profileResult.data.copy(
-                                                    deviceFingerprintId = fingerprintId
-                                                )
-                                                authRepository.updateUserProfile(updatedUser)
-                                                MotiumApplication.logger.i(
-                                                    "Device fingerprint linked: $fingerprintId",
-                                                    "AuthViewModel"
-                                                )
-                                            }
-                                        }
-                                        .onFailure { e ->
-                                            MotiumApplication.logger.w(
-                                                "Failed to register device: ${e.message}",
-                                                "AuthViewModel"
-                                            )
-                                        }
-                                }
+                        // Store pending user info for profile creation at first login
+                        // This is stored locally and will be used in signIn flow
+                        savePendingUserInfo(email, name, isProfessional, organizationName)
 
-                                _registerState.value = _registerState.value.copy(
-                                    isLoading = false,
-                                    isSuccess = true
-                                )
-
-                                // Send welcome email (fire-and-forget)
-                                viewModelScope.launch {
-                                    try {
-                                        emailRepository.sendWelcomeEmail(
-                                            email, name,
-                                            if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
-                                        )
-                                    } catch (e: Exception) {
-                                        MotiumApplication.logger.w(
-                                            "Failed to send welcome email: ${e.message}",
-                                            "AuthViewModel"
-                                        )
-                                    }
-                                }
-
-                                MotiumApplication.logger.i(
-                                    "Registration successful",
-                                    "AuthViewModel"
-                                )
-                                SupabaseConnectionService.startService(context)
-                            }
-                            is AuthResult.Error -> {
-                                _registerState.value = _registerState.value.copy(
-                                    isLoading = false,
-                                    error = profileResult.message
-                                )
-                            }
-                            AuthResult.Loading -> {
-                                _registerState.value = _registerState.value.copy(isLoading = true)
-                            }
-                        }
+                        _registerState.value = _registerState.value.copy(
+                            isLoading = false,
+                            isSuccess = true,
+                            emailVerificationPending = true,
+                            pendingUserName = name,
+                            pendingUserEmail = email,
+                            pendingIsProfessional = isProfessional,
+                            pendingOrganizationName = organizationName
+                        )
                     }
                     is AuthResult.Error -> {
                         _registerState.value = _registerState.value.copy(
@@ -554,6 +561,27 @@ class AuthViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Saves pending user info to SharedPreferences for profile creation at first login.
+     * This is needed because the user's profile can only be created after email confirmation.
+     */
+    private fun savePendingUserInfo(
+        email: String,
+        name: String,
+        isProfessional: Boolean,
+        organizationName: String
+    ) {
+        val prefs = context.getSharedPreferences("pending_registration", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("email", email)
+            .putString("name", name)
+            .putBoolean("isProfessional", isProfessional)
+            .putString("organizationName", organizationName)
+            .putLong("timestamp", System.currentTimeMillis())
+            .apply()
+        MotiumApplication.logger.i("📝 Saved pending user info for: $email", "AuthViewModel")
     }
 
     fun signInWithGoogle(idToken: String) {
@@ -809,7 +837,13 @@ data class LoginUiState(
     /** True while credentials are being saved to password manager (Samsung Pass, etc.) */
     val isSavingCredentials: Boolean = false,
     /** True when the full login flow is complete (auth + credential save) and ready to navigate */
-    val isReadyToNavigate: Boolean = false
+    val isReadyToNavigate: Boolean = false,
+    /** True when login failed because email is not verified */
+    val emailNotVerified: Boolean = false,
+    /** Email address that needs verification (when emailNotVerified is true) */
+    val unverifiedEmail: String? = null,
+    /** User ID for the unverified account (needed to resend verification email) */
+    val unverifiedUserId: String? = null
 )
 
 /**
@@ -823,7 +857,12 @@ data class CredentialsToSave(
 data class RegisterUiState(
     val isLoading: Boolean = false,
     val isSuccess: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val emailVerificationPending: Boolean = false,
+    val pendingUserName: String? = null,
+    val pendingUserEmail: String? = null,
+    val pendingIsProfessional: Boolean = false,
+    val pendingOrganizationName: String? = null
 )
 
 /**

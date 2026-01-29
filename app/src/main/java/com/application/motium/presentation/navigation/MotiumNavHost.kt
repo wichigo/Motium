@@ -61,9 +61,11 @@ fun MotiumNavHost(
 ) {
     val authState by authViewModel.authState.collectAsState()
     val proLicenseState by authViewModel.proLicenseState.collectAsState()
+    val registerState by authViewModel.registerState.collectAsState()
+    val loginState by authViewModel.loginState.collectAsState()
 
     // Navigation automatique basée sur l'état d'authentification
-    LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role, authState.user?.subscription?.type, authState.initialSyncDone) {
+    LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role, authState.user?.subscription?.type, authState.initialSyncDone, registerState.isLoading, registerState.error, loginState.emailNotVerified) {
         MotiumApplication.logger.i("🧭 Navigation LaunchedEffect triggered", "Navigation")
         MotiumApplication.logger.i("   - isLoading: ${authState.isLoading}", "Navigation")
         MotiumApplication.logger.i("   - isAuthenticated: ${authState.isAuthenticated}", "Navigation")
@@ -142,7 +144,12 @@ fun MotiumNavHost(
             } else {
                 // Reset pro license state on logout
                 authViewModel.resetProLicenseState()
-                authViewModel.resetLoginState()
+
+                // BUGFIX: Don't reset login state if email verification dialog is showing
+                // This prevents the dialog from disappearing immediately after being shown
+                if (!loginState.emailNotVerified) {
+                    authViewModel.resetLoginState()
+                }
 
                 // Check if there's a pending password reset deep link
                 if (DeepLinkHandler.hasPendingReset()) {
@@ -174,7 +181,22 @@ fun MotiumNavHost(
 
                 // Prevent redundant navigation if already on login screen
                 val currentRoute = navController.currentBackStackEntry?.destination?.route
-                if (currentRoute != "login" && currentRoute?.startsWith("accept_invitation") != true) {
+
+                // BUGFIX: Don't navigate away from register screen if:
+                // - Registration is in progress (isLoading)
+                // - There's a registration error (let user read it)
+                if (currentRoute == "register") {
+                    if (registerState.isLoading) {
+                        MotiumApplication.logger.i("⏳ Registration in progress - staying on register screen", "Navigation")
+                        return@LaunchedEffect
+                    }
+                    if (registerState.error != null) {
+                        MotiumApplication.logger.i("❌ Registration error visible - staying on register screen: ${registerState.error}", "Navigation")
+                        return@LaunchedEffect
+                    }
+                }
+
+                if (currentRoute != "login" && currentRoute?.startsWith("accept_invitation") != true && currentRoute != "register") {
                     MotiumApplication.logger.i("🧭 Navigating to: login (not authenticated)", "Navigation")
                     // Si l'utilisateur n'est pas connecté, aller à la connexion
                     navController.navigate("login") {

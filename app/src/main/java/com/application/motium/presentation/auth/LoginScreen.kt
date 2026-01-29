@@ -173,6 +173,109 @@ fun LoginScreen(
         }
     }
 
+    // State for resend email feedback
+    var showResendSuccess by remember { mutableStateOf(false) }
+    var resendError by remember { mutableStateOf<String?>(null) }
+    var isResending by remember { mutableStateOf(false) }
+
+    // Email verification dialog
+    if (loginState.emailNotVerified) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissEmailVerificationDialog() },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Email,
+                    contentDescription = null,
+                    tint = MotiumPrimary,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Vérifiez votre email",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Votre compte n'est pas encore vérifié.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Veuillez cliquer sur le lien de confirmation envoyé à :",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = loginState.unverifiedEmail ?: "",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MotiumPrimary
+                    )
+                    if (showResendSuccess) {
+                        Text(
+                            text = "✓ Email envoyé !",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF4CAF50)
+                        )
+                    }
+                    if (resendError != null) {
+                        Text(
+                            text = resendError ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ErrorRed
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.dismissEmailVerificationDialog() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MotiumPrimary
+                    )
+                ) {
+                    Text("Compris")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        isResending = true
+                        resendError = null
+                        showResendSuccess = false
+                        viewModel.resendVerificationEmail(
+                            onSuccess = {
+                                isResending = false
+                                showResendSuccess = true
+                            },
+                            onError = { error ->
+                                isResending = false
+                                resendError = error
+                            }
+                        )
+                    },
+                    enabled = !isResending && !showResendSuccess
+                ) {
+                    if (isResending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(if (showResendSuccess) "Envoyé !" else "Renvoyer l'email")
+                    }
+                }
+            }
+        )
+    }
+
     // Loading state during session restoration
     if (authState.isLoading && !loginState.isLoading) {
         Box(

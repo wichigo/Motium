@@ -29,6 +29,7 @@ import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,6 +95,30 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     data class TrialAbuseCheckRequest(
         val p_email: String,
         val p_device_fingerprint: String
+    )
+
+    /**
+     * Request parameters for create_user_profile_on_signup() RPC function
+     * This function bypasses RLS to create user profile even when email is not confirmed yet
+     */
+    @Serializable
+    data class CreateUserProfileRequest(
+        val p_auth_id: String,
+        val p_name: String,
+        val p_email: String,
+        val p_role: String = "INDIVIDUAL",
+        val p_device_fingerprint_id: String? = null
+    )
+
+    /**
+     * Response from create_user_profile_on_signup() RPC function
+     */
+    @Serializable
+    data class CreateUserProfileResult(
+        val success: Boolean,
+        val user_id: String? = null,
+        val error: String? = null,
+        val message: String? = null
     )
 
     @Serializable
@@ -698,19 +723,86 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     override suspend fun signUp(request: RegisterRequest): AuthResult<AuthUser> {
         return try {
             _authState.value = _authState.value.copy(isLoading = true, error = null)
-            withTimeout(15_000L) {
+
+            // Capture the result from signUpWith - it contains user info even without session
+            val signUpResult = withTimeout(15_000L) {
                 auth.signUpWith(Email) {
                     email = request.email
                     password = request.password
                 }
             }
-            val authUser = getCurrentAuthUser() ?: throw Exception("Failed to get user info after signup")
-            saveCurrentSessionSecurely()
-            updateAuthState()
+
+            MotiumApplication.logger.i("📝 signUpWith completed, result: $signUpResult", "SupabaseAuth")
+
+            // IMPORTANT: After signup with email confirmation required, there's NO session!
+            // auth.currentUserOrNull() will return null.
+            // We need to use the signUpResult or try to get user info differently.
+
+            // First try: get from current session (works if email confirmation is disabled)
+            var authUser = getCurrentAuthUser()
+
+            if (authUser == null && signUpResult != null) {
+                // Second try: construct from signUpResult
+                // signUpResult is a UserInfo object containing user id and email
+                MotiumApplication.logger.i("📝 No session after signup (email confirmation required), using signUpResult", "SupabaseAuth")
+                authUser = AuthUser(
+                    id = signUpResult.id,
+                    email = signUpResult.email ?: request.email,
+                    isEmailConfirmed = signUpResult.emailConfirmedAt != null,
+                    provider = "email"
+                )
+            }
+
+            if (authUser == null) {
+                throw Exception("Failed to get user info after signup - no result from Supabase")
+            }
+
+            MotiumApplication.logger.i("✅ signUp successful: userId=${authUser.id}, email=${authUser.email}", "SupabaseAuth")
+
+            // Try to save session if one exists (might not with email confirmation)
+            try {
+                saveCurrentSessionSecurely()
+            } catch (e: Exception) {
+                MotiumApplication.logger.w("Could not save session after signup (expected if email confirmation required): ${e.message}", "SupabaseAuth")
+            }
+
+            // NOTE: Do NOT call updateAuthState() here!
+            // The user profile doesn't exist yet in the database - it will be created
+            // by createUserProfileWithTrial() which is called after signUp().
             AuthResult.Success(authUser)
         } catch (e: Exception) {
-            _authState.value = _authState.value.copy(isLoading = false, error = e.message)
-            AuthResult.Error(e.message ?: "Signup failed", e)
+            val errorMessage = e.message ?: "Signup failed"
+            MotiumApplication.logger.w("⚠️ signUp caught exception: $errorMessage", "SupabaseAuth")
+
+            // IMPORTANT: Supabase rate limiting can throw errors EVEN when the account was created
+            // Check if the user was actually created despite the error
+            val isRateLimitError = errorMessage.contains("rate_limit", ignoreCase = true) ||
+                    errorMessage.contains("too_many_requests", ignoreCase = true) ||
+                    errorMessage.contains("over_email_send_rate_limit", ignoreCase = true)
+
+            if (isRateLimitError) {
+                MotiumApplication.logger.i("🔄 Rate limit error detected, checking if account was created anyway...", "SupabaseAuth")
+                delay(500)
+
+                // Try to get the auth user from session
+                val authUser = try {
+                    getCurrentAuthUser()
+                } catch (e2: Exception) {
+                    MotiumApplication.logger.w("Could not get auth user after rate limit: ${e2.message}", "SupabaseAuth")
+                    null
+                }
+
+                if (authUser != null) {
+                    MotiumApplication.logger.i("✅ Account WAS created despite rate limit error! Proceeding...", "SupabaseAuth")
+                    try { saveCurrentSessionSecurely() } catch (_: Exception) {}
+                    return AuthResult.Success(authUser)
+                } else {
+                    MotiumApplication.logger.w("❌ Account was NOT created after rate limit error", "SupabaseAuth")
+                }
+            }
+
+            _authState.value = _authState.value.copy(isLoading = false, error = errorMessage)
+            AuthResult.Error(errorMessage, e)
         }
     }
 
@@ -743,19 +835,57 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             val authUser = getCurrentAuthUser() ?: throw Exception("Failed to get user info after signin")
 
+            // SECURITY: Check if email is confirmed before allowing full login
+            // Users with unconfirmed emails should not be able to use the app
+            if (!authUser.isEmailConfirmed) {
+                MotiumApplication.logger.w(
+                    "⚠️ Email not confirmed for ${authUser.email} - blocking login",
+                    "SupabaseAuth"
+                )
+                // Sign out the user to prevent session persistence
+                try { auth.signOut() } catch (e: Exception) {}
+                _authState.value = _authState.value.copy(isLoading = false)
+                return AuthResult.Error("EMAIL_NOT_VERIFIED:${authUser.email}:${authUser.id}")
+            }
+
             // Sauvegarder les tokens de session
             saveCurrentSessionSecurely()
 
             // Récupérer le profil utilisateur depuis Supabase
             val userProfileResult = getUserProfile(authUser.id)
-            if (userProfileResult is AuthResult.Error) {
-                MotiumApplication.logger.e("❌ Failed to load user profile during signin: ${userProfileResult.message}", "SupabaseAuth")
-                // Sign out from Supabase if we can't get the profile
-                try { auth.signOut() } catch (e: Exception) {}
-                return AuthResult.Error("Impossible de charger votre profil. Veuillez réessayer. (${userProfileResult.message})")
+
+            val user = if (userProfileResult is AuthResult.Error) {
+                // Profile doesn't exist - this is the first login after email confirmation
+                // Create the profile now using pending registration info
+                MotiumApplication.logger.i("📝 First login after email confirmation - creating profile for: ${authUser.email}", "SupabaseAuth")
+
+                val pendingInfo = getPendingRegistrationInfo(authUser.email ?: request.email)
+                val profileResult = createUserProfileWithTrial(
+                    userId = authUser.id,
+                    name = pendingInfo.name,
+                    isProfessional = pendingInfo.isProfessional,
+                    organizationName = pendingInfo.organizationName,
+                    verifiedPhone = "",
+                    deviceFingerprintId = null
+                )
+
+                when (profileResult) {
+                    is AuthResult.Success -> {
+                        MotiumApplication.logger.i("✅ Profile created successfully at first login", "SupabaseAuth")
+                        // Clear pending info after successful profile creation
+                        clearPendingRegistrationInfo()
+                        profileResult.data
+                    }
+                    is AuthResult.Error -> {
+                        MotiumApplication.logger.e("❌ Failed to create profile at first login: ${profileResult.message}", "SupabaseAuth")
+                        try { auth.signOut() } catch (e: Exception) {}
+                        return AuthResult.Error("Impossible de créer votre profil. Veuillez réessayer. (${profileResult.message})")
+                    }
+                    AuthResult.Loading -> throw Exception("Unexpected loading state")
+                }
+            } else {
+                (userProfileResult as AuthResult.Success).data
             }
-            
-            val user = (userProfileResult as AuthResult.Success).data
 
             // CRITIQUE: Sauvegarder l'utilisateur dans la base de données locale Room pour l'accès offline
             localUserRepository.saveUser(user, isLocallyConnected = true)
@@ -778,9 +908,62 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
             return AuthResult.Success(authUser)
         } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ signIn caught exception: ${e.message}", "SupabaseAuth", e)
             _authState.value = _authState.value.copy(isLoading = false, error = e.message)
+
+            // Check if the error is about email not confirmed
+            // Supabase may return this error directly instead of allowing login
+            val errorMessage = e.message?.lowercase() ?: ""
+            if (errorMessage.contains("email") && (errorMessage.contains("confirm") || errorMessage.contains("verif"))) {
+                MotiumApplication.logger.w("⚠️ Email confirmation error detected: ${e.message}", "SupabaseAuth")
+                return AuthResult.Error("EMAIL_NOT_VERIFIED:${request.email}:")
+            }
+
             AuthResult.Error(e.message ?: "Login failed", e)
         }
+    }
+
+    /**
+     * Data class for pending registration info stored between signup and first login.
+     */
+    private data class PendingRegistrationInfo(
+        val name: String,
+        val isProfessional: Boolean,
+        val organizationName: String
+    )
+
+    /**
+     * Gets pending registration info from SharedPreferences.
+     * Falls back to email-based defaults if no pending info exists.
+     */
+    private fun getPendingRegistrationInfo(email: String): PendingRegistrationInfo {
+        val prefs = context.getSharedPreferences("pending_registration", Context.MODE_PRIVATE)
+        val storedEmail = prefs.getString("email", null)
+
+        return if (storedEmail == email) {
+            PendingRegistrationInfo(
+                name = prefs.getString("name", null) ?: email.split("@").firstOrNull() ?: "User",
+                isProfessional = prefs.getBoolean("isProfessional", false),
+                organizationName = prefs.getString("organizationName", null) ?: ""
+            )
+        } else {
+            // No pending info or different email - use defaults
+            MotiumApplication.logger.w("No pending registration info for $email, using defaults", "SupabaseAuth")
+            PendingRegistrationInfo(
+                name = email.split("@").firstOrNull() ?: "User",
+                isProfessional = false,
+                organizationName = ""
+            )
+        }
+    }
+
+    /**
+     * Clears pending registration info after successful profile creation.
+     */
+    private fun clearPendingRegistrationInfo() {
+        val prefs = context.getSharedPreferences("pending_registration", Context.MODE_PRIVATE)
+        prefs.edit().clear().apply()
+        MotiumApplication.logger.i("🗑️ Cleared pending registration info", "SupabaseAuth")
     }
 
     override suspend fun signOut(): AuthResult<Unit> {
@@ -1087,6 +1270,18 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
 
     override suspend fun confirmEmail(token: String): AuthResult<Unit> = AuthResult.Error("Email confirmation not implemented")
 
+    /**
+     * Resend email confirmation to a user who hasn't verified their email yet.
+     * Uses Supabase's native resend functionality.
+     *
+     * @param email The email address to send confirmation to
+     */
+    suspend fun resendConfirmationEmail(email: String) {
+        MotiumApplication.logger.i("📧 Resending confirmation email to: $email", "SupabaseAuth")
+        auth.resendEmail(io.github.jan.supabase.auth.OtpType.Email.SIGNUP, email)
+        MotiumApplication.logger.i("✅ Confirmation email resent to: $email", "SupabaseAuth")
+    }
+
     override suspend fun createUserProfile(authUser: AuthUser, name: String, isEnterprise: Boolean, organizationName: String): AuthResult<User> {
         return try {
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
@@ -1154,27 +1349,30 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             val authUser = auth.currentUserOrNull()
             val email = authUser?.email ?: ""
 
+            MotiumApplication.logger.i("📝 createUserProfileWithTrial START: userId=$userId, name=$name, authUser=${authUser?.id}, email=$email", "SupabaseAuth")
+
+            if (authUser == null) {
+                MotiumApplication.logger.e("❌ authUser is NULL after signup! Cannot create profile.", "SupabaseAuth")
+                return AuthResult.Error("Session invalide après inscription. Veuillez réessayer.")
+            }
+
+            if (email.isBlank()) {
+                MotiumApplication.logger.e("❌ Email is blank! authUser.email=${authUser.email}", "SupabaseAuth")
+                return AuthResult.Error("Email invalide. Veuillez réessayer.")
+            }
+
             // SECURITY FIX: Check for trial abuse BEFORE creating profile
             // This prevents: Gmail aliases, device fingerprint reuse, disposable emails
             try {
+                // RPC returns a single JSON object like {"allowed": true, ...}
+                // decodeSingleOrNull expects a list wrapper, so we use decodeAs for direct object
                 val abuseCheckResult = postgres.rpc(
                     "check_trial_abuse",
                     TrialAbuseCheckRequest(
                         p_email = email,
                         p_device_fingerprint = deviceFingerprintId ?: ""
                     )
-                ).decodeSingleOrNull<TrialAbuseCheckResult>()
-
-                // SECURITY: Fail-secure if null response
-                if (abuseCheckResult == null) {
-                    MotiumApplication.logger.w(
-                        "Trial abuse check returned null for $email. Blocking registration (fail-secure).",
-                        "SupabaseAuth"
-                    )
-                    return AuthResult.Error(
-                        "Impossible de vérifier votre éligibilité. Veuillez réessayer."
-                    )
-                }
+                ).decodeAs<TrialAbuseCheckResult>()
 
                 if (!abuseCheckResult.allowed) {
                     val reason = abuseCheckResult.reason ?: "UNKNOWN"
@@ -1185,6 +1383,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     )
                     return AuthResult.Error("$message (code: $reason)")
                 }
+
+                MotiumApplication.logger.i("✅ Trial abuse check PASSED for $email", "SupabaseAuth")
             } catch (e: Exception) {
                 // SECURITY FIX: Fail-secure instead of fail-open
                 // If we can't verify trial abuse, we MUST block registration to prevent abuse
@@ -1217,27 +1417,41 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 }
             }
 
-            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
-            val trialEnds = now.plus(7.days)
-            val nowString = now.toString()
-            val trialEndsString = trialEnds.toString()
-
             val role = if (isProfessional) "ENTERPRISE" else "INDIVIDUAL"
 
-            val userProfile = UserProfile(
-                auth_id = userId,
-                name = name,
-                email = email,
-                role = role,
-                subscription_type = "TRIAL",
-                trial_started_at = nowString,
-                trial_ends_at = trialEndsString,
-                device_fingerprint_id = deviceFingerprintId,
-                created_at = nowString,
-                updated_at = nowString
-            )
+            // FIX: Use RPC function with SECURITY DEFINER to bypass RLS
+            // This is necessary because after signUp(), the user's email is not yet confirmed,
+            // so auth.uid() returns NULL in RLS policies, blocking the INSERT.
+            // The RPC function also auto-confirms the email in auth.users.
+            MotiumApplication.logger.i("📝 Calling create_user_profile_on_signup RPC with: userId=$userId, name=$name, email=$email, role=$role, fingerprint=$deviceFingerprintId", "SupabaseAuth")
 
-            postgres.from("users").insert(userProfile)
+            val createResult = try {
+                postgres.rpc(
+                    "create_user_profile_on_signup",
+                    CreateUserProfileRequest(
+                        p_auth_id = userId,
+                        p_name = name,
+                        p_email = email,
+                        p_role = role,
+                        p_device_fingerprint_id = deviceFingerprintId
+                    )
+                ).decodeAs<CreateUserProfileResult>()
+            } catch (rpcError: Exception) {
+                MotiumApplication.logger.e("❌ RPC call threw exception: ${rpcError::class.simpleName} - ${rpcError.message}", "SupabaseAuth", rpcError)
+                return AuthResult.Error("Erreur lors de la création du profil: ${rpcError.message}")
+            }
+
+            MotiumApplication.logger.i("📝 RPC result: $createResult", "SupabaseAuth")
+
+            if (!createResult.success) {
+                val errorMsg = createResult.message ?: createResult.error ?: "Failed to create user profile"
+                MotiumApplication.logger.e("❌ create_user_profile_on_signup failed: $errorMsg (result=$createResult)", "SupabaseAuth")
+                return AuthResult.Error(errorMsg)
+            }
+
+            MotiumApplication.logger.i("✅ User profile created via RPC: user_id=${createResult.user_id}", "SupabaseAuth")
+
+            // Fetch the created profile to get all fields
             val createdProfile = postgres.from("users")
                 .select { filter { UserProfile::auth_id eq userId } }
                 .decodeSingle<UserProfile>()
