@@ -712,12 +712,27 @@ class AuthViewModel(
      * Save credentials to password manager (Samsung Pass, Google, etc.)
      * This runs in viewModelScope to survive composable recompositions.
      * The navigation will only happen after this completes.
+     *
+     * @param skipSave If true, skip the save dialog (e.g., credentials were auto-filled,
+     *                 meaning they're already saved in the password manager)
      */
     fun saveCredentialsAndNavigate(
         activity: android.app.Activity,
-        credentialManager: CredentialManagerHelper
+        credentialManager: CredentialManagerHelper,
+        skipSave: Boolean = false
     ) {
         val credentials = _loginState.value.credentialsToSave ?: return
+
+        // If credentials were auto-filled, they're already in the password manager
+        // Skip the save prompt to avoid annoying "save already saved account" dialogs
+        if (skipSave) {
+            MotiumApplication.logger.d("Skipping credential save (credentials were auto-filled)", "AuthViewModel")
+            _loginState.value = _loginState.value.copy(
+                credentialsToSave = null,
+                isReadyToNavigate = true
+            )
+            return
+        }
 
         // Mark as saving to prevent duplicate calls
         if (_loginState.value.isSavingCredentials) return

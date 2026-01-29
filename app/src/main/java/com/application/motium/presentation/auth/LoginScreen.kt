@@ -11,7 +11,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -69,25 +71,37 @@ fun LoginScreen(
     var password by rememberSaveable { mutableStateOf("") }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var isEmailValid by rememberSaveable { mutableStateOf(true) }
+    // Track if credentials were auto-filled by Samsung Pass/Google/etc.
+    // If true, we skip the "save credentials" prompt after login
+    var credentialsWereAutoFilled by rememberSaveable { mutableStateOf(false) }
+    // Track if we already requested credentials (to avoid multiple popups)
     var credentialsRequested by rememberSaveable { mutableStateOf(false) }
 
     val loginState by viewModel.loginState.collectAsState()
     val authState by viewModel.authState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
     val passwordFocusRequester = remember { FocusRequester() }
+    val coroutineScope = rememberCoroutineScope()
 
-    // Autofill setup
+    // Autofill setup - Samsung Pass/Google will trigger when user focuses a field
+    // We track auto-fill to avoid prompting "save credentials" for already-saved accounts
     val autofill = LocalAutofill.current
     val emailAutofillNode = remember {
         AutofillNode(
             autofillTypes = listOf(AutofillType.EmailAddress),
-            onFill = { email = it }
+            onFill = {
+                email = it
+                credentialsWereAutoFilled = true
+            }
         )
     }
     val passwordAutofillNode = remember {
         AutofillNode(
             autofillTypes = listOf(AutofillType.Password),
-            onFill = { password = it }
+            onFill = {
+                password = it
+                credentialsWereAutoFilled = true
+            }
         )
     }
 
@@ -95,27 +109,24 @@ fun LoginScreen(
     val activity = context as? Activity
     val credentialManager = remember { CredentialManagerHelper.getInstance(context) }
 
-    // Try to get saved credentials on first load
-    LaunchedEffect(Unit) {
-        if (!credentialsRequested) {
-            // Delay to allow UI to settle and permissions to be requested if needed
-            // Prevents Samsung Pass from popping up too early or conflicting with permission dialogs
-            kotlinx.coroutines.delay(500)
-
+    // Function to request credentials when user focuses an empty field
+    // This triggers Samsung Pass / Google Password Manager picker
+    fun requestCredentialsIfNeeded() {
+        if (!credentialsRequested && email.isEmpty() && password.isEmpty()) {
+            credentialsRequested = true
             activity?.let { act ->
-                // Mark as requested to prevent re-triggering on recomposition
-                credentialsRequested = true
-                
-                when (val result = credentialManager.getCredentials(act)) {
-                    is CredentialManagerHelper.CredentialResult.Success -> {
-                        // Auto-fill with saved credentials
-                        email = result.email
-                        password = result.password
-                    }
-                    is CredentialManagerHelper.CredentialResult.Cancelled,
-                    is CredentialManagerHelper.CredentialResult.NoCredentials,
-                    is CredentialManagerHelper.CredentialResult.Error -> {
-                        // User cancelled or no saved credentials - continue normally
+                coroutineScope.launch {
+                    when (val result = credentialManager.getCredentials(act)) {
+                        is CredentialManagerHelper.CredentialResult.Success -> {
+                            email = result.email
+                            password = result.password
+                            credentialsWereAutoFilled = true
+                        }
+                        is CredentialManagerHelper.CredentialResult.Cancelled,
+                        is CredentialManagerHelper.CredentialResult.NoCredentials,
+                        is CredentialManagerHelper.CredentialResult.Error -> {
+                            // User cancelled or no saved credentials - continue normally
+                        }
                     }
                 }
             }
@@ -124,12 +135,14 @@ fun LoginScreen(
 
     // Trigger credential save when login succeeds
     // The actual save happens in viewModelScope to survive recompositions
+    // Skip save if credentials were auto-filled (already saved in password manager)
     LaunchedEffect(loginState.credentialsToSave, loginState.isSavingCredentials) {
         if (loginState.credentialsToSave != null && !loginState.isSavingCredentials) {
             activity?.let { act ->
                 // This launches the save in viewModelScope (not LaunchedEffect scope)
                 // so it survives recompositions and won't be cancelled
-                viewModel.saveCredentialsAndNavigate(act, credentialManager)
+                // skipSave=true when credentials were auto-filled (already in Samsung Pass/Google)
+                viewModel.saveCredentialsAndNavigate(act, credentialManager, skipSave = credentialsWereAutoFilled)
             }
         }
     }
@@ -335,12 +348,12 @@ fun LoginScreen(
                                     emailAutofillNode.boundingBox = coordinates.boundsInWindow()
                                 }
                                 .onFocusChanged { focusState ->
-                                    autofill?.run {
-                                        if (focusState.isFocused) {
-                                            requestAutofillForNode(emailAutofillNode)
-                                        } else {
-                                            cancelAutofillForNode(emailAutofillNode)
-                                        }
+                                    if (focusState.isFocused) {
+                                        // Trigger Samsung Pass / Google when focusing empty field
+                                        requestCredentialsIfNeeded()
+                                        autofill?.requestAutofillForNode(emailAutofillNode)
+                                    } else {
+                                        autofill?.cancelAutofillForNode(emailAutofillNode)
                                     }
                                 },
                             shape = RoundedCornerShape(12.dp),
@@ -415,12 +428,12 @@ fun LoginScreen(
                                     passwordAutofillNode.boundingBox = coordinates.boundsInWindow()
                                 }
                                 .onFocusChanged { focusState ->
-                                    autofill?.run {
-                                        if (focusState.isFocused) {
-                                            requestAutofillForNode(passwordAutofillNode)
-                                        } else {
-                                            cancelAutofillForNode(passwordAutofillNode)
-                                        }
+                                    if (focusState.isFocused) {
+                                        // Trigger Samsung Pass / Google when focusing empty field
+                                        requestCredentialsIfNeeded()
+                                        autofill?.requestAutofillForNode(passwordAutofillNode)
+                                    } else {
+                                        autofill?.cancelAutofillForNode(passwordAutofillNode)
                                     }
                                 },
                             shape = RoundedCornerShape(12.dp),
