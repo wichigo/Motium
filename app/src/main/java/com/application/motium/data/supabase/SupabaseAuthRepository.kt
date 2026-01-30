@@ -1112,12 +1112,12 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             val userProfileResult = getUserProfile(authUser.id)
 
             val user = if (userProfileResult is AuthResult.Error) {
-                // Premier sign-in Google - créer profil avec essai 7 jours
+                // Premier sign-in Google - créer profil avec essai 14 jours
                 MotiumApplication.logger.i("Creating profile for Google user", "SupabaseAuth")
 
                 val now = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
                 val trialEnds = Instant.fromEpochMilliseconds(System.currentTimeMillis())
-                    .plus(7.days).toString()
+                    .plus(14.days).toString()
 
                 // Step 1: Create profile first (without device_fingerprint_id)
                 val userProfile = UserProfile(
@@ -1333,7 +1333,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     }
 
     /**
-     * Create user profile with 7-day trial subscription.
+     * Create user profile with 14-day trial subscription.
      * Used during registration after phone verification.
      */
     override suspend fun createUserProfileWithTrial(

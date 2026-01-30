@@ -202,7 +202,7 @@ enum class UserRole(val displayName: String) {
 }
 
 enum class SubscriptionType(val displayName: String) {
-    TRIAL("Essai gratuit"),    // 7-day free trial with full access
+    TRIAL("Essai gratuit"),    // 14-day free trial with full access
     EXPIRED("Expiré"),         // Trial or subscription expired - no access
     PREMIUM("Premium"),        // Monthly subscription
     LIFETIME("À vie"),         // One-time lifetime purchase

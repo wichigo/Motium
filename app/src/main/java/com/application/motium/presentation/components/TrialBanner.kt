@@ -161,7 +161,7 @@ fun TrialIndicator(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (daysRemaining > 7) return // Don't show if more than 7 days
+    if (daysRemaining > 14) return // Don't show if more than 14 days
 
     val indicatorColor = when {
         daysRemaining <= 1 -> MaterialTheme.colorScheme.error

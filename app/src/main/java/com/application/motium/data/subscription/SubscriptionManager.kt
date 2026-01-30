@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
  * SubscriptionManager handles all Stripe payment and subscription logic.
  *
  * Subscription Plans:
- * - TRIAL: 7-day free trial with full access
+ * - TRIAL: 14-day free trial with full access
  * - EXPIRED: Trial ended, no access until subscription
  * - PREMIUM: Unlimited trips, all features, monthly subscription
  * - LIFETIME: Unlimited trips, all features, one-time purchase
