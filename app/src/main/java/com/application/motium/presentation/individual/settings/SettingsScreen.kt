@@ -468,7 +468,9 @@ fun SettingsScreen(
                     surfaceColor = surfaceColor,
                     textColor = textColor,
                     textSecondaryColor = textSecondaryColor,
-                    themeManager = themeManager
+                    themeManager = themeManager,
+                    currentUser = currentUser,
+                    authViewModel = authViewModel
                 )
             }
 
@@ -1362,7 +1364,9 @@ fun AppAppearanceSection(
     surfaceColor: Color,
     textColor: Color,
     textSecondaryColor: Color,
-    themeManager: ThemeManager
+    themeManager: ThemeManager,
+    currentUser: User?,
+    authViewModel: AuthViewModel
 ) {
     var isColorDropdownExpanded by remember { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
@@ -1579,6 +1583,18 @@ fun AppAppearanceSection(
             onColorSelected = { color ->
                 themeManager.setFavoriteColor(editingColorIndex, color)
                 themeManager.selectFavoriteColor(editingColorIndex) // Appliquer et sélectionner par index
+
+                // Sync favorite colors to Supabase
+                currentUser?.let { user ->
+                    val updatedColors = themeManager.favoriteColors.value.map { c ->
+                        String.format("#%02X%02X%02X",
+                            (c.red * 255).toInt(),
+                            (c.green * 255).toInt(),
+                            (c.blue * 255).toInt()
+                        )
+                    }
+                    authViewModel.updateUserProfile(user.copy(favoriteColors = updatedColors))
+                }
             },
             onDismiss = { showColorPicker = false },
             textColor = textColor,
