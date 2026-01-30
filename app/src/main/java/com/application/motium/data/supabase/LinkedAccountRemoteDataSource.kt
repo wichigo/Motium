@@ -415,6 +415,34 @@ class LinkedAccountRemoteDataSource private constructor(
     }
 
     /**
+     * Update department for a company link
+     * @param linkId The company_links.id
+     * @param department The new department name (nullable to remove)
+     */
+    suspend fun updateLinkDepartment(
+        linkId: String,
+        department: String?
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            supabaseClient.from("company_links")
+                .update({
+                    set("department", department)
+                    set("updated_at", java.time.Instant.now().toString())
+                }) {
+                    filter {
+                        eq("id", linkId)
+                    }
+                }
+
+            MotiumApplication.logger.i("Department updated for link $linkId: $department", "LinkedAccountRepo")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error updating department: ${e.message}", "LinkedAccountRepo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Resend invitation email to a pending user
      */
     suspend fun resendInvitation(

@@ -1,11 +1,14 @@
 package com.application.motium.presentation.pro.accounts
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -24,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
+import com.application.motium.data.supabase.ProSettingsRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.TripRemoteDataSource
 import com.application.motium.data.supabase.VehicleRemoteDataSource
@@ -60,6 +64,7 @@ fun AccountDetailsScreen(
     val offlineFirstLicenseRepo = remember { com.application.motium.data.repository.OfflineFirstLicenseRepository.getInstance(context) }
     val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
     val authRepository = remember { SupabaseAuthRepository.getInstance(context) }
+    val proSettingsRepository = remember { ProSettingsRepository.getInstance(context) }
 
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
@@ -83,6 +88,11 @@ fun AccountDetailsScreen(
     var availableLicensesCount by remember { mutableStateOf(0) }
     var availableLicenses by remember { mutableStateOf<List<License>>(emptyList()) }
     var proAccountId by remember { mutableStateOf<String?>(null) }
+
+    // Department state
+    var availableDepartments by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showDepartmentDialog by remember { mutableStateOf(false) }
+    var isUpdatingDepartment by remember { mutableStateOf(false) }
 
     // Dialog states
     var showAssignLicenseDialog by remember { mutableStateOf(false) }
@@ -137,6 +147,13 @@ fun AccountDetailsScreen(
                                     "AccountDetailsScreen",
                                     e
                                 )
+                            }
+
+                            // Load available departments
+                            try {
+                                availableDepartments = proSettingsRepository.getDepartments(proId)
+                            } catch (e: Exception) {
+                                // Departments are optional
                             }
                         }
                     }
@@ -262,6 +279,18 @@ fun AccountDetailsScreen(
                                 cardColor = cardColor,
                                 textColor = textColor,
                                 textSecondaryColor = textSecondaryColor
+                            )
+                        }
+
+                        // Department section
+                        item {
+                            DepartmentSection(
+                                currentDepartment = user!!.department,
+                                isUpdating = isUpdatingDepartment,
+                                cardColor = cardColor,
+                                textColor = textColor,
+                                textSecondaryColor = textSecondaryColor,
+                                onEditDepartment = { showDepartmentDialog = true }
                             )
                         }
 
@@ -422,6 +451,62 @@ fun AccountDetailsScreen(
                         } catch (e: Exception) {
                             isUnlinking = false
                             error = e.message
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    // Department selection dialog
+    if (showDepartmentDialog) {
+        DepartmentSelectionDialog(
+            currentDepartment = user?.department,
+            availableDepartments = availableDepartments,
+            onDismiss = { showDepartmentDialog = false },
+            onSelectDepartment = { selectedDepartment ->
+                user?.let { currentUser ->
+                    proAccountId?.let { proId ->
+                        isUpdatingDepartment = true
+                        coroutineScope.launch(Dispatchers.IO) {
+                            try {
+                                // Update department in Supabase
+                                val result = linkedAccountRemoteDataSource.updateLinkDepartment(
+                                    linkId = currentUser.linkId,
+                                    department = selectedDepartment
+                                )
+                                result.fold(
+                                    onSuccess = {
+                                        // Reload user to get updated department
+                                        val updatedResult = linkedAccountRemoteDataSource.getLinkedUserById(accountId)
+                                        updatedResult.fold(
+                                            onSuccess = { updatedUser ->
+                                                user = updatedUser
+                                                successMessage = if (selectedDepartment != null) {
+                                                    "Département mis à jour"
+                                                } else {
+                                                    "Département retiré"
+                                                }
+                                            },
+                                            onFailure = { /* User will see change on next load */ }
+                                        )
+
+                                        // If new department, add it to available list
+                                        if (selectedDepartment != null && !availableDepartments.contains(selectedDepartment)) {
+                                            proSettingsRepository.addDepartment(proId, selectedDepartment)
+                                            availableDepartments = proSettingsRepository.getDepartments(proId)
+                                        }
+                                    },
+                                    onFailure = { e ->
+                                        error = e.message
+                                    }
+                                )
+                            } catch (e: Exception) {
+                                error = e.message
+                            } finally {
+                                isUpdatingDepartment = false
+                                showDepartmentDialog = false
+                            }
                         }
                     }
                 }
@@ -1032,6 +1117,274 @@ private fun AssignLicenseFromAccountDialog(
                                 contentDescription = "Selectionner",
                                 tint = MotiumPrimary.copy(alpha = 0.6f),
                                 modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler")
+            }
+        }
+    )
+}
+
+/**
+ * Section displaying department with edit capability
+ */
+@Composable
+private fun DepartmentSection(
+    currentDepartment: String?,
+    isUpdating: Boolean,
+    cardColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color,
+    onEditDepartment: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            "Département",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = textColor
+        )
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !isUpdating) { onEditDepartment() },
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (currentDepartment != null) MotiumPrimary.copy(alpha = 0.1f)
+                            else TextSecondaryDark.copy(alpha = 0.1f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isUpdating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = MotiumPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Business,
+                            contentDescription = null,
+                            tint = if (currentDepartment != null) MotiumPrimary else TextSecondaryDark,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = currentDepartment ?: "Aucun département attribué",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = if (currentDepartment != null) textColor else textSecondaryColor
+                    )
+                    Text(
+                        text = if (currentDepartment != null) "Appuyez pour modifier" else "Appuyez pour attribuer",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "Modifier le département",
+                    tint = MotiumPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Dialog for selecting or creating a department
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DepartmentSelectionDialog(
+    currentDepartment: String?,
+    availableDepartments: List<String>,
+    onDismiss: () -> Unit,
+    onSelectDepartment: (String?) -> Unit
+) {
+    var newDepartmentName by remember { mutableStateOf("") }
+    var showNewDepartmentInput by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
+        title = {
+            Text(
+                "Département",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Sélectionnez ou créez un département:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Option to remove department
+                if (currentDepartment != null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = ErrorRed.copy(alpha = 0.1f)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        onClick = { onSelectDepartment(null) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.RemoveCircleOutline,
+                                contentDescription = null,
+                                tint = ErrorRed,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "Retirer du département",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = ErrorRed
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // Available departments
+                availableDepartments.forEach { department ->
+                    val isSelected = department == currentDepartment
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) MotiumPrimary.copy(alpha = 0.15f)
+                            else MaterialTheme.colorScheme.surface
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        onClick = { onSelectDepartment(department) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (isSelected) Icons.Default.CheckCircle else Icons.Default.Business,
+                                contentDescription = null,
+                                tint = if (isSelected) MotiumPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                department,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) MotiumPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Create new department
+                if (showNewDepartmentInput) {
+                    OutlinedTextField(
+                        value = newDepartmentName,
+                        onValueChange = { newDepartmentName = it },
+                        label = { Text("Nouveau département") },
+                        placeholder = { Text("ex. Commercial") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MotiumPrimary,
+                            cursorColor = MotiumPrimary
+                        ),
+                        trailingIcon = {
+                            if (newDepartmentName.isNotBlank()) {
+                                IconButton(
+                                    onClick = {
+                                        onSelectDepartment(newDepartmentName.trim())
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "Valider",
+                                        tint = MotiumPrimary
+                                    )
+                                }
+                            }
+                        }
+                    )
+                } else {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MotiumPrimary.copy(alpha = 0.1f)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        onClick = { showNewDepartmentInput = true }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = null,
+                                tint = MotiumPrimary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "Créer un nouveau département",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MotiumPrimary
                             )
                         }
                     }

@@ -137,6 +137,17 @@ fun InvitePersonScreen(
                     return@launch
                 }
 
+                // Save new department if it doesn't exist yet
+                val trimmedDepartment = selectedDepartment?.trim()?.takeIf { it.isNotBlank() }
+                if (trimmedDepartment != null && !departments.contains(trimmedDepartment)) {
+                    val addDeptResult = proSettingsRepository.addDepartment(proAccountId, trimmedDepartment)
+                    if (addDeptResult.isSuccess) {
+                        // Update local list
+                        departments = departments + trimmedDepartment
+                    }
+                    // Continue even if department save fails - invitation is the priority
+                }
+
                 val linkedAccountRemoteDataSource = com.application.motium.data.supabase.LinkedAccountRemoteDataSource.getInstance(context)
                 val result = linkedAccountRemoteDataSource.inviteUserWithDetails(
                     proAccountId = proAccountId,
@@ -144,7 +155,7 @@ fun InvitePersonScreen(
                     email = email.trim(),
                     fullName = fullName.trim(),
                     phone = phone.trim().takeIf { it.isNotBlank() },
-                    department = selectedDepartment
+                    department = trimmedDepartment
                 )
 
                 result.fold(
