@@ -1391,7 +1391,15 @@ private fun DepartmentSelectionDialog(
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            if (showNewDepartmentInput && newDepartmentName.isNotBlank()) {
+                TextButton(
+                    onClick = { onSelectDepartment(newDepartmentName.trim()) }
+                ) {
+                    Text("Confirmer", color = MotiumPrimary, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Annuler")
