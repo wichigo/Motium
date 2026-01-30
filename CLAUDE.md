@@ -453,6 +453,21 @@ Tokens de confirmation pour délier un employé.
 | cancelled_at | timestamptz | nullable | | |
 | created_at | timestamptz | nullable | now() | |
 
+### withdrawal_waivers
+Consentements de renonciation au droit de rétractation (Article L221-28 Code de la consommation).
+| Column | Type | Constraints | Default | Description |
+|--------|------|-------------|---------|-------------|
+| id | uuid | PK | gen_random_uuid() | |
+| user_id | uuid | FK → auth.users.id, NOT NULL | | |
+| accepted_immediate_execution | boolean | NOT NULL | false | Accepte exécution immédiate |
+| accepted_waiver | boolean | NOT NULL | false | Renonce au droit de rétractation |
+| ip_address | text | nullable | | |
+| user_agent | text | nullable | | |
+| app_version | text | NOT NULL | | |
+| consented_at | timestamptz | NOT NULL | now() | |
+| subscription_id | text | nullable | | ID Stripe associé |
+| created_at | timestamptz | NOT NULL | now() | |
+
 ## SQL Functions (RPCs)
 
 ### Authentification & Utilisateurs

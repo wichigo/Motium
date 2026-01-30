@@ -27,6 +27,7 @@ import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.presentation.components.DeferredPaymentConfig
 import com.application.motium.presentation.components.StripeDeferredPaymentSheet
 import com.application.motium.presentation.components.StripePaymentSheet
+import com.application.motium.presentation.components.WithdrawalWaiverSection
 import com.application.motium.presentation.components.createSubscriptionButtonLabel
 
 /**
@@ -197,10 +198,20 @@ fun UpgradeScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
+            // Withdrawal waiver section (only for trial users - French consumer law compliance)
+            if (uiState.requiresWithdrawalWaiver) {
+                WithdrawalWaiverSection(
+                    state = uiState.waiverState,
+                    onImmediateExecutionChanged = { viewModel.setImmediateExecutionAccepted(it) },
+                    onWaiverChanged = { viewModel.setWaiverAccepted(it) },
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
+
             // Subscribe button
             Button(
                 onClick = { viewModel.initializePayment() },
-                enabled = !uiState.isLoading && uiState.userId != null,
+                enabled = uiState.canProceedToPayment,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -227,6 +238,18 @@ fun UpgradeScreen(
                         fontWeight = FontWeight.Bold
                     )
                 }
+            }
+
+            // Helper text when waiver is required but not complete
+            if (uiState.requiresWithdrawalWaiver && !uiState.waiverState.isComplete) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Veuillez accepter les conditions ci-dessus pour continuer",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFFF9800),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

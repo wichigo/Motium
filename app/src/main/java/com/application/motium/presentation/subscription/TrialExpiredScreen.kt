@@ -19,14 +19,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.data.supabase.WithdrawalWaiverRepository
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.AuthResult
 import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.domain.model.WithdrawalWaiver
+import com.application.motium.domain.model.WithdrawalWaiverState
 import com.application.motium.presentation.components.DeferredPaymentConfig
 import com.application.motium.presentation.components.StripeDeferredPaymentSheet
+import com.application.motium.presentation.components.WithdrawalWaiverSection
 import com.application.motium.presentation.components.createSubscriptionButtonLabel
 import com.application.motium.presentation.theme.MotiumGreen
 import com.application.motium.presentation.auth.AuthViewModel
@@ -66,6 +71,11 @@ fun TrialExpiredScreen(
     // Repositories for refresh
     val localUserRepository = remember { LocalUserRepository.getInstance(context) }
     val supabaseAuthRepository = remember { SupabaseAuthRepository.getInstance(context) }
+    val withdrawalWaiverRepository = remember { WithdrawalWaiverRepository.getInstance(context) }
+
+    // Withdrawal waiver state (French consumer law compliance - Article L221-28)
+    var waiverState by remember { mutableStateOf(WithdrawalWaiverState()) }
+    var isSavingWaiver by remember { mutableStateOf(false) }
 
     // Load user ID on start
     LaunchedEffect(Unit) {
@@ -253,19 +263,57 @@ fun TrialExpiredScreen(
                 onClick = { selectedPlan = SubscriptionType.LIFETIME }
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Withdrawal waiver section (French consumer law compliance - Article L221-28)
+            WithdrawalWaiverSection(
+                state = waiverState,
+                onImmediateExecutionChanged = { waiverState = waiverState.copy(acceptedImmediateExecution = it) },
+                onWaiverChanged = { waiverState = waiverState.copy(acceptedWaiver = it) }
+            )
+
+            // Helper text when waiver is not complete
+            if (!waiverState.isComplete) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Veuillez accepter les conditions ci-dessus pour continuer",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFFF9800),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Subscribe button - directly triggers Stripe payment
             Button(
                 onClick = {
                     selectedPlan?.let { plan ->
-                        val isLifetime = plan == SubscriptionType.LIFETIME
-                        paymentPriceType = if (isLifetime) "individual_lifetime" else "individual_monthly"
-                        paymentAmountCents = subscriptionManager.getAmountCents(paymentPriceType, 1)
-                        showPaymentSheet = true
+                        // Save waiver before proceeding to payment
+                        scope.launch {
+                            isSavingWaiver = true
+                            val waiver = WithdrawalWaiver(
+                                acceptedImmediateExecution = waiverState.acceptedImmediateExecution,
+                                acceptedWaiver = waiverState.acceptedWaiver,
+                                appVersion = BuildConfig.VERSION_NAME
+                            )
+                            val result = withdrawalWaiverRepository.saveWaiver(waiver)
+                            isSavingWaiver = false
+
+                            if (result.isFailure) {
+                                errorMessage = "Erreur lors de l'enregistrement du consentement. Veuillez réessayer."
+                                return@launch
+                            }
+
+                            val isLifetime = plan == SubscriptionType.LIFETIME
+                            paymentPriceType = if (isLifetime) "individual_lifetime" else "individual_monthly"
+                            paymentAmountCents = subscriptionManager.getAmountCents(paymentPriceType, 1)
+                            showPaymentSheet = true
+                        }
                     }
                 },
-                enabled = selectedPlan != null && !isLoading && !isRefreshing && userId != null,
+                enabled = selectedPlan != null && !isLoading && !isRefreshing && !isSavingWaiver && userId != null && waiverState.isComplete,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -274,7 +322,7 @@ fun TrialExpiredScreen(
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                if (isLoading || isRefreshing) {
+                if (isLoading || isRefreshing || isSavingWaiver) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         color = Color.White,

@@ -4,12 +4,16 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
+import com.application.motium.data.supabase.WithdrawalWaiverRepository
 import com.application.motium.domain.model.AuthResult
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.SubscriptionType
+import com.application.motium.domain.model.WithdrawalWaiver
+import com.application.motium.domain.model.WithdrawalWaiverState
 import com.stripe.android.paymentsheet.PaymentSheetResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +37,7 @@ class UpgradeViewModel(
     private val subscriptionManager = SubscriptionManager.getInstance(context)
     private val localUserRepository = LocalUserRepository.getInstance(context)
     private val supabaseAuthRepository = SupabaseAuthRepository.getInstance(context)
+    private val withdrawalWaiverRepository = WithdrawalWaiverRepository.getInstance(context)
 
     private val _uiState = MutableStateFlow(UpgradeUiState())
     val uiState: StateFlow<UpgradeUiState> = _uiState.asStateFlow()
@@ -68,12 +73,47 @@ class UpgradeViewModel(
     }
 
     /**
+     * Update withdrawal waiver state - immediate execution checkbox
+     */
+    fun setImmediateExecutionAccepted(accepted: Boolean) {
+        _uiState.update {
+            it.copy(
+                waiverState = it.waiverState.copy(acceptedImmediateExecution = accepted)
+            )
+        }
+    }
+
+    /**
+     * Update withdrawal waiver state - waiver checkbox
+     */
+    fun setWaiverAccepted(accepted: Boolean) {
+        _uiState.update {
+            it.copy(
+                waiverState = it.waiverState.copy(acceptedWaiver = accepted)
+            )
+        }
+    }
+
+    /**
      * Initialize payment for the selected plan (deferred mode).
      * Opens PaymentSheet immediately without pre-creating a PaymentIntent.
+     *
+     * For individual users in trial period, withdrawal waiver consent is required
+     * before proceeding to payment.
      */
     fun initializePayment() {
         val state = _uiState.value
         val userId = state.userId ?: return
+
+        // Check if withdrawal waiver is required and complete
+        if (state.requiresWithdrawalWaiver && !state.waiverState.isComplete) {
+            _uiState.update {
+                it.copy(
+                    error = "Veuillez accepter les conditions de renonciation au droit de rétractation pour continuer."
+                )
+            }
+            return
+        }
 
         val isLifetime = state.selectedPlan == PlanType.LIFETIME
         val priceType = if (isLifetime) "individual_lifetime" else "individual_monthly"
@@ -81,14 +121,51 @@ class UpgradeViewModel(
 
         MotiumApplication.logger.i("Initializing deferred payment: $priceType (${amountCents / 100.0}€)", TAG)
 
-        _uiState.update {
-            it.copy(
-                isLoading = false,
-                deferredPaymentReady = DeferredPaymentReadyState(
-                    amountCents = amountCents,
-                    priceType = priceType
+        // If waiver is required, save it before proceeding to payment
+        if (state.requiresWithdrawalWaiver && state.waiverState.isComplete) {
+            viewModelScope.launch {
+                _uiState.update { it.copy(isLoading = true) }
+
+                val waiver = WithdrawalWaiver(
+                    acceptedImmediateExecution = state.waiverState.acceptedImmediateExecution,
+                    acceptedWaiver = state.waiverState.acceptedWaiver,
+                    appVersion = BuildConfig.VERSION_NAME
                 )
-            )
+
+                val result = withdrawalWaiverRepository.saveWaiver(waiver)
+                if (result.isFailure) {
+                    MotiumApplication.logger.e("Failed to save withdrawal waiver: ${result.exceptionOrNull()?.message}", TAG)
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = "Erreur lors de l'enregistrement du consentement. Veuillez réessayer."
+                        )
+                    }
+                    return@launch
+                }
+
+                MotiumApplication.logger.i("Withdrawal waiver saved successfully", TAG)
+
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        deferredPaymentReady = DeferredPaymentReadyState(
+                            amountCents = amountCents,
+                            priceType = priceType
+                        )
+                    )
+                }
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    deferredPaymentReady = DeferredPaymentReadyState(
+                        amountCents = amountCents,
+                        priceType = priceType
+                    )
+                )
+            }
         }
     }
 
@@ -274,8 +351,27 @@ data class UpgradeUiState(
     val deferredPaymentReady: DeferredPaymentReadyState? = null,
     val paymentSuccess: Boolean = false,
     val isRefreshing: Boolean = false,
-    val error: String? = null
-)
+    val error: String? = null,
+    val waiverState: WithdrawalWaiverState = WithdrawalWaiverState()
+) {
+    /**
+     * Withdrawal waiver is required for individual users subscribing during trial period.
+     * This is to comply with French consumer law (Article L221-28).
+     */
+    val requiresWithdrawalWaiver: Boolean
+        get() = currentSubscriptionType == SubscriptionType.TRIAL
+
+    /**
+     * Can proceed to payment only if:
+     * - User is logged in
+     * - Not currently loading
+     * - If waiver required, it must be complete
+     */
+    val canProceedToPayment: Boolean
+        get() = userId != null &&
+                !isLoading &&
+                (!requiresWithdrawalWaiver || waiverState.isComplete)
+}
 
 /**
  * State when payment is ready to present (legacy mode with pre-created intent)
