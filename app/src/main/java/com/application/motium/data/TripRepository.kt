@@ -698,9 +698,11 @@ class TripRepository private constructor(context: Context) {
                     entityType = com.application.motium.data.local.entities.PendingOperationEntity.TYPE_TRIP,
                     entityId = tripId
                 )
+                // Trigger immediate sync to propagate delete to Supabase
+                syncManager.triggerImmediateSync()
 
                 MotiumApplication.logger.i(
-                    "🔄 Trip delete queued for background sync: $tripId",
+                    "🔄 Trip delete queued and sync triggered: $tripId",
                     "TripRepository"
                 )
             } catch (e: Exception) {

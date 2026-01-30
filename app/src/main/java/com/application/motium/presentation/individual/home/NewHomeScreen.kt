@@ -1,5 +1,7 @@
 package com.application.motium.presentation.individual.home
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,11 +22,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -104,6 +109,10 @@ fun NewHomeScreen(
     var isLoadingMore by remember { mutableStateOf(false) }
     var hasMoreTrips by remember { mutableStateOf(true) }
     var shouldLoadMore by remember { mutableStateOf(false) }
+
+    // Swipe-to-delete state
+    var tripToDelete by remember { mutableStateOf<Trip?>(null) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     // Track if we've synced with Supabase this session (survives recomposition)
     var hasSyncedWithSupabase by rememberSaveable { mutableStateOf(false) }
@@ -605,7 +614,7 @@ fun NewHomeScreen(
                         items = tripsForDate,
                         key = { trip -> trip.id }
                     ) { trip ->
-                        NewHomeTripCard(
+                        SwipeToDeleteTripCard(
                             trip = trip,
                             onClick = { onNavigateToTripDetails(trip.id) },
                             onToggleValidation = {
@@ -619,6 +628,10 @@ fun NewHomeScreen(
                                     )
                                     trips = reloadedTrips
                                 }
+                            },
+                            onDeleteRequest = {
+                                tripToDelete = trip
+                                showDeleteConfirmDialog = true
                             },
                             cardColor = cardColor,
                             textColor = textColor,
@@ -720,6 +733,75 @@ fun NewHomeScreen(
             tonalElevation = 0.dp
         )
     }
+
+    // Dialog de confirmation de suppression du trajet
+    if (showDeleteConfirmDialog && tripToDelete != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteConfirmDialog = false
+                tripToDelete = null
+            },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.DeleteForever,
+                    contentDescription = null,
+                    tint = Color(0xFFDC2626),
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Supprimer ce trajet ?",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Cette action est irréversible. Le trajet sera définitivement supprimé.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    tripToDelete?.let { trip ->
+                        Text(
+                            text = "${trip.startAddress ?: "Départ"} → ${trip.endAddress ?: "Arrivée"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = subTextColor
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        tripToDelete?.let { trip ->
+                            coroutineScope.launch {
+                                tripRepository.deleteTrip(trip.id)
+                                // Remove from local list immediately for smooth UX
+                                trips = trips.filter { it.id != trip.id }
+                                showDeleteConfirmDialog = false
+                                tripToDelete = null
+                            }
+                        }
+                    }
+                ) {
+                    Text("Supprimer", color = Color(0xFFDC2626))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmDialog = false
+                        tripToDelete = null
+                    }
+                ) {
+                    Text("Annuler", color = Color.Gray)
+                }
+            },
+            containerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White,
+            tonalElevation = 0.dp
+        )
+    }
 }
 
 @Composable
@@ -736,6 +818,104 @@ fun StatItem(value: String, label: String, highlightColor: Color, textColor: Col
             color = subColor
         )
     }
+}
+
+/**
+ * Wrapper composable that adds swipe-to-delete functionality to NewHomeTripCard.
+ * Swipe right past the threshold and release to trigger delete confirmation.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SwipeToDeleteTripCard(
+    trip: Trip,
+    onClick: () -> Unit,
+    onToggleValidation: () -> Unit,
+    onDeleteRequest: () -> Unit,
+    cardColor: Color,
+    textColor: Color,
+    subTextColor: Color
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    var hasTriggeredHaptic by remember { mutableStateOf(false) }
+
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { dismissValue ->
+            when (dismissValue) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    // User swiped past threshold and released - trigger delete
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onDeleteRequest()
+                    false // Return to normal position while dialog shows
+                }
+                else -> false
+            }
+        },
+        positionalThreshold = { totalDistance -> totalDistance * 0.3f }
+    )
+
+    // Track swipe progress for haptic feedback during swipe
+    val currentProgress = dismissState.progress
+    LaunchedEffect(currentProgress) {
+        if (currentProgress > 0.3f && !hasTriggeredHaptic) {
+            hasTriggeredHaptic = true
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        } else if (currentProgress < 0.2f && hasTriggeredHaptic) {
+            hasTriggeredHaptic = false
+        }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            // Delete background (revealed when swiping right)
+            val color by animateColorAsState(
+                when {
+                    currentProgress > 0.3f -> Color(0xFFDC2626) // Full red past threshold
+                    currentProgress > 0.1f -> Color(0xFFDC2626).copy(alpha = 0.6f)
+                    else -> Color(0xFFDC2626).copy(alpha = 0.3f)
+                },
+                label = "delete_bg_color"
+            )
+            val iconScale by animateFloatAsState(
+                when {
+                    currentProgress > 0.3f -> 1.3f
+                    currentProgress > 0.1f -> 1f + (currentProgress * 0.5f)
+                    else -> 1f
+                },
+                label = "delete_icon_scale"
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(color)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Supprimer",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .scale(iconScale)
+                )
+            }
+        },
+        content = {
+            NewHomeTripCard(
+                trip = trip,
+                onClick = onClick,
+                onToggleValidation = onToggleValidation,
+                cardColor = cardColor,
+                textColor = textColor,
+                subTextColor = subTextColor
+            )
+        },
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = false
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -974,9 +1154,3 @@ fun NewHomeTripCard(
         }
     }
 }
-
-// Extension corrigée
-fun Modifier.scale(scale: Float): Modifier = this.graphicsLayer(
-    scaleX = scale,
-    scaleY = scale
-)
