@@ -1,7 +1,7 @@
 -- =================================================================
 -- BUGFIX 016: Atomic Invoice Paid Processing for Pro Accounts
 -- =================================================================
--- EXÉCUTER CE FICHIER SUR SUPABASE STUDIO (http://176.168.117.243:3000)
+-- EXÉCUTER CE FICHIER SUR SUPABASE STUDIO (https://studio.motium.app)
 -- Dans SQL Editor, coller et exécuter ce contenu
 -- =================================================================
 --

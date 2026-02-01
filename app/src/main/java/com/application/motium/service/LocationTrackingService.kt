@@ -2470,11 +2470,10 @@ class LocationTrackingService : Service() {
      *
      * This ensures trips are NEVER lost due to service cancellation during geocoding.
      */
-    @OptIn(DelicateCoroutinesApi::class)
     private fun saveTripToDatabase(trip: TripData) {
-        // PHASE 1: IMMEDIATE SAVE - Use GlobalScope to survive service destruction
-        // This is critical: serviceScope.launch would be cancelled if service is killed
-        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        // PHASE 1: IMMEDIATE SAVE - Use applicationScope to survive service destruction
+        // This scope lives as long as the app process, unlike serviceScope which is cancelled on service kill
+        MotiumApplication.applicationScope.launch {
             try {
                 MotiumApplication.logger.i(
                     "🔒 Phase 1: Immediate trip save (resilient) - ${trip.id}",
@@ -2570,9 +2569,9 @@ class LocationTrackingService : Service() {
      * This runs asynchronously AFTER the trip is safely saved.
      * If it fails, the trip still exists with null addresses.
      */
-    @OptIn(DelicateCoroutinesApi::class)
     private fun enrichTripWithGeocoding(tripId: String, locations: List<TripLocation>) {
-        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        // Phase 2 runs on applicationScope - best effort geocoding after trip is safely saved
+        MotiumApplication.applicationScope.launch {
             try {
                 MotiumApplication.logger.i("🔄 Phase 2: Enriching trip with geocoding - $tripId", "Geocoding")
 

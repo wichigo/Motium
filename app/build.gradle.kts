@@ -21,7 +21,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Build config for Supabase keys (self-hosted)
-        buildConfigField("String", "SUPABASE_URL", "\"http://176.168.117.243:8000\"")
+        buildConfigField("String", "SUPABASE_URL", "\"https://api.motium.app\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFub24iLCAiaXNzIjogInN1cGFiYXNlIiwgImlhdCI6IDE3MDQwNjcyMDAsICJleHAiOiAxODYxOTIwMDAwfQ.LUYd4QDV4W3yQc-HgbBHCmsjL1fkPU4xfTdlhabLN4M\"")
 
         // Stripe configuration (publishable key - safe to include in client)

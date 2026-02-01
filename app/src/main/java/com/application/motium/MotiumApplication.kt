@@ -28,10 +28,14 @@ class MotiumApplication : Application() {
     companion object {
         lateinit var logger: AppLogger
             private set
-    }
 
-    // Application-scoped coroutine scope for background tasks
-    private val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        /**
+         * Application-scoped coroutine scope for tasks that must survive service destruction.
+         * Use this instead of GlobalScope for critical operations like trip saving.
+         * This scope lives as long as the application process.
+         */
+        val applicationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    }
 
     override fun onCreate() {
         super.onCreate()

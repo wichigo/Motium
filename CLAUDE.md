@@ -56,8 +56,12 @@ or library/API documentation. Automatically use the Context7 MCP tools
 
 ## Project Info (Supabase Self-Hosted)
 - **Server IP**: `176.168.117.243`
-- **API URL**: `http://176.168.117.243:8000`
-- **Studio URL**: `http://176.168.117.243:3000`
+- **API URL**: `https://api.motium.app`
+- **Studio URL**: `https://studio.motium.app`
+- **Nominatim URL**: `https://nominatim.motium.app`
+- **OSRM URL**: `https://osrm.motium.app`
+- **Tiles URL**: `https://tiles.motium.app`
+- **MapStyle URL**: `https://mapstyle.motium.app`
 - **Pooler Port**: `6543`
 
 ## Tables (Schema: public)
@@ -849,7 +853,7 @@ test(repository): add unit tests for TripRepository
 **TODO** : Migrer vers `local.properties` :
 ```properties
 # local.properties (NE PAS COMMIT)
-SUPABASE_URL=http://176.168.117.243:8000
+SUPABASE_URL=https://api.motium.app
 SUPABASE_ANON_KEY=eyJ...
 ```
 

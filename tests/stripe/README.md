@@ -33,7 +33,7 @@ cp .env.example .env
 ### 4. Start Webhook Forwarding
 ```bash
 # In a separate terminal, run:
-stripe listen --forward-to http://176.168.117.243:8000/functions/v1/stripe-webhook
+stripe listen --forward-to https://api.motium.app/functions/v1/stripe-webhook
 ```
 
 ## Running Tests
@@ -60,5 +60,5 @@ stripe listen --forward-to http://176.168.117.243:8000/functions/v1/stripe-webho
 
 ## Supabase Self-Hosted
 
-- API: http://176.168.117.243:8000
-- Studio: http://176.168.117.243:3000
+- API: https://api.motium.app
+- Studio: https://studio.motium.app

@@ -4,7 +4,7 @@
   "sources": {
     "protomaps": {
       "type": "vector",
-      "tiles": ["http://176.168.117.243:8080/europe-ouest/{z}/{x}/{y}.mvt"],
+      "tiles": ["https://tiles.motium.app/europe-ouest/{z}/{x}/{y}.mvt"],
       "maxzoom": 14
     }
   },

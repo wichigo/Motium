@@ -1,7 +1,7 @@
 -- =============================================================================
 -- DIAGNOSTIC: Test license unlink/cancel-unlink functionality
 -- =============================================================================
--- Exécuter ce fichier dans Supabase Studio (http://176.168.117.243:3000)
+-- Exécuter ce fichier dans Supabase Studio (https://studio.motium.app)
 -- SQL Editor → Coller et exécuter chaque section
 -- =============================================================================
 

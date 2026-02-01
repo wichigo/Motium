@@ -51,26 +51,26 @@ object Constants {
         const val BIKE_RATE = 0.25
     }
 
-    // Private Server APIs (self-hosted)
+    // Private Server APIs (self-hosted via domain)
     object PrivateServer {
         // Nominatim geocoding (search + reverse)
-        const val NOMINATIM_BASE_URL = "http://176.168.117.243:8081"
+        const val NOMINATIM_BASE_URL = "https://nominatim.motium.app"
         const val NOMINATIM_SEARCH_URL = "$NOMINATIM_BASE_URL/search"
         const val NOMINATIM_REVERSE_URL = "$NOMINATIM_BASE_URL/reverse"
         const val NOMINATIM_COUNTRY_CODES = "fr,de,it,es,ch,be,lu"
 
         // OSRM routing (route + match)
-        const val OSRM_BASE_URL = "http://176.168.117.243:8082"
+        const val OSRM_BASE_URL = "https://osrm.motium.app"
         const val OSRM_ROUTE_URL = "$OSRM_BASE_URL/route/v1/driving"
         const val OSRM_MATCH_URL = "$OSRM_BASE_URL/match/v1/driving"
 
         // PMTiles tile server (MVT vector tiles)
-        const val TILES_BASE_URL = "http://176.168.117.243:8080"
+        const val TILES_BASE_URL = "https://tiles.motium.app"
         const val TILES_URL_PATTERN = "$TILES_BASE_URL/europe-ouest/{z}/{x}/{y}.mvt"
 
         // MapLibre style configuration
         // Remote style hosted on private tile server
-        const val MAPLIBRE_STYLE_PRIVATE = "http://176.168.117.243:8085/style.json"
+        const val MAPLIBRE_STYLE_PRIVATE = "https://mapstyle.motium.app/style.json"
         // Demo tiles (for testing)
         const val MAPLIBRE_STYLE_DEMO = "https://demotiles.maplibre.org/style.json"
         // OSM raster tiles style
