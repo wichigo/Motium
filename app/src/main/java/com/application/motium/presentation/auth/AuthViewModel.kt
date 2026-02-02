@@ -76,6 +76,19 @@ class AuthViewModel(
                 TAG
             )
 
+            // === STEP 0: TRIAL CHECK - If user is in trial, skip license check entirely ===
+            // Trial period is managed in users table (subscription_type = TRIAL)
+            // Pro users in trial have full access without needing a license
+            val currentUser = authState.value.user
+            if (currentUser?.subscription?.type == SubscriptionType.TRIAL) {
+                MotiumApplication.logger.i(
+                    "✅ Pro user in TRIAL period - granting access (license check skipped)",
+                    TAG
+                )
+                _proLicenseState.value = ProLicenseState.Licensed
+                return@launch
+            }
+
             // === STEP 1: CACHE-FIRST - Check cache IMMEDIATELY before any loading ===
             val cachedState = proLicenseCache.getCachedState(userId)
             val cacheValid = cachedState?.isValid() == true
@@ -237,6 +250,9 @@ class AuthViewModel(
     /**
      * Perform network validation for pro license.
      * Returns null if network call fails.
+     *
+     * Note: Trial check is done in checkProLicense() before calling this function.
+     * This function only checks actual license assignment.
      */
     private suspend fun checkProLicenseFromNetwork(userId: String): LicenseCheckResult {
         return withContext(Dispatchers.IO) {
