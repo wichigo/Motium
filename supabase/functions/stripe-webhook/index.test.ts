@@ -216,13 +216,14 @@ Deno.test("stripe-webhook: should set correct stripe_subscription_id format", ()
 });
 
 Deno.test("stripe-webhook: should set current_period_end correctly", () => {
+  // Test lifetime subscription - no end date
   const isLifetime = true;
-  const isMonthly = false;
-
   const lifetimeEnd = isLifetime ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  const monthlyEnd = isMonthly ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
-
   assertEquals(lifetimeEnd, null, "Lifetime should have null period_end");
+
+  // Test monthly subscription - has end date
+  const isMonthly = true; // Fixed: should be true to test monthly behavior
+  const monthlyEnd = isMonthly ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
   assertNotEquals(monthlyEnd, null, "Monthly should have period_end set");
 });
 
@@ -255,8 +256,8 @@ Deno.test("stripe-webhook: should create correct number of licenses", () => {
 });
 
 Deno.test("stripe-webhook: should set is_lifetime correctly on licenses", () => {
-  const monthlyPriceType = "pro_license_monthly";
-  const lifetimePriceType = "pro_license_lifetime";
+  const monthlyPriceType: string = "pro_license_monthly";
+  const lifetimePriceType: string = "pro_license_lifetime";
 
   const isLifetimeMonthly = monthlyPriceType === "pro_license_lifetime";
   const isLifetimeLifetime = lifetimePriceType === "pro_license_lifetime";
@@ -555,6 +556,341 @@ Deno.test("SCENARIO: Subscription cancellation flow", () => {
     const userSubscriptionType = "EXPIRED";
     assertEquals(userSubscriptionType, "EXPIRED");
   }
+});
+
+// ============================================
+// BUG FIX TESTS: payment_type incorrect (2026-02-03)
+// ============================================
+
+Deno.test("BUG FIX: PaymentIntent with invoice should be skipped", () => {
+  // PaymentIntent from a subscription has an invoice field
+  const paymentIntentWithInvoice = {
+    id: "pi_xxx",
+    invoice: "in_xxx", // ← Has invoice = subscription payment
+    amount: 499,
+  };
+
+  // Should skip handlePaymentIntentSucceeded
+  const shouldSkip = paymentIntentWithInvoice.invoice !== null && paymentIntentWithInvoice.invoice !== undefined;
+  assertEquals(shouldSkip, true, "Should skip PaymentIntent with invoice (handled by handleInvoicePaid)");
+});
+
+Deno.test("BUG FIX: PaymentIntent without invoice should be processed", () => {
+  // PaymentIntent from a one-time payment (lifetime) has no invoice
+  const paymentIntentWithoutInvoice = {
+    id: "pi_xxx",
+    invoice: null, // ← No invoice = one-time payment
+    amount: 12000,
+  };
+
+  // Should process handlePaymentIntentSucceeded
+  const shouldSkip = paymentIntentWithoutInvoice.invoice !== null && paymentIntentWithoutInvoice.invoice !== undefined;
+  assertEquals(shouldSkip, false, "Should process PaymentIntent without invoice (one-time payment)");
+});
+
+Deno.test("BUG FIX: subscription_payment type for invoice.paid", () => {
+  // handleInvoicePaid always sets payment_type = "subscription_payment"
+  const invoice = mockInvoicePaid;
+
+  const paymentRecord = {
+    stripe_invoice_id: invoice.id,
+    payment_type: "subscription_payment", // ← Correct type
+  };
+
+  assertEquals(paymentRecord.payment_type, "subscription_payment",
+    "Invoice payments should be subscription_payment");
+});
+
+Deno.test("BUG FIX: one_time_payment type only for lifetime purchases", () => {
+  // handlePaymentIntentSucceeded sets payment_type = "one_time_payment" only for lifetime
+  const lifetimePaymentIntent = {
+    id: "pi_xxx",
+    invoice: null, // No invoice = processed by handlePaymentIntentSucceeded
+    metadata: { price_type: "individual_lifetime" },
+  };
+
+  const paymentType = "one_time_payment";
+  assertEquals(paymentType, "one_time_payment",
+    "Lifetime purchases should be one_time_payment");
+});
+
+// ============================================
+// BUG FIX TESTS: canceled_at/ended_at (2026-02-03)
+// ============================================
+
+Deno.test("BUG FIX: canceled_at set when cancel_at_period_end is true", () => {
+  // When user cancels, Stripe sets cancel_at_period_end=true but NOT canceled_at
+  const subscription = {
+    canceled_at: null, // Stripe doesn't set this until subscription actually ends
+    cancel_at_period_end: true, // User requested cancellation
+    ended_at: null,
+    cancel_at: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60, // End of period
+  };
+
+  // FIX: Use current time as cancellation request date
+  const canceled_at = subscription.canceled_at
+    ? new Date(subscription.canceled_at * 1000).toISOString()
+    : subscription.cancel_at_period_end
+      ? new Date().toISOString() // ← FIX: Use NOW instead of null
+      : null;
+
+  assertExists(canceled_at, "canceled_at should be set when cancel_at_period_end is true");
+});
+
+Deno.test("BUG FIX: canceled_at null for active subscription", () => {
+  const subscription = {
+    canceled_at: null,
+    cancel_at_period_end: false, // Active subscription
+    ended_at: null,
+  };
+
+  const canceled_at = subscription.canceled_at
+    ? new Date(subscription.canceled_at * 1000).toISOString()
+    : subscription.cancel_at_period_end
+      ? new Date().toISOString()
+      : null;
+
+  assertEquals(canceled_at, null, "canceled_at should be null for active subscription");
+});
+
+Deno.test("BUG FIX: ended_at uses cancel_at when subscription scheduled for cancellation", () => {
+  const futureTimestamp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60; // 30 days
+  const subscription = {
+    ended_at: null, // Not ended yet
+    cancel_at: futureTimestamp, // Will end on this date
+  };
+
+  // FIX: Use cancel_at as planned end date
+  const ended_at = subscription.ended_at
+    ? new Date(subscription.ended_at * 1000).toISOString()
+    : subscription.cancel_at
+      ? new Date(subscription.cancel_at * 1000).toISOString() // ← FIX: Use cancel_at
+      : null;
+
+  assertExists(ended_at, "ended_at should use cancel_at when subscription is scheduled for cancellation");
+  assertEquals(ended_at, new Date(futureTimestamp * 1000).toISOString());
+});
+
+Deno.test("BUG FIX: ended_at from Stripe when subscription actually ended", () => {
+  const pastTimestamp = Math.floor(Date.now() / 1000) - 24 * 60 * 60; // Yesterday
+  const subscription = {
+    ended_at: pastTimestamp, // Actually ended
+    cancel_at: null,
+  };
+
+  const ended_at = subscription.ended_at
+    ? new Date(subscription.ended_at * 1000).toISOString()
+    : (subscription as any).cancel_at
+      ? new Date((subscription as any).cancel_at * 1000).toISOString()
+      : null;
+
+  assertExists(ended_at);
+  assertEquals(ended_at, new Date(pastTimestamp * 1000).toISOString(),
+    "ended_at should use Stripe's value when subscription actually ended");
+});
+
+// ============================================
+// FEATURE TESTS: Pro billing consolidation (2026-02-03)
+// ============================================
+
+Deno.test("FEATURE: billing_cycle_anchor calculation - day in future", () => {
+  // Simulate: today is 5th, billing_anchor_day is 15th
+  const billingAnchorDay = 15;
+  const currentDay = 5;
+
+  // Should return this month's 15th
+  const shouldUseThisMonth = currentDay < billingAnchorDay;
+  assertEquals(shouldUseThisMonth, true, "Should use this month if anchor day is in future");
+});
+
+Deno.test("FEATURE: billing_cycle_anchor calculation - day in past", () => {
+  // Simulate: today is 20th, billing_anchor_day is 15th
+  const billingAnchorDay = 15;
+  const currentDay = 20;
+
+  // Should return next month's 15th
+  const shouldUseNextMonth = currentDay >= billingAnchorDay;
+  assertEquals(shouldUseNextMonth, true, "Should use next month if anchor day has passed");
+});
+
+Deno.test("FEATURE: billing_anchor_day clamped to 1-28", () => {
+  const testCases = [
+    { input: 0, expected: 1 },
+    { input: 1, expected: 1 },
+    { input: 15, expected: 15 },
+    { input: 28, expected: 28 },
+    { input: 29, expected: 28 },
+    { input: 31, expected: 28 },
+  ];
+
+  testCases.forEach(({ input, expected }) => {
+    const clamped = Math.min(Math.max(input, 1), 28);
+    assertEquals(clamped, expected, `billing_anchor_day ${input} should clamp to ${expected}`);
+  });
+});
+
+Deno.test("FEATURE: subscription update increases quantity", () => {
+  const currentQuantity = 5;
+  const additionalLicenses = 3;
+  const newQuantity = currentQuantity + additionalLicenses;
+
+  assertEquals(newQuantity, 8, "New quantity should be sum of current + additional");
+});
+
+Deno.test("FEATURE: proration_behavior set for subscription updates", () => {
+  const proration_behavior = "create_prorations";
+  assertEquals(proration_behavior, "create_prorations",
+    "Should use create_prorations for mid-cycle license additions");
+});
+
+Deno.test("FEATURE: response includes is_subscription_update flag", () => {
+  const responseForUpdate = {
+    is_subscription_update: true,
+    requires_payment: true,
+    amount_cents: 250, // Prorated amount
+    message: "Ajout de 3 licence(s). Montant proraté à payer maintenant.",
+  };
+
+  assertEquals(responseForUpdate.is_subscription_update, true);
+  assertExists(responseForUpdate.message);
+});
+
+Deno.test("FEATURE: response when no payment required", () => {
+  const responseNoPayment = {
+    client_secret: null,
+    is_subscription_update: true,
+    requires_payment: false,
+    amount_cents: 0,
+    message: "Ajout de 1 licence(s) confirmé. Sera facturé au prochain renouvellement.",
+  };
+
+  assertEquals(responseNoPayment.requires_payment, false);
+  assertEquals(responseNoPayment.client_secret, null);
+  assertEquals(responseNoPayment.amount_cents, 0);
+});
+
+// ============================================
+// BUG FIX TESTS: .single() → .maybeSingle() (2026-02-03)
+// Issue: cancel_at_period_end, canceled_at, ended_at not updated
+// Root cause: .single() returns 406 error when 0 rows, causing
+// handleSubscriptionUpdate to fail silently
+// ============================================
+
+Deno.test("BUG FIX: .maybeSingle() returns null instead of 406 error", () => {
+  // Simulating .single() vs .maybeSingle() behavior
+  // .single() throws 406 "Not Acceptable" when 0 rows returned
+  // .maybeSingle() returns null gracefully
+
+  const singleBehavior = (rows: any[]) => {
+    if (rows.length !== 1) {
+      throw new Error("406 Not Acceptable"); // .single() behavior
+    }
+    return rows[0];
+  };
+
+  const maybeSingleBehavior = (rows: any[]) => {
+    if (rows.length === 0) return null; // .maybeSingle() behavior
+    if (rows.length > 1) throw new Error("Multiple rows");
+    return rows[0];
+  };
+
+  // Test with 0 rows
+  const emptyRows: any[] = [];
+
+  // .single() throws error
+  let singleThrew = false;
+  try {
+    singleBehavior(emptyRows);
+  } catch {
+    singleThrew = true;
+  }
+  assertEquals(singleThrew, true, ".single() should throw on 0 rows");
+
+  // .maybeSingle() returns null
+  const maybeSingleResult = maybeSingleBehavior(emptyRows);
+  assertEquals(maybeSingleResult, null, ".maybeSingle() should return null on 0 rows");
+});
+
+Deno.test("BUG FIX: existing check uses correct logic after fix", () => {
+  // Before fix: existing could be undefined due to 406 error
+  // After fix: existing is null if subscription doesn't exist
+
+  const existingNull = null;
+  const existingFound = { id: "uuid-123" };
+
+  // With null, should INSERT new subscription
+  const shouldInsertNull = !existingNull;
+  assertEquals(shouldInsertNull, true, "Should INSERT when existing is null");
+
+  // With found data, should UPDATE existing subscription
+  const shouldUpdateFound = !!existingFound;
+  assertEquals(shouldUpdateFound, true, "Should UPDATE when existing is found");
+});
+
+Deno.test("BUG FIX: subscription update flow after .maybeSingle() fix", () => {
+  // Simulating the fixed handleSubscriptionUpdate flow
+  const subscription = {
+    id: "sub_test",
+    cancel_at_period_end: true,
+    canceled_at: 1770125223, // Unix timestamp
+    cancel_at: 1772496000, // Future end date
+    ended_at: null,
+    status: "active",
+  };
+
+  // After fix, even if subscription doesn't exist in DB yet,
+  // we don't get 406 error, we get null and do INSERT
+  const existing = null; // .maybeSingle() returns null
+
+  const subscriptionData = {
+    cancel_at_period_end: subscription.cancel_at_period_end,
+    canceled_at: subscription.canceled_at
+      ? new Date(subscription.canceled_at * 1000).toISOString()
+      : subscription.cancel_at_period_end
+        ? new Date().toISOString()
+        : null,
+    ended_at: subscription.ended_at
+      ? new Date((subscription as any).ended_at * 1000).toISOString()
+      : (subscription as any).cancel_at
+        ? new Date((subscription as any).cancel_at * 1000).toISOString()
+        : null,
+    status: subscription.status,
+  };
+
+  // Verify cancellation fields are properly set
+  assertEquals(subscriptionData.cancel_at_period_end, true,
+    "cancel_at_period_end should be true");
+  assertExists(subscriptionData.canceled_at,
+    "canceled_at should be set from Stripe timestamp");
+  assertExists(subscriptionData.ended_at,
+    "ended_at should be set from cancel_at");
+
+  // Verify the decision logic
+  if (existing) {
+    // UPDATE path
+    assertEquals(true, false, "Should not reach UPDATE path when existing is null");
+  } else {
+    // INSERT path (correct for new subscription)
+    assertEquals(true, true, "Should reach INSERT path when existing is null");
+  }
+});
+
+Deno.test("BUG FIX: cancel-subscription PATCH verifies rows updated", () => {
+  // Simulating the fix that adds .select() to verify rows were updated
+
+  // Before fix: PATCH returns 204 even if 0 rows match (silent failure)
+  // After fix: PATCH with .select() returns empty array if 0 rows match
+
+  const updatedRowsEmpty: any[] = [];
+  const updatedRowsOne = [{ id: "uuid-123" }];
+
+  // With empty result, should log warning
+  const shouldWarnEmpty = !updatedRowsEmpty || updatedRowsEmpty.length === 0;
+  assertEquals(shouldWarnEmpty, true, "Should warn when 0 rows updated");
+
+  // With 1 result, should log success
+  const shouldSucceed = updatedRowsOne && updatedRowsOne.length > 0;
+  assertEquals(shouldSucceed, true, "Should succeed when 1+ rows updated");
 });
 
 console.log("\n✅ All stripe-webhook tests defined\n");

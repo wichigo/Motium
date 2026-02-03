@@ -179,6 +179,14 @@ async function handlePaymentIntentSucceeded(
   supabase: any,
   paymentIntent: Stripe.PaymentIntent
 ) {
+  // FIX BUG: Skip PaymentIntents that belong to subscriptions (invoices)
+  // These are handled by handleInvoicePaid() with correct payment_type="subscription_payment"
+  // Without this check, subscription payments were incorrectly recorded as "one_time_payment"
+  if (paymentIntent.invoice) {
+    console.log(`ℹ️ PaymentIntent ${paymentIntent.id} is linked to invoice ${paymentIntent.invoice} - skipping (handled by handleInvoicePaid)`)
+    return
+  }
+
   const {
     supabase_user_id,
     supabase_pro_account_id,
@@ -257,13 +265,19 @@ async function handlePaymentIntentSucceeded(
     .maybeSingle()
 
   if (!existingPayment) {
+    // Determine payment_type based on price_type
+    // - lifetime purchases = one_time_payment (no recurring billing)
+    // - monthly subscriptions = subscription_payment (initial payment for recurring)
+    const isMonthlySubscription = price_type?.includes("monthly") || false
+    const paymentType = isMonthlySubscription ? "subscription_payment" : "one_time_payment"
+
     await supabase.from("stripe_payments").insert({
       user_id: supabase_user_id || null,
       pro_account_id: supabase_pro_account_id || null,
       stripe_payment_intent_id: paymentIntent.id,
       stripe_charge_id: paymentIntent.latest_charge as string || null,
       stripe_customer_id: paymentIntent.customer as string,
-      payment_type: "one_time_payment",
+      payment_type: paymentType,
       amount_cents: paymentIntent.amount,
       amount_received_cents: paymentIntent.amount_received,
       currency: paymentIntent.currency,
@@ -278,13 +292,23 @@ async function handlePaymentIntentSucceeded(
     console.log(`Payment record already exists for PI ${paymentIntent.id}, skipping insert`)
   }
 
-  // Create a "subscription" record for all purchase types (lifetime and monthly)
+  // Create a "subscription" record ONLY for lifetime purchases
+  // Monthly subscriptions are handled by handleSubscriptionUpdate when
+  // customer.subscription.created/updated event arrives with the real sub_xxx ID
   // ARBRE 2 PRO BOUCLE 3: Returns the created record to get stripe_subscription_ref
   let stripeSubscriptionRef: string | null = null
-  if (price_type) {
-    const isLifetime = price_type.includes("lifetime")
+  const isLifetime = price_type?.includes("lifetime") || false
+  const isMonthly = price_type?.includes("monthly") || false
+
+  // FIX BUG: Only create stripe_subscriptions record for LIFETIME purchases here
+  // Monthly subscriptions will be created by handleSubscriptionUpdate with the real Stripe sub_xxx ID
+  if (price_type && isLifetime) {
     const qty = parseInt(quantity || "1")
-    const fakeStripeSubId = `${isLifetime ? 'lifetime' : 'onetime'}_${paymentIntent.id}`
+    const fakeStripeSubId = `lifetime_${paymentIntent.id}`
+
+    // FIX: Include stripe_price_id - for lifetime/one-time payments, we use a synthetic ID
+    // based on price_type since there's no real Stripe Price object
+    const syntheticPriceId = `price_${price_type}_${product_id || 'unknown'}`
 
     const subscriptionData = {
       user_id: supabase_user_id || null,
@@ -292,6 +316,7 @@ async function handlePaymentIntentSucceeded(
       stripe_subscription_id: fakeStripeSubId,
       stripe_customer_id: paymentIntent.customer as string,
       stripe_product_id: product_id,
+      stripe_price_id: syntheticPriceId,  // FIX: Now populated
       subscription_type: price_type,
       status: "active",
       quantity: qty,
@@ -312,6 +337,14 @@ async function handlePaymentIntentSucceeded(
     console.log(`Created subscription record: ${price_type} (internal id: ${stripeSubscriptionRef || 'null'})`)
     // NOTE: users.subscription_type is synchronized automatically by SQL trigger
     // sync_user_subscription_cache() in stripe_integration.sql - NO direct update needed
+
+    // FIX: Link stripe_payments to stripe_subscriptions via stripe_subscription_ref
+    if (stripeSubscriptionRef) {
+      await supabase.from("stripe_payments")
+        .update({ stripe_subscription_ref: stripeSubscriptionRef })
+        .eq("stripe_payment_intent_id", paymentIntent.id)
+      console.log(`Linked payment ${paymentIntent.id} to subscription ref ${stripeSubscriptionRef}`)
+    }
   }
 
   // ARBRE 2 PRO - Create licenses for Pro account purchases
@@ -556,6 +589,14 @@ async function handleInvoicePaid(
   const stripePriceId = subscriptionItem?.price?.id || null
   const stripeSubscriptionItemId = subscriptionItem?.id || null
 
+  // FIX: Get internal stripe_subscription_ref (UUID) from stripe_subscriptions table
+  const { data: internalSub } = await supabase
+    .from("stripe_subscriptions")
+    .select("id")
+    .eq("stripe_subscription_id", subscriptionId)
+    .maybeSingle()
+  const stripeSubscriptionRef = internalSub?.id || null
+
   // Insert payment record with all Stripe references (idempotent)
   // FIX: PostgREST upsert doesn't work with partial unique indexes (WHERE ... IS NOT NULL)
   // Use manual check-then-insert pattern instead
@@ -569,6 +610,7 @@ async function handleInvoicePaid(
     await supabase.from("stripe_payments").insert({
       user_id: supabase_user_id || null,
       pro_account_id: supabase_pro_account_id || null,
+      stripe_subscription_ref: stripeSubscriptionRef,  // FIX: Now populated with internal FK
       stripe_invoice_id: invoice.id,
       stripe_payment_intent_id: invoice.payment_intent as string,
       stripe_charge_id: invoice.charge as string || null,
@@ -587,6 +629,7 @@ async function handleInvoicePaid(
       metadata: metadata,
       paid_at: new Date().toISOString(),
     })
+    console.log(`Created payment record for invoice ${invoice.id} (subscription_ref: ${stripeSubscriptionRef || 'null'})`)
   } else {
     console.log(`Payment record already exists for invoice ${invoice.id}, skipping insert`)
   }
@@ -645,16 +688,18 @@ async function handleInvoicePaymentFailed(
   // Get subscription metadata to determine type
   const subscriptionId = invoice.subscription as string
   let metadata: Record<string, string> = {}
+  let stripeSubscriptionRef: string | null = null  // FIX: Track internal subscription ref
 
   if (subscriptionId) {
     const { data: subData } = await supabase
       .from("stripe_subscriptions")
-      .select("metadata, user_id, pro_account_id, subscription_type")
+      .select("id, metadata, user_id, pro_account_id, subscription_type")  // FIX: Also select 'id' for ref
       .eq("stripe_subscription_id", subscriptionId)
       .single()
 
     if (subData) {
       metadata = subData.metadata || {}
+      stripeSubscriptionRef = subData.id || null  // FIX: Get internal ref
     }
   }
 
@@ -672,6 +717,7 @@ async function handleInvoicePaymentFailed(
     await supabase.from("stripe_payments").insert({
       user_id: supabase_user_id || null,
       pro_account_id: supabase_pro_account_id || null,
+      stripe_subscription_ref: stripeSubscriptionRef,  // FIX: Now populated with internal FK
       stripe_invoice_id: invoice.id,
       stripe_customer_id: invoice.customer as string,
       payment_type: "subscription_payment",
@@ -683,6 +729,7 @@ async function handleInvoicePaymentFailed(
       period_start: new Date(invoice.period_start * 1000).toISOString(),
       period_end: new Date(invoice.period_end * 1000).toISOString(),
     })
+    console.log(`Created failed payment record for invoice ${invoice.id} (subscription_ref: ${stripeSubscriptionRef || 'null'})`)
   } else {
     console.log(`Failed payment record already exists for invoice ${invoice.id}, skipping insert`)
   }
@@ -720,63 +767,93 @@ async function handleInvoicePaymentFailed(
   }
 
   // Handle Pro license payment failure → Suspend monthly licenses only
+  // FIX: Use atomic RPC to ensure consistency
   if (supabase_pro_account_id && price_type === "pro_license_monthly") {
-    console.log(`⚠️ Pro payment failed - suspending monthly licenses for account ${supabase_pro_account_id}`)
+    console.log(`⚠️ Pro payment failed - processing via atomic RPC for account ${supabase_pro_account_id}`)
 
-    // Suspend only monthly licenses (is_lifetime = false)
-    await supabase.from("licenses")
-      .update({
-        status: "suspended",
-        updated_at: new Date().toISOString(),
+    try {
+      // Call atomic RPC for Pro payment failure
+      const { data, error } = await supabase.rpc('process_invoice_payment_failed_pro', {
+        p_stripe_subscription_id: subscriptionId,
+        p_pro_account_id: supabase_pro_account_id
       })
-      .eq("pro_account_id", supabase_pro_account_id)
-      .eq("is_lifetime", false)
-      .in("status", ["active", "available"])
 
-    // Update pro_account status to suspended (if column exists)
-    await supabase.from("pro_accounts")
-      .update({
-        status: "suspended",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", supabase_pro_account_id)
+      if (error) {
+        console.error(`❌ Error calling process_invoice_payment_failed_pro RPC:`, error)
+        console.log(`⚠️ Falling back to legacy processing...`)
+        await handleInvoicePaymentFailedProLegacy(supabase, supabase_pro_account_id)
+      } else if (data?.success) {
+        console.log(`✅ Pro payment failure processed via RPC:`)
+        console.log(`   - Suspended licenses: ${data.suspended_count || 0}`)
+        console.log(`   - Affected users: ${data.affected_users || 0}`)
+      } else {
+        console.error(`❌ process_invoice_payment_failed_pro returned failure:`, data?.error)
+        await handleInvoicePaymentFailedProLegacy(supabase, supabase_pro_account_id)
+      }
+    } catch (err) {
+      console.error(`❌ Exception calling process_invoice_payment_failed_pro:`, err)
+      await handleInvoicePaymentFailedProLegacy(supabase, supabase_pro_account_id)
+    }
+  }
+}
 
-    // ARBRE 4 BOUCLE 2: Update affected users - but check for other active licenses first
-    // Note: The trigger sync_subscription_type() handles the subscription_type change
-    // We only update subscription_expires_at here, and only if they don't have other active licenses
-    const { data: affectedLicenses } = await supabase
-      .from("licenses")
-      .select("linked_account_id")
-      .eq("pro_account_id", supabase_pro_account_id)
-      .eq("status", "suspended") // Get the ones we just suspended
-      .eq("is_lifetime", false)
-      .not("linked_account_id", "is", null)
+/**
+ * Legacy fallback for Pro payment failure handling
+ * Used when the RPC function is not yet deployed
+ */
+async function handleInvoicePaymentFailedProLegacy(
+  supabase: any,
+  proAccountId: string
+) {
+  console.log(`⚠️ Using legacy processing for Pro payment failure...`)
 
-    if (affectedLicenses && affectedLicenses.length > 0) {
-      const userIds = [...new Set(affectedLicenses.map((l: any) => l.linked_account_id).filter(Boolean))]
-      console.log(`📋 Checking ${userIds.length} affected users for other active licenses...`)
+  // Suspend only monthly licenses (is_lifetime = false)
+  await supabase.from("licenses")
+    .update({
+      status: "suspended",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("pro_account_id", proAccountId)
+    .eq("is_lifetime", false)
+    .in("status", ["active", "available"])
 
-      for (const userId of userIds) {
-        // Check if user has any OTHER active license (from any pro_account)
-        // This includes lifetime licenses from THIS pro_account (not suspended)
-        // or any license from other pro_accounts
-        const { data: otherActiveLicenses } = await supabase
-          .from("licenses")
-          .select("id, pro_account_id, is_lifetime")
-          .eq("linked_account_id", userId)
-          .eq("status", "active")
-          .limit(1)
+  // Update pro_account status to suspended
+  await supabase.from("pro_accounts")
+    .update({
+      status: "suspended",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", proAccountId)
 
-        if (otherActiveLicenses && otherActiveLicenses.length > 0) {
-          console.log(`ℹ️ User ${userId} has another active license (${otherActiveLicenses[0].id}, lifetime=${otherActiveLicenses[0].is_lifetime}) - keeping access`)
-        } else {
-          // No other active licenses - expire their access
-          await supabase.from("users").update({
-            subscription_expires_at: new Date().toISOString(), // Expires now
-            updated_at: new Date().toISOString(),
-          }).eq("id", userId)
-          console.log(`⚠️ User ${userId} has no other active licenses - access expired`)
-        }
+  // Update affected users - but check for other active licenses first
+  const { data: affectedLicenses } = await supabase
+    .from("licenses")
+    .select("linked_account_id")
+    .eq("pro_account_id", proAccountId)
+    .eq("status", "suspended")
+    .eq("is_lifetime", false)
+    .not("linked_account_id", "is", null)
+
+  if (affectedLicenses && affectedLicenses.length > 0) {
+    const userIds = [...new Set(affectedLicenses.map((l: any) => l.linked_account_id).filter(Boolean))]
+    console.log(`📋 Legacy: Checking ${userIds.length} affected users for other active licenses...`)
+
+    for (const userId of userIds) {
+      const { data: otherActiveLicenses } = await supabase
+        .from("licenses")
+        .select("id, pro_account_id, is_lifetime")
+        .eq("linked_account_id", userId)
+        .eq("status", "active")
+        .limit(1)
+
+      if (otherActiveLicenses && otherActiveLicenses.length > 0) {
+        console.log(`ℹ️ User ${userId} has another active license - keeping access`)
+      } else {
+        await supabase.from("users").update({
+          subscription_expires_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }).eq("id", userId)
+        console.log(`⚠️ User ${userId} has no other active licenses - access expired`)
       }
     }
   }
@@ -853,11 +930,14 @@ async function handleSubscriptionUpdate(
   }
 
   // Check if subscription exists
+  // FIX BUG: Use .maybeSingle() instead of .single() to avoid 406 error
+  // when the subscription doesn't exist yet. .single() throws 406 "Not Acceptable"
+  // when 0 rows are returned, while .maybeSingle() returns null gracefully.
   const { data: existing } = await supabase
     .from("stripe_subscriptions")
     .select("id")
     .eq("stripe_subscription_id", subscription.id)
-    .single()
+    .maybeSingle()
 
   // Extract subscription item and price info
   const subscriptionItem = subscription.items.data[0]
@@ -893,12 +973,20 @@ async function handleSubscriptionUpdate(
       ? new Date(periodEnd * 1000).toISOString()
       : null,
     cancel_at_period_end: subscription.cancel_at_period_end,
+    // FIX BUG: When cancel_at_period_end=true, Stripe doesn't set canceled_at until subscription actually ends
+    // We use the current timestamp as the "cancellation request date" in this case
     canceled_at: subscription.canceled_at
       ? new Date(subscription.canceled_at * 1000).toISOString()
-      : null,
+      : subscription.cancel_at_period_end
+        ? new Date().toISOString()  // Date of cancellation request
+        : null,
+    // FIX BUG: Use cancel_at (scheduled end date) when cancel_at_period_end=true
+    // subscription.cancel_at contains the timestamp when the subscription will be canceled
     ended_at: subscription.ended_at
       ? new Date(subscription.ended_at * 1000).toISOString()
-      : null,
+      : (subscription as any).cancel_at
+        ? new Date((subscription as any).cancel_at * 1000).toISOString()
+        : null,
     metadata: metadata,
     updated_at: new Date().toISOString(),
   }
@@ -1116,10 +1204,22 @@ async function handleSubscriptionDeleted(
   subscription: Stripe.Subscription
 ) {
   const metadata = subscription.metadata
+  const isPro = metadata.supabase_pro_account_id && metadata.price_type?.includes("pro_license")
+  const isIndividual = metadata.supabase_user_id && metadata.price_type?.includes("individual")
 
   console.log(`🔴 Subscription deleted: ${subscription.id}`)
+  console.log(`   Type: ${isPro ? 'Pro' : isIndividual ? 'Individual' : 'Unknown'}`)
 
-  // Update stripe_subscriptions
+  // FIX: For Pro subscriptions, process licenses/users BEFORE updating stripe_subscriptions
+  // This ensures that if the RPC fails, the subscription stays in a consistent state
+  // and Stripe will retry the webhook.
+  if (isPro) {
+    // ARBRE 4 FIX: Process Pro subscription deletion via atomic RPC FIRST
+    // This handles both license status AND user subscription_type updates
+    await processSubscriptionDeleted(supabase, subscription.id, metadata.supabase_pro_account_id)
+  }
+
+  // Update stripe_subscriptions (triggers sync_user_subscription_cache for Individual)
   await supabase.from("stripe_subscriptions")
     .update({
       status: "canceled",
@@ -1132,14 +1232,8 @@ async function handleSubscriptionDeleted(
   // NOTE: users.subscription_type is synchronized automatically by SQL trigger
   // sync_user_subscription_cache() in stripe_integration.sql - NO direct update needed.
   // The trigger fires on UPDATE of stripe_subscriptions above (status = 'canceled').
-  if (metadata.supabase_user_id && metadata.price_type?.includes("individual")) {
+  if (isIndividual) {
     console.log(`ℹ️ Subscription ${subscription.id} canceled - users.subscription_type synced via trigger`)
-  }
-
-  // ARBRE 4 FIX: Process Pro subscription deletion via atomic RPC
-  // This handles both license status AND user subscription_type updates
-  if (metadata.supabase_pro_account_id && metadata.price_type?.includes("pro_license")) {
-    await processSubscriptionDeleted(supabase, subscription.id, metadata.supabase_pro_account_id)
   }
 }
 

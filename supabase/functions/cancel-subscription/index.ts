@@ -55,11 +55,12 @@ serve(async (req) => {
       let userError = null
 
       // First try: userId is auth_id
+      // FIX: Use .maybeSingle() instead of .single() to avoid 406 error when 0 results
       const { data: userByAuthId, error: authIdError } = await supabase
         .from("users")
         .select("id, stripe_subscription_id, stripe_customer_id")
         .eq("auth_id", userId)
-        .single()
+        .maybeSingle()
 
       if (userByAuthId) {
         user = userByAuthId
@@ -69,7 +70,7 @@ serve(async (req) => {
           .from("users")
           .select("id, stripe_subscription_id, stripe_customer_id")
           .eq("id", userId)
-          .single()
+          .maybeSingle()
 
         user = userById
         userError = idError
@@ -90,6 +91,7 @@ serve(async (req) => {
       // If still no subscription ID, check stripe_subscriptions table
       // IMPORTANT: stripe_subscriptions.user_id references public.users.id, not auth_id
       if (!stripeSubscriptionId) {
+        // FIX: Use .maybeSingle() instead of .single() to avoid 406 error when 0 results
         const { data: subscription, error: subError } = await supabase
           .from("stripe_subscriptions")
           .select("stripe_subscription_id")
@@ -97,7 +99,7 @@ serve(async (req) => {
           .eq("status", "active")
           .order("created_at", { ascending: false })
           .limit(1)
-          .single()
+          .maybeSingle()
 
         if (subscription) {
           stripeSubscriptionId = subscription.stripe_subscription_id
@@ -130,7 +132,8 @@ serve(async (req) => {
 
     // Update local database to reflect cancellation status
     // The webhook will handle the full update, but we set a flag immediately for UX
-    const { error: updateError } = await supabase
+    // FIX: Add .select() to verify rows were updated (PostgREST returns 204 even if 0 rows match)
+    const { data: updatedRows, error: updateError } = await supabase
       .from("stripe_subscriptions")
       .update({
         cancel_at_period_end: !cancelImmediately,
@@ -139,10 +142,16 @@ serve(async (req) => {
         updated_at: new Date().toISOString(),
       })
       .eq("stripe_subscription_id", stripeSubscriptionId)
+      .select("id")
 
     if (updateError) {
       console.warn("Failed to update local subscription status:", updateError)
       // Don't fail the request - Stripe is the source of truth
+    } else if (!updatedRows || updatedRows.length === 0) {
+      console.warn(`No rows updated for stripe_subscription_id: ${stripeSubscriptionId}`)
+      console.warn("This may indicate the subscription doesn't exist in stripe_subscriptions table")
+    } else {
+      console.log(`Updated ${updatedRows.length} row(s) in stripe_subscriptions`)
     }
 
     // Return cancellation details
