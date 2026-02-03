@@ -45,7 +45,8 @@ data class Subscription(
     val trialStartedAt: Instant? = null,
     val trialEndsAt: Instant? = null,
     val stripeCustomerId: String? = null,
-    val stripeSubscriptionId: String? = null
+    val stripeSubscriptionId: String? = null,
+    val cancelAtPeriodEnd: Boolean = false
 ) {
     /**
      * Check if subscription/trial is active (not expired)

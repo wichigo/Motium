@@ -28,6 +28,7 @@ data class UserEntity(
     val trialEndsAt: String? = null, // Trial end timestamp (ISO-8601)
     val stripeCustomerId: String? = null, // Stripe customer ID for payments
     val stripeSubscriptionId: String? = null, // Stripe subscription ID
+    val cancelAtPeriodEnd: Boolean = false, // True if subscription is pending cancellation
     val phoneNumber: String,
     val address: String,
     // Device fingerprint for anti-abuse
@@ -62,7 +63,8 @@ fun UserEntity.toDomainModel(): User {
             trialStartedAt = trialStartedAt?.let { Instant.parse(it) },
             trialEndsAt = trialEndsAt?.let { Instant.parse(it) },
             stripeCustomerId = stripeCustomerId,
-            stripeSubscriptionId = stripeSubscriptionId
+            stripeSubscriptionId = stripeSubscriptionId,
+            cancelAtPeriodEnd = cancelAtPeriodEnd
         ),
         phoneNumber = phoneNumber,
         address = address,
@@ -94,6 +96,7 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         trialEndsAt = subscription.trialEndsAt?.toString(),
         stripeCustomerId = subscription.stripeCustomerId,
         stripeSubscriptionId = subscription.stripeSubscriptionId,
+        cancelAtPeriodEnd = subscription.cancelAtPeriodEnd,
         phoneNumber = phoneNumber,
         address = address,
         deviceFingerprintId = deviceFingerprintId,

@@ -2752,7 +2752,7 @@ fun LicenseSelectionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
         title = {
             Text(
@@ -2835,7 +2835,10 @@ fun LicenseSelectionDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Annuler")
+                Text(
+                    "Annuler",
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     )
@@ -2867,9 +2870,18 @@ fun SubscriptionManagementDialog(
     var cancelError by remember { mutableStateOf<String?>(null) }
     var cancellationSuccess by remember { mutableStateOf<String?>(null) }
 
+    // Resume subscription state
+    var showResumeConfirmation by remember { mutableStateOf(false) }
+    var isResuming by remember { mutableStateOf(false) }
+    var resumeError by remember { mutableStateOf<String?>(null) }
+    var resumeSuccess by remember { mutableStateOf<String?>(null) }
+
+    // Check if subscription is pending cancellation
+    val isCanceledPendingEnd = currentUser?.subscription?.cancelAtPeriodEnd == true
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color.White,
+        containerColor = surfaceColor,
         tonalElevation = 0.dp,
         title = {
             Row(
@@ -2963,16 +2975,16 @@ fun SubscriptionManagementDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Prochain renouvellement",
+                                    text = if (isCanceledPendingEnd) "Fin d'accès le" else "Prochain renouvellement",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = textSecondaryColor
+                                    color = if (isCanceledPendingEnd) ErrorRed else textSecondaryColor
                                 )
                                 Text(
                                     text = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
                                         .format(java.util.Date(expiresAt.toEpochMilliseconds())),
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.Medium,
-                                    color = textColor
+                                    color = if (isCanceledPendingEnd) ErrorRed else textColor
                                 )
                             }
 
@@ -3095,7 +3107,7 @@ fun SubscriptionManagementDialog(
                     }
                 }
 
-                // Cancel subscription button
+                // Cancel/Resume subscription button
                 if (isMonthlyPremium) {
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -3130,13 +3142,44 @@ fun SubscriptionManagementDialog(
                         }
                     }
 
-                    // Show error if any
+                    // Show resume success message
+                    resumeSuccess?.let { message ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MotiumPrimary.copy(alpha = 0.1f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MotiumPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MotiumPrimary
+                                )
+                            }
+                        }
+                    }
+
+                    // Show cancel error if any
                     cancelError?.let { error ->
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFF5252).copy(alpha = 0.1f)
+                                containerColor = ErrorRed.copy(alpha = 0.1f)
                             )
                         ) {
                             Row(
@@ -3149,38 +3192,94 @@ fun SubscriptionManagementDialog(
                                 Icon(
                                     imageVector = Icons.Default.Warning,
                                     contentDescription = null,
-                                    tint = Color(0xFFFF5252),
+                                    tint = ErrorRed,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Text(
                                     text = error,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFFFF5252)
+                                    color = ErrorRed
                                 )
                             }
                         }
                     }
 
-                    // Cancel button (only show if not already canceled and no success message)
-                    if (cancellationSuccess == null) {
-                        TextButton(
-                            onClick = { showCancelConfirmation = true },
-                            enabled = !isCanceling,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (isCanceling) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color(0xFFFF5252)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                            }
-                            Text(
-                                text = if (isCanceling) "Résiliation en cours..." else "Résilier mon abonnement",
-                                color = Color(0xFFFF5252),
-                                style = MaterialTheme.typography.bodyMedium
+                    // Show resume error if any
+                    resumeError?.let { error ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = ErrorRed.copy(alpha = 0.1f)
                             )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = ErrorRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ErrorRed
+                                )
+                            }
+                        }
+                    }
+
+                    // Action button: Resume or Cancel depending on state
+                    if (cancellationSuccess == null && resumeSuccess == null) {
+                        if (isCanceledPendingEnd) {
+                            // Show "Annuler la résiliation" button (green)
+                            TextButton(
+                                onClick = { showResumeConfirmation = true },
+                                enabled = !isResuming,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isResuming) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MotiumPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = if (isResuming) "Réactivation en cours..." else "Annuler la résiliation",
+                                    color = MotiumPrimary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        } else {
+                            // Show "Résilier mon abonnement" button (red)
+                            TextButton(
+                                onClick = { showCancelConfirmation = true },
+                                enabled = !isCanceling,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isCanceling) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = ErrorRed
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = if (isCanceling) "Résiliation en cours..." else "Résilier mon abonnement",
+                                    color = ErrorRed,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
                         }
                     }
                 }
@@ -3188,14 +3287,14 @@ fun SubscriptionManagementDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (cancellationSuccess != null) {
+                if (cancellationSuccess != null || resumeSuccess != null) {
                     onCancellationComplete()
                 } else {
                     onDismiss()
                 }
             }) {
                 Text(
-                    if (cancellationSuccess != null) "OK" else "Fermer",
+                    if (cancellationSuccess != null || resumeSuccess != null) "OK" else "Fermer",
                     color = MotiumPrimary
                 )
             }
@@ -3207,13 +3306,13 @@ fun SubscriptionManagementDialog(
     if (showCancelConfirmation) {
         AlertDialog(
             onDismissRequest = { showCancelConfirmation = false },
-            containerColor = Color.White,
+            containerColor = surfaceColor,
             tonalElevation = 0.dp,
             icon = {
                 Icon(
                     imageVector = Icons.Default.Warning,
                     contentDescription = null,
-                    tint = Color(0xFFFF5252),
+                    tint = ErrorRed,
                     modifier = Modifier.size(48.dp)
                 )
             },
@@ -3285,7 +3384,7 @@ fun SubscriptionManagementDialog(
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF5252)
+                        containerColor = ErrorRed
                     )
                 ) {
                     Text("Confirmer la résiliation")
@@ -3293,6 +3392,103 @@ fun SubscriptionManagementDialog(
             },
             dismissButton = {
                 TextButton(onClick = { showCancelConfirmation = false }) {
+                    Text("Annuler", color = textSecondaryColor)
+                }
+            }
+        )
+    }
+
+    // Resume confirmation dialog
+    if (showResumeConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showResumeConfirmation = false },
+            containerColor = surfaceColor,
+            tonalElevation = 0.dp,
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MotiumPrimary,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Réactiver votre abonnement ?",
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    color = textColor
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Votre abonnement sera réactivé et se renouvellera automatiquement le ${
+                            expiresAt?.let {
+                                java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
+                                    .format(java.util.Date(it.toEpochMilliseconds()))
+                            } ?: "à la fin de la période"
+                        }.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = textColor
+                    )
+                    Text(
+                        text = "Vous continuerez à profiter de toutes les fonctionnalités Premium sans interruption.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSecondaryColor
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showResumeConfirmation = false
+                        isResuming = true
+                        resumeError = null
+
+                        coroutineScope.launch {
+                            val userId = currentUser?.id
+                            if (userId != null) {
+                                val result = subscriptionManager.resumeSubscription(
+                                    userId = userId
+                                )
+                                result.fold(
+                                    onSuccess = { response ->
+                                        resumeSuccess = "Abonnement réactivé ! Prochain renouvellement le ${
+                                            response.currentPeriodEnd?.let {
+                                                try {
+                                                    val instant = kotlinx.datetime.Instant.parse(it)
+                                                    java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
+                                                        .format(java.util.Date(instant.toEpochMilliseconds()))
+                                                } catch (e: Exception) {
+                                                    it
+                                                }
+                                            } ?: "fin de période"
+                                        }"
+                                        isResuming = false
+                                    },
+                                    onFailure = { error ->
+                                        resumeError = error.message ?: "Erreur lors de la réactivation"
+                                        isResuming = false
+                                    }
+                                )
+                            } else {
+                                resumeError = "Utilisateur non connecté"
+                                isResuming = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MotiumPrimary
+                    )
+                ) {
+                    Text("Réactiver")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResumeConfirmation = false }) {
                     Text("Annuler", color = textSecondaryColor)
                 }
             }

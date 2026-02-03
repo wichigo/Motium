@@ -852,6 +852,62 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     /**
+     * Resume a previously canceled subscription.
+     * This reactivates a subscription that was scheduled to cancel at the end of the billing period.
+     *
+     * @param userId The user's auth ID
+     * @param subscriptionId Optional specific subscription ID (will be looked up if not provided)
+     * @return Result containing reactivation details
+     */
+    suspend fun resumeSubscription(
+        userId: String,
+        subscriptionId: String? = null
+    ): Result<ResumeSubscriptionResponse> = withContext(Dispatchers.IO) {
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/functions/v1/resume-subscription"
+
+            val requestBody = ResumeSubscriptionRequest(
+                userId = userId,
+                subscriptionId = subscriptionId
+            )
+
+            val jsonBody = json.encodeToString(ResumeSubscriptionRequest.serializer(), requestBody)
+
+            val authToken = getAuthToken()
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Authorization", "Bearer $authToken")
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            MotiumApplication.logger.i("Resuming subscription for user: $userId", TAG)
+
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: throw Exception("Empty response from server")
+
+            if (!response.isSuccessful) {
+                val errorMessage = try {
+                    json.decodeFromString(ErrorResponse.serializer(), responseBody).error
+                } catch (e: Exception) {
+                    "Erreur serveur: ${response.code}"
+                }
+                throw Exception(errorMessage)
+            }
+
+            val resumeResponse = json.decodeFromString(ResumeSubscriptionResponse.serializer(), responseBody)
+            MotiumApplication.logger.i("✅ Subscription resumed: ${resumeResponse.subscriptionId}", TAG)
+
+            Result.success(resumeResponse)
+
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Subscription resume failed: ${e.message}", TAG, e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Get the amount in cents for a given price type and quantity
      */
     fun getAmountCents(priceType: String, quantity: Int = 1): Long {
@@ -881,6 +937,27 @@ data class CancelSubscriptionRequest(
  */
 @Serializable
 data class CancelSubscriptionResponse(
+    @SerialName("success") val success: Boolean,
+    @SerialName("subscriptionId") val subscriptionId: String,
+    @SerialName("cancelAtPeriodEnd") val cancelAtPeriodEnd: Boolean,
+    @SerialName("currentPeriodEnd") val currentPeriodEnd: String? = null,
+    @SerialName("message") val message: String
+)
+
+/**
+ * Request to resume a subscription
+ */
+@Serializable
+data class ResumeSubscriptionRequest(
+    @SerialName("userId") val userId: String,
+    @SerialName("subscriptionId") val subscriptionId: String? = null
+)
+
+/**
+ * Response from resume subscription endpoint
+ */
+@Serializable
+data class ResumeSubscriptionResponse(
     @SerialName("success") val success: Boolean,
     @SerialName("subscriptionId") val subscriptionId: String,
     @SerialName("cancelAtPeriodEnd") val cancelAtPeriodEnd: Boolean,

@@ -66,7 +66,7 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         ConsentEntity::class,
         LinkedUserEntity::class
     ],
-    version = 26,  // v26: Battery optimization indexes for delta sync queries
+    version = 27,  // v27: Add cancelAtPeriodEnd to users for subscription resume feature
     exportSchema = true  // Export schema JSON for CI validation of migrations
 )
 @TypeConverters(TripConverters::class)
@@ -842,6 +842,19 @@ abstract class MotiumDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from v26 to v27: Add cancelAtPeriodEnd to users
+         * - Add cancelAtPeriodEnd column to track if subscription is pending cancellation
+         * - Enables "Annuler la résiliation" feature in subscription management
+         */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add cancelAtPeriodEnd column to users table
+                // Default to 0 (false) for existing users
+                db.execSQL("ALTER TABLE users ADD COLUMN cancelAtPeriodEnd INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
          * Get singleton instance of the database.
          * Uses double-check locking for thread safety.
          */
@@ -875,7 +888,8 @@ abstract class MotiumDatabase : RoomDatabase() {
                     MIGRATION_22_23,
                     MIGRATION_23_24,
                     MIGRATION_24_25,
-                    MIGRATION_25_26
+                    MIGRATION_25_26,
+                    MIGRATION_26_27
                 )
                 .build()
         }
