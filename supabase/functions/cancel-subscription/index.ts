@@ -49,28 +49,51 @@ serve(async (req) => {
 
     if (!stripeSubscriptionId) {
       // Check users table for stripe_subscription_id
-      const { data: user, error: userError } = await supabase
+      // userId can be either auth_id (from Supabase Auth) or id (from public.users)
+      // Try auth_id first, then fall back to id
+      let user = null
+      let userError = null
+
+      // First try: userId is auth_id
+      const { data: userByAuthId, error: authIdError } = await supabase
         .from("users")
-        .select("stripe_subscription_id, stripe_customer_id")
+        .select("id, stripe_subscription_id, stripe_customer_id")
         .eq("auth_id", userId)
         .single()
 
-      if (userError || !user) {
-        console.error("User not found:", userError)
+      if (userByAuthId) {
+        user = userByAuthId
+      } else {
+        // Second try: userId is the public.users.id directly
+        const { data: userById, error: idError } = await supabase
+          .from("users")
+          .select("id, stripe_subscription_id, stripe_customer_id")
+          .eq("id", userId)
+          .single()
+
+        user = userById
+        userError = idError
+      }
+
+      if (!user) {
+        console.error("User not found by auth_id or id:", authIdError, userError)
         return new Response(
           JSON.stringify({ error: "User not found" }),
           { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         )
       }
 
+      // Use the public.users.id for subsequent queries
+      const publicUserId = user.id
       stripeSubscriptionId = user.stripe_subscription_id
 
       // If still no subscription ID, check stripe_subscriptions table
+      // IMPORTANT: stripe_subscriptions.user_id references public.users.id, not auth_id
       if (!stripeSubscriptionId) {
         const { data: subscription, error: subError } = await supabase
           .from("stripe_subscriptions")
           .select("stripe_subscription_id")
-          .eq("user_id", userId)
+          .eq("user_id", publicUserId)
           .eq("status", "active")
           .order("created_at", { ascending: false })
           .limit(1)
