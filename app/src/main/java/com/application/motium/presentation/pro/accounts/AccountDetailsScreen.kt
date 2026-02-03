@@ -582,7 +582,7 @@ private fun ProfileSection(
         val (statusColor, statusText) = when {
             license == null -> Pair(TextSecondaryDark, "Sans licence")
             license.isPendingUnlink -> Pair(PendingOrange, "Déliaison en cours")
-            else -> Pair(ValidatedGreen, "Licencié")
+            else -> Pair(MotiumPrimary, "Licencié")
         }
 
         Surface(
@@ -943,13 +943,13 @@ private fun LicenseSection(
                                 modifier = Modifier
                                     .size(48.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(ValidatedGreen.copy(alpha = 0.1f)),
+                                    .background(MotiumPrimary.copy(alpha = 0.1f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.CheckCircle,
                                     contentDescription = null,
-                                    tint = ValidatedGreen,
+                                    tint = MotiumPrimary,
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
@@ -959,7 +959,7 @@ private fun LicenseSection(
                                     "Licence active",
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = ValidatedGreen
+                                    color = MotiumPrimary
                                 )
                                 Text(
                                     text = if (license.isLifetime) "Licence a vie" else "Licence mensuelle",

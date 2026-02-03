@@ -909,16 +909,28 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             return AuthResult.Success(authUser)
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ signIn caught exception: ${e.message}", "SupabaseAuth", e)
-            _authState.value = _authState.value.copy(isLoading = false, error = e.message)
+
+            val errorMessageLower = e.message?.lowercase() ?: ""
 
             // Check if the error is about email not confirmed
             // Supabase may return this error directly instead of allowing login
-            val errorMessage = e.message?.lowercase() ?: ""
-            if (errorMessage.contains("email") && (errorMessage.contains("confirm") || errorMessage.contains("verif"))) {
+            if (errorMessageLower.contains("email") && (errorMessageLower.contains("confirm") || errorMessageLower.contains("verif"))) {
                 MotiumApplication.logger.w("⚠️ Email confirmation error detected: ${e.message}", "SupabaseAuth")
+                _authState.value = _authState.value.copy(isLoading = false, error = null)
                 return AuthResult.Error("EMAIL_NOT_VERIFIED:${request.email}:")
             }
 
+            // Check for invalid credentials error (wrong email/password)
+            // Supabase returns "invalid_credentials" or similar messages
+            if (errorMessageLower.contains("invalid") && errorMessageLower.contains("credentials") ||
+                errorMessageLower.contains("invalid login credentials") ||
+                errorMessageLower.contains("invalid_credentials")) {
+                val userFriendlyMessage = "Identifiant ou mot de passe erroné"
+                _authState.value = _authState.value.copy(isLoading = false, error = userFriendlyMessage)
+                return AuthResult.Error(userFriendlyMessage, e)
+            }
+
+            _authState.value = _authState.value.copy(isLoading = false, error = e.message)
             AuthResult.Error(e.message ?: "Login failed", e)
         }
     }

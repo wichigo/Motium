@@ -42,8 +42,8 @@ val bottomNavItems = listOf(
 fun MotiumBottomNavigation(
     currentRoute: String,
     onNavigate: (String) -> Unit,
-    isPremium: Boolean = true, // Par défaut, assume premium pour compatibilité
-    onPremiumFeatureClick: () -> Unit = {}, // Callback quand un compte free clique sur une feature premium
+    hasAccess: Boolean = true, // User has full access (TRIAL, PREMIUM, LIFETIME, LICENSED)
+    onPremiumFeatureClick: () -> Unit = {}, // Callback when user without access clicks premium feature
     isDarkMode: Boolean = false // Support du mode sombre
 ) {
     // Couleurs dynamiques basées sur le mode
@@ -81,7 +81,7 @@ fun MotiumBottomNavigation(
                 bottomNavItems.forEach { item ->
                     val isSelected = currentRoute == item.route
                     val isExport = item.route == "export"
-                    val isEnabled = if (isExport) isPremium else true
+                    val isEnabled = if (isExport) hasAccess else true
                     val iconColor = when {
                         !isEnabled -> disabledColor
                         isSelected -> MotiumPrimary
@@ -97,7 +97,7 @@ fun MotiumBottomNavigation(
                                 shape = RoundedCornerShape(8.dp)
                             )
                             .clickable {
-                                if (isExport && !isPremium) {
+                                if (isExport && !hasAccess) {
                                     onPremiumFeatureClick()
                                 } else {
                                     onNavigate(item.route)

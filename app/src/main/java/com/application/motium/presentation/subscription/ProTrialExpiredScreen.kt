@@ -34,6 +34,7 @@ import com.application.motium.presentation.components.StripeDeferredPaymentSheet
 import com.application.motium.presentation.components.createLicenseButtonLabel
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.stripe.android.paymentsheet.PaymentSheetResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -784,7 +785,7 @@ private fun AvailableLicenseTypeCard(
             }
 
             Surface(
-                color = if (isLifetime) MotiumGreen else MaterialTheme.colorScheme.primary,
+                color = if (isLifetime) MotiumGreen else MotiumPrimary,
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(

@@ -639,7 +639,7 @@ private fun SummaryCard(
             StatItem(
                 value = licensedAccounts.toString(),
                 label = "Licenciés",
-                color = ValidatedGreen,
+                color = MotiumPrimary,
                 textSecondaryColor = textSecondaryColor
             )
             StatItem(
@@ -817,8 +817,8 @@ private fun LinkedUserRow(
 private fun LicenseStatusBadge(licenseStatus: AccountLicenseStatus) {
     val (backgroundColor, textColor, text) = when (licenseStatus) {
         AccountLicenseStatus.LICENSED -> Triple(
-            ValidatedGreen.copy(alpha = 0.15f),
-            ValidatedGreen,
+            MotiumPrimary.copy(alpha = 0.15f),
+            MotiumPrimary,
             "Licencié"
         )
         AccountLicenseStatus.UNLICENSED -> Triple(
@@ -851,8 +851,8 @@ private fun LicenseStatusBadge(licenseStatus: AccountLicenseStatus) {
 private fun StatusBadge(status: LinkStatus) {
     val (backgroundColor, textColor, text) = when (status) {
         LinkStatus.ACTIVE -> Triple(
-            ValidatedGreen.copy(alpha = 0.15f),
-            ValidatedGreen,
+            MotiumPrimary.copy(alpha = 0.15f),
+            MotiumPrimary,
             "Actif"
         )
         LinkStatus.PENDING -> Triple(

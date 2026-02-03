@@ -72,7 +72,7 @@ val proExpandedMenuItems = listOf(
 fun ProBottomNavigation(
     currentRoute: String,
     onNavigate: (String) -> Unit,
-    isPremium: Boolean = true,
+    hasAccess: Boolean = true,
     onPremiumFeatureClick: () -> Unit = {},
     isDarkMode: Boolean = false
 ) {
@@ -137,7 +137,7 @@ fun ProBottomNavigation(
                             BaseNavItem(
                                 item = item,
                                 isSelected = currentRoute == item.route,
-                                isPremium = true,
+                                hasAccess = true,
                                 inactiveColor = inactiveColor,
                                 disabledColor = disabledColor,
                                 onNavigate = { route ->
@@ -165,7 +165,7 @@ fun ProBottomNavigation(
                         BaseNavItem(
                             item = item,
                             isSelected = currentRoute == item.route,
-                            isPremium = isPremium,
+                            hasAccess = hasAccess,
                             inactiveColor = inactiveColor,
                             disabledColor = disabledColor,
                             onNavigate = onNavigate,
@@ -206,7 +206,7 @@ fun ProBottomNavigation(
                         BaseNavItem(
                             item = item,
                             isSelected = currentRoute == item.route,
-                            isPremium = isPremium,
+                            hasAccess = hasAccess,
                             inactiveColor = inactiveColor,
                             disabledColor = disabledColor,
                             onNavigate = onNavigate,
@@ -228,7 +228,7 @@ fun ProBottomNavigation(
 private fun BaseNavItem(
     item: ProBottomNavItem,
     isSelected: Boolean,
-    isPremium: Boolean,
+    hasAccess: Boolean,
     inactiveColor: Color,
     disabledColor: Color,
     onNavigate: (String) -> Unit,
@@ -236,7 +236,7 @@ private fun BaseNavItem(
     isExportItem: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val isEnabled = if (isExportItem) isPremium else true
+    val isEnabled = if (isExportItem) hasAccess else true
     val iconColor = when {
         !isEnabled -> disabledColor
         isSelected -> MotiumPrimary
@@ -251,7 +251,7 @@ private fun BaseNavItem(
                 color = if (isSelected) MotiumPrimary.copy(alpha = 0.1f) else Color.Transparent
             )
             .clickable {
-                if (isExportItem && !isPremium) {
+                if (isExportItem && !hasAccess) {
                     onPremiumFeatureClick()
                 } else {
                     onNavigate(item.route)

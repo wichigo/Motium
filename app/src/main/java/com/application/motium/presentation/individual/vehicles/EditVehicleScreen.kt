@@ -241,7 +241,8 @@ fun EditVehicleScreen(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                         focusedBorderColor = MotiumPrimary,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        focusedLabelColor = MotiumPrimary
+                        focusedLabelColor = MotiumPrimary,
+                        cursorColor = MotiumPrimary
                     )
                 )
 
@@ -325,7 +326,8 @@ fun EditVehicleScreen(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                         focusedBorderColor = MotiumPrimary,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        focusedLabelColor = MotiumPrimary
+                        focusedLabelColor = MotiumPrimary,
+                        cursorColor = MotiumPrimary
                     )
                 )
 

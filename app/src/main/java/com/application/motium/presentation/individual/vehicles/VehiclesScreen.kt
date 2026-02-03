@@ -29,7 +29,7 @@ import com.application.motium.domain.model.User
 import com.application.motium.domain.model.Vehicle
 import com.application.motium.domain.model.VehiclePower
 import com.application.motium.domain.model.VehicleType
-import com.application.motium.domain.model.isPremium
+import com.application.motium.domain.model.hasFullAccess
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.MotiumPrimaryTint
@@ -66,8 +66,8 @@ fun VehiclesScreen(
     var selectedVehicleId by remember { mutableStateOf<String?>(null) }
     var showAddVehicleScreen by remember { mutableStateOf(false) }
 
-    // User and premium state
-    val isPremium = currentUser?.isPremium() ?: false
+    // User access state (includes TRIAL, PREMIUM, LIFETIME, LICENSED)
+    val hasAccess = currentUser?.hasFullAccess() ?: false
 
     // Premium dialog state
     var showPremiumDialog by remember { mutableStateOf(false) }

@@ -5,13 +5,26 @@ package com.application.motium.domain.model
  */
 
 /**
- * Vérifie si l'utilisateur a un accès premium (Premium, Lifetime ou Licensed)
+ * Vérifie si l'utilisateur a un abonnement payant actif (Premium, Lifetime ou Licensed)
  * LICENSED = l'utilisateur a une licence Pro attribuée par une entreprise
+ *
+ * NOTE: Pour vérifier l'accès aux fonctionnalités, utiliser hasFullAccess() qui inclut TRIAL
  */
 fun User.isPremium(): Boolean {
     return subscription.type == SubscriptionType.PREMIUM ||
            subscription.type == SubscriptionType.LIFETIME ||
            subscription.type == SubscriptionType.LICENSED
+}
+
+/**
+ * Vérifie si l'utilisateur a accès complet aux fonctionnalités de l'app.
+ * Inclut: TRIAL actif, PREMIUM, LIFETIME, LICENSED
+ *
+ * Utiliser cette fonction pour les checks d'autorisation (export, etc.)
+ * Utiliser isPremium() uniquement pour l'affichage du badge/statut payant
+ */
+fun User.hasFullAccess(): Boolean {
+    return subscription.isActive()
 }
 
 /**

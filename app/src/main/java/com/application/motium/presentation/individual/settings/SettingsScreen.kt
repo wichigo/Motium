@@ -1758,7 +1758,7 @@ fun ConsiderFullDistanceConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color.White,
+        containerColor = surfaceColor,
         tonalElevation = 0.dp,
         title = {
             Text(
@@ -3062,7 +3062,7 @@ fun SubscriptionManagementDialog(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF4CAF50).copy(alpha = 0.1f)
+                            containerColor = MotiumPrimary.copy(alpha = 0.1f)
                         )
                     ) {
                         Row(
@@ -3075,7 +3075,7 @@ fun SubscriptionManagementDialog(
                             Icon(
                                 imageVector = Icons.Default.CheckCircle,
                                 contentDescription = null,
-                                tint = Color(0xFF4CAF50),
+                                tint = MotiumPrimary,
                                 modifier = Modifier.size(24.dp)
                             )
                             Column {
@@ -3083,7 +3083,7 @@ fun SubscriptionManagementDialog(
                                     text = "Accès permanent activé",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = Color(0xFF4CAF50)
+                                    color = MotiumPrimary
                                 )
                                 Text(
                                     text = "Profitez de toutes les fonctionnalités Motium sans limite de durée.",
@@ -3105,7 +3105,7 @@ fun SubscriptionManagementDialog(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFF4CAF50).copy(alpha = 0.1f)
+                                containerColor = MotiumPrimary.copy(alpha = 0.1f)
                             )
                         ) {
                             Row(
@@ -3118,13 +3118,13 @@ fun SubscriptionManagementDialog(
                                 Icon(
                                     imageVector = Icons.Default.CheckCircle,
                                     contentDescription = null,
-                                    tint = Color(0xFF4CAF50),
+                                    tint = MotiumPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Text(
                                     text = message,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFF4CAF50)
+                                    color = MotiumPrimary
                                 )
                             }
                         }
@@ -3760,7 +3760,7 @@ private fun TripSimulationSection(
                 text = statusMessage,
                 style = MaterialTheme.typography.bodySmall,
                 fontSize = 12.sp,
-                color = Color(0xFF4CAF50),
+                color = MotiumPrimary,
                 modifier = Modifier.padding(start = 64.dp)
             )
         }
@@ -3781,7 +3781,7 @@ private fun TripSimulationSection(
                 .fillMaxWidth()
                 .height(48.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (isSimulating) Color(0xFFEF4444) else Color(0xFF4CAF50),
+                containerColor = if (isSimulating) Color(0xFFEF4444) else MotiumPrimary,
                 contentColor = Color.White
             ),
             shape = RoundedCornerShape(16.dp)
@@ -3848,7 +3848,7 @@ fun GdprSection(
     onDeleteAccount: () -> Unit
 ) {
     val context = LocalContext.current
-    val privacyPolicyUrl = "https://motium.org/privacy" // TODO: Update with actual URL
+    val privacyPolicyUrl = "https://motium.app/privacy"
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -4070,6 +4070,10 @@ fun EditProfileDialog(
     onChangeEmailClick: () -> Unit = {},
     onChangePasswordClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val userPrimaryColor by themeManager.primaryColor.collectAsState()
+
     androidx.compose.ui.window.Dialog(onDismissRequest = { if (!isSaving) onDismiss() }) {
         Surface(
             modifier = Modifier
@@ -4092,14 +4096,14 @@ fun EditProfileDialog(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
-                        .background(MotiumPrimaryTint),
+                        .background(userPrimaryColor.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Person,
                         contentDescription = null,
                         modifier = Modifier.size(36.dp),
-                        tint = MotiumPrimary
+                        tint = userPrimaryColor
                     )
                 }
 
@@ -4140,17 +4144,18 @@ fun EditProfileDialog(
                         Icon(
                             Icons.Default.Person,
                             contentDescription = null,
-                            tint = MotiumPrimary
+                            tint = userPrimaryColor
                         )
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedLabelColor = textSecondaryColor,
-                        focusedLabelColor = MotiumPrimary,
+                        focusedLabelColor = userPrimaryColor,
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
-                        focusedBorderColor = MotiumPrimary,
+                        focusedBorderColor = userPrimaryColor,
                         unfocusedTextColor = textColor,
-                        focusedTextColor = textColor
+                        focusedTextColor = textColor,
+                        cursorColor = userPrimaryColor
                     ),
                     singleLine = true,
                     enabled = !isSaving
@@ -4173,17 +4178,18 @@ fun EditProfileDialog(
                         Icon(
                             Icons.Default.Phone,
                             contentDescription = null,
-                            tint = MotiumPrimary
+                            tint = userPrimaryColor
                         )
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedLabelColor = textSecondaryColor,
-                        focusedLabelColor = MotiumPrimary,
+                        focusedLabelColor = userPrimaryColor,
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
-                        focusedBorderColor = MotiumPrimary,
+                        focusedBorderColor = userPrimaryColor,
                         unfocusedTextColor = textColor,
-                        focusedTextColor = textColor
+                        focusedTextColor = textColor,
+                        cursorColor = userPrimaryColor
                     ),
                     singleLine = true,
                     enabled = !isSaving
@@ -4206,17 +4212,18 @@ fun EditProfileDialog(
                         Icon(
                             Icons.Default.Home,
                             contentDescription = null,
-                            tint = MotiumPrimary
+                            tint = userPrimaryColor
                         )
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedLabelColor = textSecondaryColor,
-                        focusedLabelColor = MotiumPrimary,
+                        focusedLabelColor = userPrimaryColor,
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
-                        focusedBorderColor = MotiumPrimary,
+                        focusedBorderColor = userPrimaryColor,
                         unfocusedTextColor = textColor,
-                        focusedTextColor = textColor
+                        focusedTextColor = textColor,
+                        cursorColor = userPrimaryColor
                     ),
                     singleLine = true,
                     enabled = !isSaving
@@ -4445,7 +4452,8 @@ fun ChangeEmailDialog(
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
                         focusedBorderColor = MotiumPrimary,
                         unfocusedTextColor = textColor,
-                        focusedTextColor = textColor
+                        focusedTextColor = textColor,
+                        cursorColor = MotiumPrimary
                     ),
                     singleLine = true,
                     enabled = !isLoading
@@ -4589,7 +4597,8 @@ fun ChangePasswordDialog(
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
                         focusedBorderColor = MotiumPrimary,
                         unfocusedTextColor = textColor,
-                        focusedTextColor = textColor
+                        focusedTextColor = textColor,
+                        cursorColor = MotiumPrimary
                     ),
                     singleLine = true,
                     enabled = !isLoading
@@ -4618,7 +4627,8 @@ fun ChangePasswordDialog(
                         unfocusedBorderColor = textSecondaryColor.copy(alpha = 0.5f),
                         focusedBorderColor = MotiumPrimary,
                         unfocusedTextColor = textColor,
-                        focusedTextColor = textColor
+                        focusedTextColor = textColor,
+                        cursorColor = MotiumPrimary
                     ),
                     singleLine = true,
                     enabled = !isLoading,

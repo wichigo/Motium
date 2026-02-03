@@ -414,7 +414,8 @@ fun EditExpenseScreen(
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             focusedLabelColor = MotiumPrimary,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            focusedBorderColor = MotiumPrimary
+                            focusedBorderColor = MotiumPrimary,
+                            cursorColor = MotiumPrimary
                         )
                     )
                 }
@@ -492,7 +493,8 @@ fun EditExpenseScreen(
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             focusedLabelColor = MotiumPrimary,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            focusedBorderColor = MotiumPrimary
+                            focusedBorderColor = MotiumPrimary,
+                            cursorColor = MotiumPrimary
                         )
                     )
                 }
@@ -639,7 +641,8 @@ private fun EditAmountField(
                 MotiumPrimary
             else
                 MaterialTheme.colorScheme.onSurfaceVariant,
-            focusedLabelColor = MotiumPrimary
+            focusedLabelColor = MotiumPrimary,
+            cursorColor = MotiumPrimary
         )
     )
 }

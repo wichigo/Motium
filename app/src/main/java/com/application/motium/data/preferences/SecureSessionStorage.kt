@@ -159,6 +159,15 @@ class SecureSessionStorage(context: Context) {
         // Retourner null si le token est vide (stocké sans refresh token valide)
         return if (token.isNullOrBlank()) null else token
     }
+
+    /**
+     * Get the current access token for authenticated API calls.
+     * Returns null if no session exists or token is empty.
+     */
+    fun getAccessToken(): String? {
+        val token = encryptedPrefs.getString(KEY_ACCESS_TOKEN, null)
+        return if (token.isNullOrBlank()) null else token
+    }
     fun getUserId(): String? = encryptedPrefs.getString(KEY_USER_ID, null)
     fun getUserEmail(): String? = encryptedPrefs.getString(KEY_USER_EMAIL, null)
     fun getExpiresAt(): Long? {

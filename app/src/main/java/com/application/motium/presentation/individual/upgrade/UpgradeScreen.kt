@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.subscription.SubscriptionManager
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.components.DeferredPaymentConfig
 import com.application.motium.presentation.components.StripeDeferredPaymentSheet
 import com.application.motium.presentation.components.StripePaymentSheet
@@ -112,14 +113,14 @@ fun UpgradeScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF1E1E1E),
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        containerColor = Color(0xFF121212)
+        containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -143,7 +144,7 @@ fun UpgradeScreen(
                 text = "Débloquez toutes les fonctionnalités",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center
             )
 
@@ -152,7 +153,7 @@ fun UpgradeScreen(
             Text(
                 text = "Trajets illimités, export PDF, et plus encore",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFB0B0B0),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
 
@@ -168,7 +169,7 @@ fun UpgradeScreen(
                 text = "Choisissez votre formule",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onBackground
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -217,8 +218,8 @@ fun UpgradeScreen(
                     .height(56.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4CAF50),
-                    disabledContainerColor = Color(0xFF4CAF50).copy(alpha = 0.5f)
+                    containerColor = MotiumPrimary,
+                    disabledContainerColor = MotiumPrimary.copy(alpha = 0.5f)
                 )
             ) {
                 if (uiState.isLoading || uiState.isRefreshing) {
@@ -259,7 +260,7 @@ fun UpgradeScreen(
                 text = "En continuant, vous acceptez nos conditions d'utilisation. " +
                         "L'abonnement mensuel se renouvelle automatiquement.",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF757575),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
@@ -283,7 +284,7 @@ private fun FeaturesList() {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1E1E)
+            containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
         Column(
@@ -299,14 +300,14 @@ private fun FeaturesList() {
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = null,
-                        tint = Color(0xFF4CAF50),
+                        tint = MotiumPrimary,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = feature,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -325,12 +326,12 @@ private fun PlanCard(
     badge: String? = null
 ) {
     val borderColor by animateColorAsState(
-        targetValue = if (isSelected) Color(0xFF4CAF50) else Color(0xFF3D3D3D),
+        targetValue = if (isSelected) MotiumPrimary else MaterialTheme.colorScheme.outline,
         label = "borderColor"
     )
 
     val backgroundColor by animateColorAsState(
-        targetValue = if (isSelected) Color(0xFF4CAF50).copy(alpha = 0.1f) else Color(0xFF1E1E1E),
+        targetValue = if (isSelected) MotiumPrimary.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface,
         label = "backgroundColor"
     )
 
@@ -357,13 +358,13 @@ private fun PlanCard(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = description,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB0B0B0)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -374,13 +375,13 @@ private fun PlanCard(
                         text = price,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     if (period.isNotEmpty()) {
                         Text(
                             text = period,
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFB0B0B0),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 4.dp)
                         )
                     }
@@ -411,7 +412,7 @@ private fun PlanCard(
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = "Sélectionné",
-                    tint = Color(0xFF4CAF50),
+                    tint = MotiumPrimary,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(8.dp)

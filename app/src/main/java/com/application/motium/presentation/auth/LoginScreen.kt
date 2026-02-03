@@ -165,12 +165,48 @@ fun LoginScreen(
         }
     }
 
-    // Clear error after showing
-    LaunchedEffect(loginState.error) {
-        if (loginState.error != null) {
-            kotlinx.coroutines.delay(5000)
-            viewModel.clearLoginError()
-        }
+    // Login error dialog (credentials error, etc.)
+    if (loginState.error != null && !loginState.emailNotVerified) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearLoginError() },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Error,
+                    contentDescription = null,
+                    tint = ErrorRed,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Erreur de connexion",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Text(
+                    text = loginState.error ?: "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.clearLoginError() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MotiumPrimary
+                    )
+                ) {
+                    Text("Compris")
+                }
+            },
+            containerColor = Color.White,
+            titleContentColor = Color.Black,
+            textContentColor = Color.Black
+        )
     }
 
     // State for resend email feedback
@@ -222,7 +258,7 @@ fun LoginScreen(
                         Text(
                             text = "✓ Email envoyé !",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF4CAF50)
+                            color = MotiumPrimary
                         )
                     }
                     if (resendError != null) {
@@ -578,36 +614,7 @@ fun LoginScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Error message
-                if (loginState.error != null) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = ErrorRed.copy(alpha = 0.1f)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Error,
-                                contentDescription = null,
-                                tint = ErrorRed
-                            )
-                            Text(
-                                text = loginState.error ?: "",
-                                color = ErrorRed,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
+                Spacer(modifier = Modifier.height(24.dp))
 
                 // Login button
                 Button(

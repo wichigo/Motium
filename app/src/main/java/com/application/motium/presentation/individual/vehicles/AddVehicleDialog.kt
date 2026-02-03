@@ -122,7 +122,12 @@ fun AddVehicleScreen(
                     onNext = { plateFocusRequester.requestFocus() }
                 ),
                 singleLine = true,
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(8.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MotiumPrimary,
+                    focusedLabelColor = MotiumPrimary,
+                    cursorColor = MotiumPrimary
+                )
             )
 
             // Vehicle type dropdown
@@ -195,7 +200,12 @@ fun AddVehicleScreen(
                     onDone = { keyboardController?.hide() }
                 ),
                 singleLine = true,
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(8.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MotiumPrimary,
+                    focusedLabelColor = MotiumPrimary,
+                    cursorColor = MotiumPrimary
+                )
             )
 
             // Power dropdown

@@ -39,7 +39,6 @@ import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
 import com.application.motium.data.VehicleRepository
 import com.application.motium.data.supabase.WorkScheduleRepository
-import com.application.motium.domain.model.isPremium
 import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
@@ -1142,7 +1141,7 @@ fun NewHomeTripCard(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = MotiumPrimary,
                             uncheckedThumbColor = Color.White,
-                            uncheckedTrackColor = Color(0xFFE5E7EB),
+                            uncheckedTrackColor = subTextColor.copy(alpha = 0.3f),
                             uncheckedBorderColor = Color.Transparent
                         ),
                         modifier = Modifier

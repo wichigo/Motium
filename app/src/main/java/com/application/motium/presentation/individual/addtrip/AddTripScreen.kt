@@ -93,10 +93,14 @@ fun AddTripScreen(
     var isCalculatingRoute by remember { mutableStateOf(false) }
     var routeCalculationFailed by remember { mutableStateOf(false) }
 
-    // Date/Time picker states
+    // Date picker states - unified approach like ExportScreen
     var showDatePicker by remember { mutableStateOf(false) }
-    var showTimePicker by remember { mutableStateOf(false) }
+    var datePickerMode by remember { mutableStateOf("start") } // "start" or "end"
+    var selectedField by remember { mutableStateOf<String?>(null) }
     var currentMonth by remember { mutableStateOf(Calendar.getInstance()) }
+
+    // End date (for end time field) - can be different from start date
+    var selectedEndDate by remember { mutableStateOf(Date()) }
 
     // Vehicle fields
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
@@ -110,6 +114,7 @@ fun AddTripScreen(
         val now = Date()
         selectedTime = timeFormat.format(now)
         endTime = timeFormat.format(Date(now.time + (23 * 60 * 1000))) // +23 min
+        selectedEndDate = selectedDate // Initialize end date to same as start date
 
         // Load user setting for considerFullDistance
         try {
@@ -265,20 +270,32 @@ fun AddTripScreen(
                                 val distanceKm = distanceStr.toDoubleOrNull() ?: 5.0
                                 val durationMin = duration.toIntOrNull() ?: 15
 
-                                val timeArray = selectedTime.split(":")
-                                val hour = timeArray.getOrNull(0)?.toIntOrNull() ?: 12
-                                val minute = timeArray.getOrNull(1)?.toIntOrNull() ?: 0
+                                val startTimeArray = selectedTime.split(":")
+                                val startHour = startTimeArray.getOrNull(0)?.toIntOrNull() ?: 12
+                                val startMinute = startTimeArray.getOrNull(1)?.toIntOrNull() ?: 0
 
-                                val calendar = Calendar.getInstance().apply {
+                                val startCalendar = Calendar.getInstance().apply {
                                     time = selectedDate
-                                    set(Calendar.HOUR_OF_DAY, hour)
-                                    set(Calendar.MINUTE, minute)
+                                    set(Calendar.HOUR_OF_DAY, startHour)
+                                    set(Calendar.MINUTE, startMinute)
                                     set(Calendar.SECOND, 0)
                                     set(Calendar.MILLISECOND, 0)
                                 }
 
-                                val startTimeMs = calendar.timeInMillis
-                                val endTimeMs = startTimeMs + (durationMin * 60 * 1000)
+                                val endTimeArray = endTime.split(":")
+                                val endHour = endTimeArray.getOrNull(0)?.toIntOrNull() ?: 12
+                                val endMinute = endTimeArray.getOrNull(1)?.toIntOrNull() ?: 0
+
+                                val endCalendar = Calendar.getInstance().apply {
+                                    time = selectedEndDate
+                                    set(Calendar.HOUR_OF_DAY, endHour)
+                                    set(Calendar.MINUTE, endMinute)
+                                    set(Calendar.SECOND, 0)
+                                    set(Calendar.MILLISECOND, 0)
+                                }
+
+                                val startTimeMs = startCalendar.timeInMillis
+                                val endTimeMs = endCalendar.timeInMillis
 
                                 // Build locations list from route coordinates if available
                                 val routePoints = routeCoordinates
@@ -372,20 +389,46 @@ fun AddTripScreen(
                             value = "${dateFormat.format(selectedDate)} ${selectedTime}",
                             icon = Icons.Default.CalendarToday,
                             modifier = Modifier.weight(1f),
-                            onClick = { showDatePicker = !showDatePicker },
-                            isSelected = showDatePicker
+                            onClick = {
+                                if (showDatePicker && selectedField == "start") {
+                                    // Already open on start field, close it
+                                    showDatePicker = false
+                                    selectedField = null
+                                } else {
+                                    // Open for start date
+                                    showDatePicker = true
+                                    datePickerMode = "start"
+                                    selectedField = "start"
+                                    // Set current month to selected start date
+                                    currentMonth = Calendar.getInstance().apply { time = selectedDate }
+                                }
+                            },
+                            isSelected = showDatePicker && selectedField == "start"
                         )
                         DateTimeField(
-                            label = "Heure de fin",
-                            value = "${dateFormat.format(selectedDate)} ${endTime}",
-                            icon = Icons.Default.Schedule,
+                            label = "Date de fin",
+                            value = "${dateFormat.format(selectedEndDate)} ${endTime}",
+                            icon = Icons.Default.CalendarToday,
                             modifier = Modifier.weight(1f),
-                            onClick = { showTimePicker = !showTimePicker },
-                            isSelected = showTimePicker
+                            onClick = {
+                                if (showDatePicker && selectedField == "end") {
+                                    // Already open on end field, close it
+                                    showDatePicker = false
+                                    selectedField = null
+                                } else {
+                                    // Open for end date
+                                    showDatePicker = true
+                                    datePickerMode = "end"
+                                    selectedField = "end"
+                                    // Set current month to selected end date
+                                    currentMonth = Calendar.getInstance().apply { time = selectedEndDate }
+                                }
+                            },
+                            isSelected = showDatePicker && selectedField == "end"
                         )
                     }
 
-                    // Inline Calendar
+                    // Inline Calendar - unified for start and end dates
                     AnimatedVisibility(
                         visible = showDatePicker,
                         enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
@@ -395,14 +438,19 @@ fun AddTripScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color.White
+                                containerColor = MaterialTheme.colorScheme.surface
                             ),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                // Calendar header
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp)
+                            ) {
+                                // Calendar header with mode indicator
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -414,17 +462,24 @@ fun AddTripScreen(
                                         Icon(
                                             imageVector = Icons.Default.KeyboardArrowLeft,
                                             contentDescription = "Mois précédent",
-                                            tint = Color(0xFF6B7280)
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
 
-                                    Text(
-                                        SimpleDateFormat("MMMM yyyy", Locale.FRENCH).format(currentMonth.time),
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Bold
-                                        ),
-                                        color = Color(0xFF1F2937)
-                                    )
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            SimpleDateFormat("MMMM yyyy", Locale.FRENCH).format(currentMonth.time),
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            if (datePickerMode == "start") "Date de départ" else "Date de fin",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MotiumPrimary
+                                        )
+                                    }
 
                                     IconButton(onClick = {
                                         val newMonth = currentMonth.clone() as Calendar
@@ -434,7 +489,7 @@ fun AddTripScreen(
                                         Icon(
                                             imageVector = Icons.Default.KeyboardArrowRight,
                                             contentDescription = "Mois suivant",
-                                            tint = Color(0xFF6B7280)
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
@@ -453,7 +508,7 @@ fun AddTripScreen(
                                             style = MaterialTheme.typography.bodySmall.copy(
                                                 fontWeight = FontWeight.Medium
                                             ),
-                                            color = Color(0xFF6B7280),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = 12.sp,
                                             textAlign = TextAlign.Center
                                         )
@@ -465,83 +520,29 @@ fun AddTripScreen(
                                 // Calendar grid
                                 SingleDateCalendarGrid(
                                     currentMonth = currentMonth,
-                                    selectedDate = selectedDate,
+                                    selectedDate = if (datePickerMode == "start") selectedDate else selectedEndDate,
                                     onDateSelected = { day ->
                                         val calendar = currentMonth.clone() as Calendar
                                         calendar.set(Calendar.DAY_OF_MONTH, day)
-                                        selectedDate = calendar.time
-                                        showDatePicker = false
+                                        val newDate = calendar.time
+
+                                        if (datePickerMode == "start") {
+                                            // Start date selected - switch to end mode
+                                            selectedDate = newDate
+                                            datePickerMode = "end"
+                                            selectedField = "end"
+                                            // Also update end date if it's before start date
+                                            if (selectedEndDate.before(newDate)) {
+                                                selectedEndDate = newDate
+                                            }
+                                        } else {
+                                            // End date selected - close calendar
+                                            selectedEndDate = newDate
+                                            showDatePicker = false
+                                            selectedField = null
+                                        }
                                     }
                                 )
-                            }
-                        }
-                    }
-
-                    // Inline Time Picker
-                    AnimatedVisibility(
-                        visible = showTimePicker,
-                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(),
-                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut()
-                    ) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color.White
-                            ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    "Heure de départ",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Bold
-                                    ),
-                                    color = Color(0xFF1F2937)
-                                )
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                val currentHour = selectedTime.split(":").getOrNull(0)?.toIntOrNull() ?: 12
-                                val currentMinute = selectedTime.split(":").getOrNull(1)?.toIntOrNull() ?: 0
-                                val timePickerState = rememberTimePickerState(
-                                    initialHour = currentHour,
-                                    initialMinute = currentMinute,
-                                    is24Hour = true
-                                )
-
-                                TimePicker(
-                                    state = timePickerState,
-                                    colors = TimePickerDefaults.colors(
-                                        clockDialColor = MotiumPrimary.copy(alpha = 0.1f),
-                                        selectorColor = MotiumPrimary,
-                                        timeSelectorSelectedContainerColor = MotiumPrimary,
-                                        timeSelectorSelectedContentColor = Color.White
-                                    )
-                                )
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                Button(
-                                    onClick = {
-                                        selectedTime = String.format("%02d:%02d", timePickerState.hour, timePickerState.minute)
-                                        // Recalculate end time based on duration
-                                        val durationMin = duration.toIntOrNull() ?: 15
-                                        val startTimeDate = timeFormat.parse(selectedTime) ?: Date()
-                                        val endTimeDate = Date(startTimeDate.time + (durationMin * 60 * 1000))
-                                        endTime = timeFormat.format(endTimeDate)
-                                        showTimePicker = false
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MotiumPrimary
-                                    ),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("Confirmer")
-                                }
                             }
                         }
                     }
@@ -710,7 +711,8 @@ fun AddTripScreen(
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedLabelColor = MotiumPrimary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                        focusedBorderColor = MotiumPrimary
+                        focusedBorderColor = MotiumPrimary,
+                        cursorColor = MotiumPrimary
                     )
                 )
             }
@@ -785,6 +787,7 @@ fun ReadOnlyField(
             focusedLabelColor = MotiumPrimary,
             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
             focusedBorderColor = MotiumPrimary,
+            cursorColor = MotiumPrimary,
             unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
             focusedTextColor = MaterialTheme.colorScheme.onSurface
         )
@@ -1153,7 +1156,9 @@ fun ExpenseItemRow(
                         placeholder = { Text("0.00") },
                         shape = RoundedCornerShape(16.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary,
+                            cursorColor = MotiumPrimary
                         )
                     )
                 }
@@ -1175,7 +1180,9 @@ fun ExpenseItemRow(
                     placeholder = { Text("e.g., Gas station receipt") },
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary,
+                        cursorColor = MotiumPrimary
                     )
                 )
             }
@@ -1283,9 +1290,9 @@ private fun SingleDateCalendarGrid(
                                         fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal
                                     ),
                                     color = when {
-                                        isSelected -> Color.White
+                                        isSelected -> MaterialTheme.colorScheme.onPrimary
                                         isToday -> MotiumPrimary
-                                        else -> Color(0xFF1F2937)
+                                        else -> MaterialTheme.colorScheme.onSurface
                                     }
                                 )
                             }

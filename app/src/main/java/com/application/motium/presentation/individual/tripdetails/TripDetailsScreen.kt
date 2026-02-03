@@ -264,11 +264,11 @@ fun TripDetailsScreen(
         }
     }
 
-    // Couleurs dynamiques
-    val backgroundColor = if (isDarkMode) Color(0xFF121212) else Color(0xFFF3F4F6)
-    val cardColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White
-    val textColor = if (isDarkMode) Color.White else Color(0xFF1F2937)
-    val subTextColor = if (isDarkMode) Color.Gray else Color(0xFF6B7280)
+    // Couleurs dynamiques (alignées avec le reste de l'app)
+    val backgroundColor = if (isDarkMode) BackgroundDark else BackgroundLight
+    val cardColor = if (isDarkMode) SurfaceDark else SurfaceLight
+    val textColor = if (isDarkMode) TextDark else TextLight
+    val subTextColor = if (isDarkMode) TextSecondaryDark else TextSecondaryLight
 
     Scaffold(
         topBar = {
@@ -740,7 +740,7 @@ fun TripDetailsScreen(
     if (showTripTypeDialog) {
         AlertDialog(
             onDismissRequest = { showTripTypeDialog = false },
-            containerColor = Color.White,
+            containerColor = cardColor,
             tonalElevation = 0.dp,
             title = {
                 Text(
@@ -864,7 +864,7 @@ fun TripDetailsScreen(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            containerColor = Color.White,
+            containerColor = cardColor,
             tonalElevation = 0.dp,
             title = {
                 Text(
@@ -904,7 +904,7 @@ fun TripDetailsScreen(
     selectedPhotoUri?.let { photoUri ->
         AlertDialog(
             onDismissRequest = { selectedPhotoUri = null },
-            containerColor = Color.White,
+            containerColor = cardColor,
             tonalElevation = 0.dp,
             title = { Text("Receipt Photo") },
             text = {
@@ -1014,7 +1014,7 @@ fun ExpenseItem(
             Icon(
                 imageVector = getExpenseIcon(expense.type),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = MotiumPrimary,
                 modifier = Modifier.size(24.dp)
             )
 

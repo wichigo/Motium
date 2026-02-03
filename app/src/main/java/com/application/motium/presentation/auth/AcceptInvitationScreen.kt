@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.application.motium.MotiumApplication
 import com.application.motium.data.supabase.EmailRepository
 import kotlinx.coroutines.launch
+import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
  * Screen shown when user opens an invitation link without being logged in.
@@ -147,7 +148,7 @@ fun AcceptInvitationScreen(
                     Text(
                         text = companyName,
                         style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MotiumPrimary,
                         textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(8.dp))

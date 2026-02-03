@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.presentation.theme.MotiumGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
  * Subscription screen for managing premium plans
@@ -372,7 +373,7 @@ private fun PlanCard(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isCurrentPlan,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isPopular || isBestValue) MotiumGreen else MaterialTheme.colorScheme.primary,
+                    containerColor = if (isPopular || isBestValue) MotiumGreen else MotiumPrimary,
                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
                 shape = RoundedCornerShape(12.dp)

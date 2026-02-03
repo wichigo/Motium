@@ -4,6 +4,7 @@ import android.content.Context
 import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.preferences.SecureSessionStorage
 import com.application.motium.domain.model.Subscription
 import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
@@ -70,6 +71,7 @@ class SubscriptionManager private constructor(private val context: Context) {
     }
 
     private val localUserRepository = LocalUserRepository.getInstance(context)
+    private val secureSessionStorage = SecureSessionStorage(context)
 
     // State for payment process
     private val _paymentState = MutableStateFlow<PaymentState>(PaymentState.Idle)
@@ -158,6 +160,22 @@ class SubscriptionManager private constructor(private val context: Context) {
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+    }
+
+    /**
+     * Get the authentication token for API calls.
+     * Prefers the user's JWT token if available, falls back to anon key.
+     * This ensures Edge Functions can validate the user's identity.
+     */
+    private fun getAuthToken(): String {
+        val userToken = secureSessionStorage.getAccessToken()
+        return if (!userToken.isNullOrBlank()) {
+            MotiumApplication.logger.d("Using user JWT token for API call", TAG)
+            userToken
+        } else {
+            MotiumApplication.logger.w("No user token available, using anon key", TAG)
+            BuildConfig.SUPABASE_ANON_KEY
+        }
     }
 
     /**
@@ -358,10 +376,11 @@ class SubscriptionManager private constructor(private val context: Context) {
 
         val jsonBody = json.encodeToString(CreatePaymentIntentRequest.serializer(), requestBody)
 
+        val authToken = getAuthToken()
         val request = Request.Builder()
             .url(url)
             .addHeader("Content-Type", "application/json")
-            .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+            .addHeader("Authorization", "Bearer $authToken")
             .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
             .post(jsonBody.toRequestBody("application/json".toMediaType()))
             .build()
@@ -739,10 +758,11 @@ class SubscriptionManager private constructor(private val context: Context) {
 
             val jsonBody = json.encodeToString(ConfirmPaymentIntentRequest.serializer(), requestBody)
 
+            val authToken = getAuthToken()
             val request = Request.Builder()
                 .url(url)
                 .addHeader("Content-Type", "application/json")
-                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .addHeader("Authorization", "Bearer $authToken")
                 .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
                 .post(jsonBody.toRequestBody("application/json".toMediaType()))
                 .build()
@@ -797,10 +817,11 @@ class SubscriptionManager private constructor(private val context: Context) {
 
             val jsonBody = json.encodeToString(CancelSubscriptionRequest.serializer(), requestBody)
 
+            val authToken = getAuthToken()
             val request = Request.Builder()
                 .url(url)
                 .addHeader("Content-Type", "application/json")
-                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .addHeader("Authorization", "Bearer $authToken")
                 .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
                 .post(jsonBody.toRequestBody("application/json".toMediaType()))
                 .build()

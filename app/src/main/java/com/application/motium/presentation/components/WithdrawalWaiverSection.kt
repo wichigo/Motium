@@ -30,6 +30,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.application.motium.domain.model.WithdrawalWaiverState
+import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
  * Section de consentement pour la renonciation au droit de rétractation.
@@ -50,7 +51,7 @@ fun WithdrawalWaiverSection(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1E1E)
+            containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
         Column(
@@ -60,7 +61,7 @@ fun WithdrawalWaiverSection(
             Text(
                 text = "Droit de rétractation",
                 style = MaterialTheme.typography.titleSmall,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
@@ -94,7 +95,7 @@ fun WithdrawalWaiverSection(
                     text = buildAnnotatedString {
                         withStyle(
                             style = SpanStyle(
-                                color = Color(0xFF4CAF50),
+                                color = MotiumPrimary,
                                 textDecoration = TextDecoration.Underline
                             )
                         ) {
@@ -124,8 +125,8 @@ private fun WaiverCheckboxRow(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = CheckboxDefaults.colors(
-                checkedColor = Color(0xFF4CAF50),
-                uncheckedColor = Color(0xFF757575),
+                checkedColor = MotiumPrimary,
+                uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 checkmarkColor = Color.White
             )
         )
@@ -133,7 +134,7 @@ private fun WaiverCheckboxRow(
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFB0B0B0),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 13.sp,
             lineHeight = 18.sp,
             modifier = Modifier.padding(top = 12.dp)

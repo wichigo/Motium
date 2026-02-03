@@ -157,7 +157,7 @@ fun LinkStatusBadge(
     modifier: Modifier = Modifier
 ) {
     val (text, backgroundColor) = when (status) {
-        LinkStatus.ACTIVE -> "Actif" to Color(0xFF10B981)
+        LinkStatus.ACTIVE -> "Actif" to MotiumPrimary
         LinkStatus.PENDING -> "En attente" to Color(0xFFF59E0B)
         LinkStatus.INACTIVE -> "Inactif" to Color(0xFF6B7280)
         LinkStatus.REVOKED -> "Révoqué" to Color(0xFFEF4444)
@@ -441,7 +441,7 @@ fun LinkActivationSuccessDialog(
             Icon(
                 imageVector = Icons.Default.Business,
                 contentDescription = null,
-                tint = Color(0xFF10B981)
+                tint = MotiumPrimary
             )
         },
         title = {

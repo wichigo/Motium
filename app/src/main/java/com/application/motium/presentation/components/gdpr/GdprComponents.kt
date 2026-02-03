@@ -64,7 +64,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.application.motium.domain.model.ConsentInfo
 import com.application.motium.domain.model.ConsentType
-import com.application.motium.presentation.theme.ValidatedGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -147,7 +147,7 @@ fun ConsentManagementScreen(
                         text = "Consentements obligatoires",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MotiumPrimary
                     )
                 }
 
@@ -166,7 +166,7 @@ fun ConsentManagementScreen(
                         text = "Consentements optionnels",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MotiumPrimary
                     )
                 }
 
@@ -231,10 +231,7 @@ fun ConsentToggleItem(
                 }
             ),
         colors = CardDefaults.cardColors(
-            containerColor = if (consent.isRequired)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-            else
-                MaterialTheme.colorScheme.surfaceVariant
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
         Row(
@@ -257,7 +254,7 @@ fun ConsentToggleItem(
                             imageVector = Icons.Default.Lock,
                             contentDescription = "Obligatoire",
                             modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MotiumPrimary
                         )
                     }
                 }
@@ -285,11 +282,11 @@ fun ConsentToggleItem(
                 onCheckedChange = onToggle,
                 enabled = enabled,
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = ValidatedGreen,
-                    checkedTrackColor = ValidatedGreen.copy(alpha = 0.5f),
+                    checkedThumbColor = MotiumPrimary,
+                    checkedTrackColor = MotiumPrimary.copy(alpha = 0.5f),
                     // Couleurs pour les toggles désactivés mais validés (consentements obligatoires)
-                    disabledCheckedThumbColor = ValidatedGreen,
-                    disabledCheckedTrackColor = ValidatedGreen.copy(alpha = 0.5f)
+                    disabledCheckedThumbColor = MotiumPrimary,
+                    disabledCheckedTrackColor = MotiumPrimary.copy(alpha = 0.5f)
                 )
             )
         }
@@ -311,13 +308,15 @@ fun DataExportDialog(
         onDismissRequest = {
             if (state !is ExportDialogState.Processing) onDismiss()
         },
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
         icon = {
             when (state) {
                 is ExportDialogState.Processing -> CircularProgressIndicator(modifier = Modifier.size(48.dp))
                 is ExportDialogState.Ready -> Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = ValidatedGreen,
+                    tint = MotiumPrimary,
                     modifier = Modifier.size(48.dp)
                 )
                 is ExportDialogState.Error -> Icon(
@@ -329,7 +328,7 @@ fun DataExportDialog(
                 else -> Icon(
                     imageVector = Icons.Default.CloudDownload,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MotiumPrimary,
                     modifier = Modifier.size(48.dp)
                 )
             }
@@ -392,19 +391,28 @@ fun DataExportDialog(
         confirmButton = {
             when (state) {
                 is ExportDialogState.Confirming -> {
-                    Button(onClick = onExport) {
+                    Button(
+                        onClick = onExport,
+                        colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary)
+                    ) {
                         Text("Demander l'export")
                     }
                 }
                 is ExportDialogState.Ready -> {
-                    Button(onClick = { onDownload(state.downloadUrl) }) {
+                    Button(
+                        onClick = { onDownload(state.downloadUrl) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary)
+                    ) {
                         Icon(Icons.Default.CloudDownload, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Télécharger")
                     }
                 }
                 is ExportDialogState.Error -> {
-                    Button(onClick = onDismiss) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary)
+                    ) {
                         Text("Fermer")
                     }
                 }
@@ -413,7 +421,10 @@ fun DataExportDialog(
         },
         dismissButton = {
             if (state is ExportDialogState.Confirming || state is ExportDialogState.Ready) {
-                TextButton(onClick = onDismiss) {
+                TextButton(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MotiumPrimary)
+                ) {
                     Text("Annuler")
                 }
             }
@@ -443,6 +454,8 @@ fun DeleteAccountDialog(
                 onDismiss()
             }
         },
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
         icon = {
             when (state) {
                 is DeletionDialogState.Processing -> CircularProgressIndicator(
@@ -452,7 +465,7 @@ fun DeleteAccountDialog(
                 is DeletionDialogState.Success -> Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = ValidatedGreen,
+                    tint = MotiumPrimary,
                     modifier = Modifier.size(48.dp)
                 )
                 is DeletionDialogState.Error -> Icon(
@@ -479,7 +492,7 @@ fun DeleteAccountDialog(
                     is DeletionDialogState.Error -> "Erreur"
                     else -> ""
                 },
-                color = if (state is DeletionDialogState.Success) ValidatedGreen
+                color = if (state is DeletionDialogState.Success) MotiumPrimary
                 else MaterialTheme.colorScheme.onSurface
             )
         },

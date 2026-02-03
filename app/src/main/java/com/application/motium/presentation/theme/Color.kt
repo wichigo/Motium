@@ -1,5 +1,7 @@
 package com.application.motium.presentation.theme
 
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
@@ -32,8 +34,14 @@ fun WithCustomColor(content: @Composable () -> Unit) {
     val themeManager = ThemeManager.getInstance(context)
     val primaryColor by themeManager.primaryColor.collectAsState()
 
+    val customTextSelectionColors = TextSelectionColors(
+        handleColor = primaryColor,
+        backgroundColor = primaryColor.copy(alpha = 0.4f)
+    )
+
     CompositionLocalProvider(
         LocalMotiumPrimary provides primaryColor,
+        LocalTextSelectionColors provides customTextSelectionColors,
         content = content
     )
 }

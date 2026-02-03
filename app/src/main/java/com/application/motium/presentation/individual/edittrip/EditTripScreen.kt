@@ -674,7 +674,8 @@ fun EditTripScreen(
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                             focusedBorderColor = MotiumPrimary,
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            focusedLabelColor = MotiumPrimary
+                            focusedLabelColor = MotiumPrimary,
+                            cursorColor = MotiumPrimary
                         )
                     )
                 }
@@ -1010,7 +1011,9 @@ fun ExpenseItemRow(
                         placeholder = { Text("0.00") },
                         shape = RoundedCornerShape(16.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            focusedBorderColor = MotiumPrimary,
+                            cursorColor = MotiumPrimary
                         )
                     )
                 }
@@ -1032,7 +1035,9 @@ fun ExpenseItemRow(
                     placeholder = { Text("e.g., Gas station receipt") },
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedBorderColor = MotiumPrimary,
+                        cursorColor = MotiumPrimary
                     )
                 )
             }

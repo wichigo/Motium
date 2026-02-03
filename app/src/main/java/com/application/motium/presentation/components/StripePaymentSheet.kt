@@ -15,6 +15,7 @@ import com.stripe.android.paymentsheet.PaymentSheetResult
 import com.stripe.android.paymentsheet.rememberPaymentSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
  * Wrapper composable for Stripe PaymentSheet with Motium styling.
@@ -47,6 +48,7 @@ fun StripePaymentSheet(
     onResult: (PaymentSheetResult) -> Unit
 ) {
     val paymentSheet = rememberPaymentSheet(onResult)
+    val primaryColor = MotiumPrimary
 
     LaunchedEffect(clientSecret) {
         val customerConfig = if (customerId != null && ephemeralKey != null) {
@@ -57,7 +59,7 @@ fun StripePaymentSheet(
         } else null
 
         val configuration = PaymentSheet.Configuration.Builder(merchantName)
-            .appearance(motiumPaymentSheetAppearance())
+            .appearance(motiumPaymentSheetAppearance(primaryColor))
             .allowsDelayedPaymentMethods(false)
             .apply {
                 customerConfig?.let { customer(it) }
@@ -73,9 +75,8 @@ fun StripePaymentSheet(
  * Creates Motium-styled PaymentSheet appearance.
  * Uses dark theme colors matching the app's design.
  */
-private fun motiumPaymentSheetAppearance(): PaymentSheet.Appearance {
+private fun motiumPaymentSheetAppearance(primaryColor: Color): PaymentSheet.Appearance {
     // Motium color palette (dark theme)
-    val primaryColor = Color(0xFF4CAF50)      // Green accent
     val surfaceColor = Color(0xFF1E1E1E)      // Dark surface
     val componentColor = Color(0xFF2D2D2D)    // Component background
     val onSurfaceColor = Color(0xFFFFFFFF)    // White text
@@ -211,6 +212,7 @@ fun StripeDeferredPaymentSheet(
 ) {
     // Guard against double calls - Stripe SDK can sometimes call the callback multiple times
     val hasCreatedIntent = remember { mutableStateOf(false) }
+    val primaryColor = MotiumPrimary
 
     // Use rememberUpdatedState to capture latest callbacks without causing recomposition issues
     val currentOnCreateIntent = rememberUpdatedState(onCreateIntent)
@@ -280,7 +282,7 @@ fun StripeDeferredPaymentSheet(
         )
 
         val configuration = PaymentSheet.Configuration.Builder(rememberedMerchantName)
-            .appearance(motiumPaymentSheetAppearance())
+            .appearance(motiumPaymentSheetAppearance(primaryColor))
             .allowsDelayedPaymentMethods(false)
             .apply {
                 rememberedPrimaryButtonLabel?.let { primaryButtonLabel(it) }

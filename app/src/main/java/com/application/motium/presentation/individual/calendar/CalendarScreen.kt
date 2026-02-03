@@ -36,7 +36,7 @@ import com.application.motium.data.Trip
 import com.application.motium.data.TripRepository
 import com.application.motium.domain.model.Expense
 import com.application.motium.domain.model.User
-import com.application.motium.domain.model.isPremium
+import com.application.motium.domain.model.hasFullAccess
 import com.application.motium.domain.model.TimeSlot
 import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
@@ -45,7 +45,7 @@ import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.MotiumPrimaryTint
-import com.application.motium.presentation.theme.ValidatedGreen
+import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.PendingOrange
 import com.application.motium.MotiumApplication
 import com.application.motium.utils.CalendarUtils
@@ -100,8 +100,8 @@ fun CalendarScreen(
 
     var selectedTab by remember { mutableStateOf(initialTab) } // 0 = Calendar, 1 = Planning
 
-    // User and premium state
-    val isPremium = currentUser?.isPremium() ?: false
+    // User access state (includes TRIAL, PREMIUM, LIFETIME, LICENSED)
+    val hasAccess = currentUser?.hasFullAccess() ?: false
 
     // Premium dialog state
     var showPremiumDialog by remember { mutableStateOf(false) }
@@ -757,8 +757,8 @@ fun CalendarDay(
             .background(
                 color = when {
                     isToday -> MotiumPrimary
-                    isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                    day.hasTrips -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                    isSelected -> MotiumPrimary.copy(alpha = 0.2f)
+                    day.hasTrips -> MotiumPrimary.copy(alpha = 0.1f)
                     day.hasExpenses -> ExpenseBlue.copy(alpha = 0.1f) // Light blue background for expense-only days
                     else -> Color.Transparent
                 },
@@ -795,7 +795,7 @@ fun CalendarDay(
                             modifier = Modifier
                                 .size(4.dp)
                                 .background(
-                                    color = if (day.allTripsValidated) ValidatedGreen else PendingOrange,
+                                    color = if (day.allTripsValidated) MotiumPrimary else PendingOrange,
                                     shape = CircleShape
                                 )
                         )
@@ -1014,7 +1014,7 @@ fun TabSection(
                     .clickable { onTabSelected(1) },
                 shape = RoundedCornerShape(6.dp),
                 color = if (selectedTab == 1)
-                    Color.White
+                    MaterialTheme.colorScheme.surfaceVariant
                 else
                     Color.Transparent
             ) {
@@ -1322,19 +1322,29 @@ fun TimeSlotEditDialog(
     onDismiss: () -> Unit,
     onConfirm: (TimeSlot) -> Unit
 ) {
+    val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val isDarkMode by themeManager.isDarkMode.collectAsState()
+    val userPrimaryColor by themeManager.primaryColor.collectAsState()
+
     var startHour by remember { mutableStateOf(timeSlot.startHour) }
     var startMinute by remember { mutableStateOf(timeSlot.startMinute) }
     var endHour by remember { mutableStateOf(timeSlot.endHour) }
     var endMinute by remember { mutableStateOf(timeSlot.endMinute) }
 
+    // Dialog colors based on theme
+    val dialogContainerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White
+    val textColor = if (isDarkMode) Color.White else Color(0xFF1F2937)
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color.White,
+        containerColor = dialogContainerColor,
         tonalElevation = 0.dp,
         title = {
             Text(
                 text = "Edit Time Slot",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                color = userPrimaryColor
             )
         },
         text = {
@@ -1345,7 +1355,7 @@ fun TimeSlotEditDialog(
                 Text(
                     text = "Start Time",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    color = textColor.copy(alpha = 0.7f)
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1362,9 +1372,16 @@ fun TimeSlotEditDialog(
                         },
                         modifier = Modifier.weight(1f),
                         label = { Text("Hour") },
-                        singleLine = true
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = userPrimaryColor,
+                            focusedLabelColor = userPrimaryColor,
+                            cursorColor = userPrimaryColor,
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor
+                        )
                     )
-                    Text(":", style = MaterialTheme.typography.titleLarge)
+                    Text(":", style = MaterialTheme.typography.titleLarge, color = textColor)
                     // Minute
                     OutlinedTextField(
                         value = String.format("%02d", startMinute),
@@ -1376,7 +1393,14 @@ fun TimeSlotEditDialog(
                         },
                         modifier = Modifier.weight(1f),
                         label = { Text("Minute") },
-                        singleLine = true
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = userPrimaryColor,
+                            focusedLabelColor = userPrimaryColor,
+                            cursorColor = userPrimaryColor,
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor
+                        )
                     )
                 }
 
@@ -1384,7 +1408,7 @@ fun TimeSlotEditDialog(
                 Text(
                     text = "End Time",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    color = textColor.copy(alpha = 0.7f)
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1401,9 +1425,16 @@ fun TimeSlotEditDialog(
                         },
                         modifier = Modifier.weight(1f),
                         label = { Text("Hour") },
-                        singleLine = true
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = userPrimaryColor,
+                            focusedLabelColor = userPrimaryColor,
+                            cursorColor = userPrimaryColor,
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor
+                        )
                     )
-                    Text(":", style = MaterialTheme.typography.titleLarge)
+                    Text(":", style = MaterialTheme.typography.titleLarge, color = textColor)
                     // Minute
                     OutlinedTextField(
                         value = String.format("%02d", endMinute),
@@ -1415,7 +1446,14 @@ fun TimeSlotEditDialog(
                         },
                         modifier = Modifier.weight(1f),
                         label = { Text("Minute") },
-                        singleLine = true
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = userPrimaryColor,
+                            focusedLabelColor = userPrimaryColor,
+                            cursorColor = userPrimaryColor,
+                            unfocusedTextColor = textColor,
+                            focusedTextColor = textColor
+                        )
                     )
                 }
             }
@@ -1432,11 +1470,14 @@ fun TimeSlotEditDialog(
                     onConfirm(updatedSlot)
                 }
             ) {
-                Text("Save", color = MotiumPrimary)
+                Text("Save", color = userPrimaryColor)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = userPrimaryColor)
+            ) {
                 Text("Cancel")
             }
         }

@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.application.motium.presentation.theme.MotiumPrimary
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.application.motium.utils.Constants
@@ -560,7 +561,7 @@ private fun CompactRoutePreview(
                 Icon(
                     imageVector = Icons.Default.LocationOn,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MotiumPrimary,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -576,6 +577,8 @@ private fun SimpleRoutePreview(
     allPoints: List<Pair<Double, Double>>,
     modifier: Modifier = Modifier
 ) {
+    val primaryColor = MotiumPrimary
+
     Canvas(modifier = modifier.background(Color(0xFFF0F4F8))) {
         if (allPoints.size < 2) return@Canvas
 
@@ -604,7 +607,7 @@ private fun SimpleRoutePreview(
 
         val startPoint = toScreen(allPoints.first().first, allPoints.first().second)
         drawCircle(Color.White, 8f, startPoint)
-        drawCircle(Color(0xFF4CAF50), 5f, startPoint)
+        drawCircle(primaryColor, 5f, startPoint)
 
         val endPoint = toScreen(allPoints.last().first, allPoints.last().second)
         drawCircle(Color.White, 8f, endPoint)

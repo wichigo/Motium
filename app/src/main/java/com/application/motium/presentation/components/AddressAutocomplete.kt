@@ -14,13 +14,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import com.application.motium.data.geocoding.NominatimResult
 import com.application.motium.data.geocoding.NominatimService
-import com.application.motium.presentation.theme.MotiumPrimary
+import com.application.motium.utils.ThemeManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -35,6 +36,10 @@ fun AddressAutocomplete(
     leadingIcon: (@Composable () -> Unit)? = null,
     placeholder: String = ""
 ) {
+    val context = LocalContext.current
+    val themeManager = remember { ThemeManager.getInstance(context) }
+    val userPrimaryColor by themeManager.primaryColor.collectAsState()
+
     var suggestions by remember { mutableStateOf<List<NominatimResult>>(emptyList()) }
     var showSuggestions by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
@@ -104,9 +109,10 @@ fun AddressAutocomplete(
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                focusedBorderColor = MotiumPrimary,
+                focusedBorderColor = userPrimaryColor,
                 unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                focusedLabelColor = MotiumPrimary
+                focusedLabelColor = userPrimaryColor,
+                cursorColor = userPrimaryColor
             )
         )
 
@@ -127,6 +133,7 @@ fun AddressAutocomplete(
                     items(suggestions) { suggestion ->
                         AddressSuggestionItem(
                             suggestion = suggestion,
+                            primaryColor = userPrimaryColor,
                             onClick = {
                                 // Fermer d'abord les suggestions pour éviter le double-clic
                                 showSuggestions = false
@@ -155,6 +162,7 @@ fun AddressAutocomplete(
 @Composable
 private fun AddressSuggestionItem(
     suggestion: NominatimResult,
+    primaryColor: Color,
     onClick: () -> Unit
 ) {
     // Utiliser le format personnalisé: numéro rue, code postal ville, pays
@@ -173,7 +181,7 @@ private fun AddressSuggestionItem(
         Icon(
             imageVector = Icons.Default.LocationOn,
             contentDescription = null,
-            tint = MotiumPrimary,
+            tint = primaryColor,
             modifier = Modifier.size(20.dp)
         )
 

@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
  * Dialog explaining why background location permission ("Toujours") is needed
@@ -54,7 +55,7 @@ fun BackgroundLocationPermissionDialog(
                     imageVector = Icons.Default.LocationOn,
                     contentDescription = null,
                     modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MotiumPrimary,
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -83,7 +84,7 @@ fun BackgroundLocationPermissionDialog(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     ),
                     shape = RoundedCornerShape(8.dp),
                 ) {
@@ -94,7 +95,7 @@ fun BackgroundLocationPermissionDialog(
                             text = "Dans les paramètres :",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = MotiumPrimary,
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -115,6 +116,9 @@ fun BackgroundLocationPermissionDialog(
                     OutlinedButton(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MotiumPrimary,
+                        ),
                     ) {
                         Text("Plus tard")
                     }
@@ -122,6 +126,9 @@ fun BackgroundLocationPermissionDialog(
                     Button(
                         onClick = onOpenSettings,
                         modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MotiumPrimary,
+                        ),
                     ) {
                         Text("Ouvrir paramètres")
                     }

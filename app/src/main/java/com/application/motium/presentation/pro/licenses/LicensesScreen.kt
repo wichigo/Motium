@@ -399,7 +399,7 @@ private fun LicensesSummaryCard(
                 StatItem(
                     value = summary.assignedLicenses.toString(),
                     label = "Assignées",
-                    color = ValidatedGreen,
+                    color = MotiumPrimary,
                     textSecondaryColor = textSecondaryColor
                 )
                 StatItem(
@@ -673,7 +673,7 @@ private fun LicenseRow(
                 .background(
                     when (effectiveStatus) {
                         LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary.copy(alpha = 0.1f)
-                        LicenseEffectiveStatus.ACTIVE -> ValidatedGreen.copy(alpha = 0.1f)
+                        LicenseEffectiveStatus.ACTIVE -> MotiumPrimary.copy(alpha = 0.1f)
                         LicenseEffectiveStatus.PENDING_UNLINK -> PendingOrange.copy(alpha = 0.1f)
                         LicenseEffectiveStatus.SUSPENDED -> PendingOrange.copy(alpha = 0.1f)
                         else -> ErrorRed.copy(alpha = 0.1f)
@@ -692,7 +692,7 @@ private fun LicenseRow(
                 contentDescription = null,
                 tint = when (effectiveStatus) {
                     LicenseEffectiveStatus.AVAILABLE -> MotiumPrimary
-                    LicenseEffectiveStatus.ACTIVE -> ValidatedGreen
+                    LicenseEffectiveStatus.ACTIVE -> MotiumPrimary
                     LicenseEffectiveStatus.PENDING_UNLINK -> PendingOrange
                     LicenseEffectiveStatus.SUSPENDED -> PendingOrange
                     else -> ErrorRed
@@ -864,7 +864,7 @@ private fun LicenseRow(
                         if (license.isPendingUnlink) {
                             // Option to cancel unlink request
                             DropdownMenuItem(
-                                text = { Text("Annuler la deliaison", color = ValidatedGreen) },
+                                text = { Text("Annuler la deliaison", color = MotiumPrimary) },
                                 onClick = {
                                     showMenu = false
                                     onCancelUnlink()
@@ -873,7 +873,7 @@ private fun LicenseRow(
                                     Icon(
                                         Icons.Outlined.Undo,
                                         contentDescription = null,
-                                        tint = ValidatedGreen
+                                        tint = MotiumPrimary
                                     )
                                 },
                                 modifier = Modifier.background(MaterialTheme.colorScheme.surface)

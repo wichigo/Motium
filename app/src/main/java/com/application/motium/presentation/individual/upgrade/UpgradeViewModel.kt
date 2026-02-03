@@ -264,6 +264,9 @@ class UpgradeViewModel(
                         MotiumApplication.logger.i("🔄 User cache updated from Supabase: ${freshUser.subscription.type}", TAG)
 
                         if (freshUser.subscription.type == expectedType) {
+                            // Notify AuthViewModel to update its state (so UI observing authState gets updated)
+                            supabaseAuthRepository.refreshAuthState()
+
                             _uiState.update {
                                 it.copy(
                                     isRefreshing = false,
@@ -290,6 +293,9 @@ class UpgradeViewModel(
                     val result = supabaseAuthRepository.getUserProfile(userId)
                     if (result is AuthResult.Success) {
                         localUserRepository.saveUser(result.data, isLocallyConnected = true)
+                        // Notify AuthViewModel to update its state
+                        supabaseAuthRepository.refreshAuthState()
+
                         _uiState.update {
                             it.copy(
                                 isRefreshing = false,

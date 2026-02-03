@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.User
-import com.application.motium.domain.model.isPremium
+import com.application.motium.domain.model.hasFullAccess
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.*
@@ -70,8 +70,8 @@ fun ExportScreen(
     var snackbarMessage by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // User and premium state
-    val isPremium = currentUser?.isPremium() ?: false
+    // User access state (includes TRIAL, PREMIUM, LIFETIME, LICENSED)
+    val hasAccess = currentUser?.hasFullAccess() ?: false
 
     // Premium dialog state
     var showPremiumDialog by remember { mutableStateOf(false) }
@@ -130,7 +130,7 @@ fun ExportScreen(
             item {
                 QuickExportSection(
                     viewModel = viewModel,
-                    isPremium = isPremium,
+                    hasAccess = hasAccess,
                     onShowPremiumDialog = { showPremiumDialog = true },
                     onSuccess = { snackbarMessage = "Export réussi!"; showSnackbar = true },
                     onError = { error -> snackbarMessage = error; showSnackbar = true }
@@ -804,7 +804,7 @@ fun ExportScreen(
                     )
 
                     // Premium lock info for free users
-                    if (!isPremium) {
+                    if (!hasAccess) {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
@@ -835,7 +835,7 @@ fun ExportScreen(
                     // CSV Export
                     Button(
                         onClick = {
-                            if (isPremium) {
+                            if (hasAccess) {
                                 viewModel.exportToCSV(
                                     onSuccess = { file ->
                                         snackbarMessage = "CSV exported successfully: ${file.name}"
@@ -854,11 +854,11 @@ fun ExportScreen(
                             .fillMaxWidth()
                             .height(56.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isPremium) MotiumPrimary else MotiumPrimary.copy(alpha = 0.5f)
+                            containerColor = if (hasAccess) MotiumPrimary else MotiumPrimary.copy(alpha = 0.5f)
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        if (!isPremium) {
+                        if (!hasAccess) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
                                 contentDescription = null,
@@ -884,7 +884,7 @@ fun ExportScreen(
                     // PDF Export
                     Button(
                         onClick = {
-                            if (isPremium) {
+                            if (hasAccess) {
                                 viewModel.exportToPDF(
                                     onSuccess = { file ->
                                         snackbarMessage = "PDF exported successfully: ${file.name}"
@@ -907,7 +907,7 @@ fun ExportScreen(
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        if (!isPremium) {
+                        if (!hasAccess) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
                                 contentDescription = null,
@@ -933,7 +933,7 @@ fun ExportScreen(
                     // Excel Export
                     Button(
                         onClick = {
-                            if (isPremium) {
+                            if (hasAccess) {
                                 viewModel.exportToExcel(
                                     onSuccess = { file ->
                                         snackbarMessage = "Excel exported successfully: ${file.name}"
@@ -956,7 +956,7 @@ fun ExportScreen(
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        if (!isPremium) {
+                        if (!hasAccess) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
                                 contentDescription = null,
@@ -1114,7 +1114,7 @@ private fun CalendarGrid(
 @Composable
 private fun QuickExportSection(
     viewModel: ExportViewModel,
-    isPremium: Boolean,
+    hasAccess: Boolean,
     onShowPremiumDialog: () -> Unit,
     onSuccess: () -> Unit,
     onError: (String) -> Unit

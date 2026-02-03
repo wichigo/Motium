@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.application.motium.presentation.theme.MotiumPrimary
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -287,7 +288,7 @@ fun SyncStatusIconButton(
         }
         is SyncState.Syncing -> {
             icon = Icons.Default.Sync
-            tint = MaterialTheme.colorScheme.primary
+            tint = MotiumPrimary
             isAnimated = true
         }
         is SyncState.Synced -> {
