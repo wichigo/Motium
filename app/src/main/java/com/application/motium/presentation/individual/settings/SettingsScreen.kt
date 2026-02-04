@@ -624,13 +624,25 @@ fun SettingsScreen(
             },
             onCancellationComplete = {
                 showSubscriptionManagementDialog = false
-                // Refresh user data to reflect cancellation
+                // Force refresh from Supabase to get updated cancel_at_period_end status
                 scope.launch {
                     try {
-                        val freshUser = localUserRepository.getLoggedInUser()
-                        // User will be updated via webhook, dialog closing is enough
+                        authViewModel.refreshAuthState()
+                        MotiumApplication.logger.i("✅ User data refreshed after cancellation", "Settings")
                     } catch (e: Exception) {
                         MotiumApplication.logger.e("Failed to refresh user after cancellation: ${e.message}", "Settings", e)
+                    }
+                }
+            },
+            onResumeComplete = {
+                showSubscriptionManagementDialog = false
+                // Force refresh from Supabase to get updated cancel_at_period_end status
+                scope.launch {
+                    try {
+                        authViewModel.refreshAuthState()
+                        MotiumApplication.logger.i("✅ User data refreshed after resume", "Settings")
+                    } catch (e: Exception) {
+                        MotiumApplication.logger.e("Failed to refresh user after resume: ${e.message}", "Settings", e)
                     }
                 }
             }
@@ -2856,7 +2868,8 @@ fun SubscriptionManagementDialog(
     textSecondaryColor: Color,
     onDismiss: () -> Unit,
     onUpgradeToLifetime: () -> Unit,
-    onCancellationComplete: () -> Unit
+    onCancellationComplete: () -> Unit,
+    onResumeComplete: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
     val subscriptionType = currentUser?.subscription?.type
@@ -3371,6 +3384,7 @@ fun SubscriptionManagementDialog(
                                             } ?: "fin de période"
                                         }"
                                         isCanceling = false
+                                        onCancellationComplete()
                                     },
                                     onFailure = { error ->
                                         cancelError = error.message ?: "Erreur lors de la résiliation"
@@ -3468,6 +3482,7 @@ fun SubscriptionManagementDialog(
                                             } ?: "fin de période"
                                         }"
                                         isResuming = false
+                                        onResumeComplete()
                                     },
                                     onFailure = { error ->
                                         resumeError = error.message ?: "Erreur lors de la réactivation"

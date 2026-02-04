@@ -148,6 +148,18 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     )
 
     /**
+     * DTO for stripe_subscriptions table - used to fetch cancel_at_period_end status.
+     * Only includes fields needed for the cancellation status check.
+     */
+    @Serializable
+    data class StripeSubscriptionDto(
+        val id: String,
+        val user_id: String? = null,
+        val status: String? = null,
+        val cancel_at_period_end: Boolean = false
+    )
+
+    /**
      * Data class for UPDATE operations only.
      * Does NOT include id, auth_id, or created_at to avoid corrupting these fields.
      * Supabase RLS policy checks auth.uid() = auth_id, so we must NOT send auth_id in updates.
@@ -1511,7 +1523,27 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             val userProfile = withTimeout(15_000L) {
                 postgres.from("users").select { filter { UserProfile::auth_id eq authId } }.decodeSingle<UserProfile>()
             }
-            AuthResult.Success(userProfile.toDomainUser())
+
+            // Fetch cancel_at_period_end from stripe_subscriptions table
+            var cancelAtPeriodEnd = false
+            if (userProfile.id != null) {
+                try {
+                    val subscriptions = postgres.from("stripe_subscriptions")
+                        .select { filter { eq("user_id", userProfile.id) } }
+                        .decodeList<StripeSubscriptionDto>()
+                    // Find active subscription (active, trialing, or past_due status)
+                    val activeSubscription = subscriptions.firstOrNull {
+                        it.status in listOf("active", "trialing", "past_due")
+                    }
+                    cancelAtPeriodEnd = activeSubscription?.cancel_at_period_end ?: false
+                    MotiumApplication.logger.d("📊 getUserProfile: cancel_at_period_end=$cancelAtPeriodEnd (found ${subscriptions.size} subscriptions)", "SupabaseAuth")
+                } catch (e: Exception) {
+                    MotiumApplication.logger.w("⚠️ Failed to fetch cancel_at_period_end: ${e.message}", "SupabaseAuth")
+                    // Ignore - cancel_at_period_end defaults to false
+                }
+            }
+
+            AuthResult.Success(userProfile.toDomainUser(cancelAtPeriodEnd))
         } catch (e: Exception) {
             AuthResult.Error(e.message ?: "Failed to get user profile", e)
         }
@@ -1612,6 +1644,18 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         
         if (userProfileResult is AuthResult.Success) {
             val user = userProfileResult.data
+
+            // EXPIRED check: Force logout if subscription has expired
+            // This catches trial expiry, subscription cancellation, and license revocation
+            if (user.subscription.type == SubscriptionType.EXPIRED) {
+                MotiumApplication.logger.i(
+                    "🔴 Subscription EXPIRED detected during auth refresh - forcing logout",
+                    "SupabaseAuth"
+                )
+                signOut()
+                return
+            }
+
             _authState.value = AuthState(
                 isAuthenticated = true,
                 authUser = authUser,
@@ -1648,10 +1692,10 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         }
     }
     
-    private fun UserProfile.toDomainUser(): User {
+    private fun UserProfile.toDomainUser(cancelAtPeriodEnd: Boolean = false): User {
         val resolvedId = id ?: auth_id
-        MotiumApplication.logger.d("🔍 toDomainUser: UserProfile.id=$id, auth_id=$auth_id, resolvedId=$resolvedId", "SupabaseAuth")
-        
+        MotiumApplication.logger.d("🔍 toDomainUser: UserProfile.id=$id, auth_id=$auth_id, resolvedId=$resolvedId, cancelAtPeriodEnd=$cancelAtPeriodEnd", "SupabaseAuth")
+
         fun parseInstantSafe(dateStr: String?): Instant? {
             if (dateStr.isNullOrBlank()) return null
             return try {
@@ -1673,7 +1717,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 trialStartedAt = parseInstantSafe(trial_started_at),
                 trialEndsAt = parseInstantSafe(trial_ends_at),
                 stripeCustomerId = stripe_customer_id,
-                stripeSubscriptionId = stripe_subscription_id
+                stripeSubscriptionId = stripe_subscription_id,
+                cancelAtPeriodEnd = cancelAtPeriodEnd
             ),
             phoneNumber = phone_number,
             address = address,
