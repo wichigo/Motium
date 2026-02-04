@@ -2,7 +2,8 @@ package com.application.motium.presentation.settings
 
 import android.app.Application
 import android.content.Intent
-import android.net.Uri
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 
 data class GdprUiState(
     val consents: List<ConsentInfo> = emptyList(),
@@ -148,13 +150,53 @@ class GdprViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadExport(url: String) {
+        viewModelScope.launch {
+            _exportDialogState.value = ExportDialogState.Downloading
+
+            gdprRepository.downloadExportFile(url)
+                .onSuccess { file ->
+                    shareExportFile(file)
+                    Toast.makeText(
+                        getApplication(),
+                        "Export téléchargé",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    _exportDialogState.value = ExportDialogState.Hidden
+                }
+                .onFailure { e ->
+                    _exportDialogState.value = ExportDialogState.Error(
+                        e.message ?: "Erreur lors du téléchargement"
+                    )
+                }
+        }
+    }
+
+    private fun shareExportFile(file: File) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val context = getApplication<Application>()
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "Export RGPD Motium")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            getApplication<Application>().startActivity(intent)
+
+            val chooser = Intent.createChooser(shareIntent, "Partager l'export RGPD")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
         } catch (e: Exception) {
-            MotiumApplication.logger.e("Erreur ouverture URL export: ${e.message}", TAG, e)
+            MotiumApplication.logger.e("Erreur partage export: ${e.message}", TAG, e)
+            Toast.makeText(
+                getApplication(),
+                e.message ?: "Erreur lors du partage",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 

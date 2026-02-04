@@ -75,6 +75,7 @@ sealed class ExportDialogState {
     data object Hidden : ExportDialogState()
     data object Confirming : ExportDialogState()
     data object Processing : ExportDialogState()
+    data object Downloading : ExportDialogState()
     data class Ready(val downloadUrl: String, val expiresAt: Instant?) : ExportDialogState()
     data class Error(val message: String) : ExportDialogState()
 }
@@ -306,13 +307,14 @@ fun DataExportDialog(
 
     AlertDialog(
         onDismissRequest = {
-            if (state !is ExportDialogState.Processing) onDismiss()
+            if (state !is ExportDialogState.Processing && state !is ExportDialogState.Downloading) onDismiss()
         },
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
         icon = {
             when (state) {
                 is ExportDialogState.Processing -> CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                is ExportDialogState.Downloading -> CircularProgressIndicator(modifier = Modifier.size(48.dp))
                 is ExportDialogState.Ready -> Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
@@ -338,6 +340,7 @@ fun DataExportDialog(
                 text = when (state) {
                     is ExportDialogState.Confirming -> "Exporter mes données"
                     is ExportDialogState.Processing -> "Export en cours..."
+                    is ExportDialogState.Downloading -> "Téléchargement..."
                     is ExportDialogState.Ready -> "Export prêt !"
                     is ExportDialogState.Error -> "Erreur d'export"
                     else -> ""
@@ -368,6 +371,9 @@ fun DataExportDialog(
                     }
                     is ExportDialogState.Processing -> {
                         Text("Vos données sont en cours de préparation. Cela peut prendre quelques instants...")
+                    }
+                    is ExportDialogState.Downloading -> {
+                        Text("Téléchargement de votre export en cours...")
                     }
                     is ExportDialogState.Ready -> {
                         Text("Vos données sont prêtes à être téléchargées.")
@@ -416,6 +422,7 @@ fun DataExportDialog(
                         Text("Fermer")
                     }
                 }
+                is ExportDialogState.Downloading -> {}
                 else -> {}
             }
         },

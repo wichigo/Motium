@@ -37,6 +37,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -464,6 +469,76 @@ class SupabaseGdprRepository(private val context: Context) : GdprRepository {
             MotiumApplication.logger.e("❌ Erreur demande export: ${e.message}", TAG, e)
             Result.failure(e)
         }
+    }
+
+    suspend fun downloadExportFile(downloadUrl: String): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            // Proactively refresh token if expired before making request
+            ensureValidToken()
+
+            val accessToken = auth.currentSessionOrNull()?.accessToken
+
+            val requestBuilder = Request.Builder()
+                .url(downloadUrl)
+
+            if (!accessToken.isNullOrBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $accessToken")
+            }
+
+            val response = httpClient.newCall(requestBuilder.build()).execute()
+
+            response.use { res ->
+                if (!res.isSuccessful) {
+                    val errorBody = res.body?.string().orEmpty()
+                    val errorMessage = try {
+                        json.parseToJsonElement(errorBody).jsonObject["error"]
+                            ?.jsonPrimitive?.content
+                            ?: "Erreur lors du téléchargement"
+                    } catch (_: Exception) {
+                        if (errorBody.isNotBlank()) errorBody else "Erreur lors du téléchargement"
+                    }
+                    return@withContext Result.failure(Exception(errorMessage))
+                }
+
+                val body = res.body
+                    ?: return@withContext Result.failure(Exception("Réponse vide"))
+
+                val fileName = resolveDownloadFileName(res.header("Content-Disposition"))
+                val exportDir = File(context.getExternalFilesDir(null), "Motium_Exports")
+                if (!exportDir.exists()) {
+                    exportDir.mkdirs()
+                }
+
+                val file = File(exportDir, fileName)
+                body.byteStream().use { input ->
+                    FileOutputStream(file).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                if (!file.exists() || file.length() == 0L) {
+                    return@withContext Result.failure(Exception("Fichier vide"))
+                }
+
+                Result.success(file)
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Erreur téléchargement export: ${e.message}", TAG, e)
+            Result.failure(e)
+        }
+    }
+
+    private fun resolveDownloadFileName(contentDisposition: String?): String {
+        if (!contentDisposition.isNullOrBlank()) {
+            val match = Regex("filename=\"?([^\"]+)\"?").find(contentDisposition)
+            val fileName = match?.groupValues?.getOrNull(1)
+            if (!fileName.isNullOrBlank()) {
+                return fileName
+            }
+        }
+
+        val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        return "motium-gdpr-export-$date.json"
     }
 
     override suspend fun checkExportStatus(requestId: String): Result<GdprExportResult> =
