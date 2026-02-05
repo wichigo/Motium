@@ -1,9 +1,14 @@
 package com.application.motium.data.supabase
 
 import android.content.Context
+import com.application.motium.data.TripRepository
+import com.application.motium.data.VehicleRepository
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.local.MotiumDatabase
+import com.application.motium.data.preferences.ProLicenseCache
 import com.application.motium.data.preferences.SecureSessionStorage
+import com.application.motium.data.repository.LicenseCacheManager
+import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.data.sync.SyncScheduler
 import com.application.motium.data.sync.TokenRefreshCoordinator
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
@@ -28,7 +33,10 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,9 +44,23 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import com.application.motium.utils.NetworkConnectionManager
+import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonPrimitive
 import com.application.motium.MotiumApplication
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -73,9 +95,22 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     private val sessionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val sessionMutex = Mutex()
 
+    // Initial data warmup (prefetch) to avoid empty Home after login
+    private var initialWarmupJob: Job? = null
+    private val syncManager by lazy { OfflineFirstSyncManager.getInstance(context) }
+    private val tripRepository by lazy { TripRepository.getInstance(context) }
+    private val vehicleRepository by lazy { VehicleRepository.getInstance(context) }
+    private val licenseCacheManager by lazy { LicenseCacheManager.getInstance(context) }
+    private val proLicenseCache by lazy { ProLicenseCache.getInstance(context) }
+    private val networkManager by lazy { NetworkConnectionManager.getInstance(context) }
+
     // BATTERY OPTIMIZATION: Rate-limiting for session refresh to prevent excessive API calls
     private var lastRefreshTimestamp: Long = 0L
     private val MIN_REFRESH_INTERVAL_MS = 30_000L // Minimum 30 seconds between refreshes
+
+    // Initial prefetch tuning (keep short to avoid long blocking at login)
+    private val INITIAL_PREFETCH_TIMEOUT_MS = 120_000L
+    private val INITIAL_TRIP_PREFETCH_LIMIT = 10
 
     /**
      * Response from check_trial_abuse() RPC function
@@ -96,6 +131,39 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val p_email: String,
         val p_device_fingerprint: String
     )
+
+    private object FavoriteColorsSerializer : KSerializer<List<String>> {
+        override val descriptor: SerialDescriptor =
+            ListSerializer(String.serializer()).descriptor
+
+        override fun deserialize(decoder: Decoder): List<String> {
+            val input = decoder as? JsonDecoder ?: return emptyList()
+            val element = input.decodeJsonElement()
+            return when (element) {
+                is JsonArray -> element.mapNotNull { (it as? JsonPrimitive)?.let { prim -> if (prim.isString) prim.content else null } }
+                is JsonPrimitive -> {
+                    if (!element.isString) return emptyList()
+                    val raw = element.content
+                    try {
+                        Json.decodeFromString(ListSerializer(String.serializer()), raw)
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                }
+                else -> emptyList()
+            }
+        }
+
+        override fun serialize(encoder: Encoder, value: List<String>) {
+            val jsonEncoder = encoder as? JsonEncoder
+            val array = JsonArray(value.map { JsonPrimitive(it) })
+            if (jsonEncoder != null) {
+                jsonEncoder.encodeJsonElement(array)
+            } else {
+                encoder.encodeSerializableValue(ListSerializer(String.serializer()), value)
+            }
+        }
+    }
 
     /**
      * Request parameters for create_user_profile_on_signup() RPC function
@@ -139,6 +207,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val phone_number: String = "",
         val address: String = "",
         val consider_full_distance: Boolean = false,
+        @Serializable(with = FavoriteColorsSerializer::class)
         val favorite_colors: List<String> = emptyList(), // JSON array of color strings
         val version: Int = 1, // Optimistic locking version (synced from server)
         // Note: Pro link fields (linked_pro_account_id, link_status, sharing preferences, etc.)
@@ -179,6 +248,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val phone_number: String = "",
         val address: String = "",
         val consider_full_distance: Boolean = false,
+        @Serializable(with = FavoriteColorsSerializer::class)
         val favorite_colors: List<String> = emptyList(),
         val updated_at: String
     )
@@ -235,24 +305,21 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     withTimeout(10_000L) { // Timeout 10 secondes
                         refreshSessionSafe()
                     }
-                    // Sync réussie - marquer comme terminée
-                    _authState.value = _authState.value.copy(initialSyncDone = true)
-                    MotiumApplication.logger.i("✅ Initial sync completed successfully", "SupabaseAuth")
+                    MotiumApplication.logger.i("✅ Session refresh completed", "SupabaseAuth")
                 } catch (e: TimeoutCancellationException) {
                     MotiumApplication.logger.w(
                         "⏱️ Session refresh timeout - keeping local session (offline mode)",
                         "SupabaseAuth"
                     )
-                    // Timeout = sync terminée (mode offline), on utilise les données locales
-                    _authState.value = _authState.value.copy(initialSyncDone = true)
                 } catch (e: Exception) {
                     MotiumApplication.logger.w(
                         "⚠️ Session refresh failed: ${e.message} - keeping local session (offline mode)",
                         "SupabaseAuth"
                     )
-                    // Échec = sync terminée (mode offline), on utilise les données locales
-                    _authState.value = _authState.value.copy(initialSyncDone = true)
                 }
+
+                // Warmup initial data (trips/vehicles/licenses) before navigating to Home
+                startInitialDataWarmup(localUser, reason = "session_restore")
             } else {
                 // Pas d'utilisateur local - Vérifier l'ancienne méthode de stockage (migration)
                 val restoredSession = secureSessionStorage.restoreSession()
@@ -267,6 +334,126 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 }
             }
         }
+    }
+
+    /**
+     * OFFLINE-FIRST: Prefetch core data (trips/vehicles/licenses) right after login/session restore.
+     *
+     * Goal: avoid empty Home screen while the full delta sync runs in background.
+     * - Trips: prefetched synchronously with a short timeout (to unblock navigation)
+     * - Vehicles/Licenses: prefetched in background (non-blocking)
+     */
+    private fun startInitialDataWarmup(user: User, reason: String) {
+        if (_authState.value.initialSyncDone) {
+            return
+        }
+        // Cancel any previous warmup (e.g., user switched accounts)
+        initialWarmupJob?.cancel()
+
+        val warmupUserId = user.id
+        MotiumApplication.logger.i("🔄 Starting initial data warmup (reason=$reason)", "SupabaseAuth")
+
+        val warmupJob = sessionScope.launch {
+            try {
+                // If offline, skip warmup and unblock navigation
+                if (!networkManager.isConnected.value) {
+                    MotiumApplication.logger.i(
+                        "Initial warmup skipped (offline)",
+                        "SupabaseAuth"
+                    )
+                    return@launch
+                }
+
+                // Trigger full delta sync in background (non-blocking)
+                syncManager.triggerImmediateSync()
+
+                val tasks = mutableListOf<kotlinx.coroutines.Deferred<Any?>>()
+
+                // Trips: prefetch (blocking)
+                tasks += async {
+                    tripRepository.prefetchLatestTripsIfEmpty(
+                        userId = warmupUserId,
+                        limit = INITIAL_TRIP_PREFETCH_LIMIT
+                    )
+                }
+
+                // Vehicles: refresh (blocking)
+                tasks += async {
+                    vehicleRepository.refreshVehiclesBlocking(warmupUserId)
+                }
+
+                // Licenses (Pro users): blocking refresh via cache manager
+                tasks += async {
+                    if (user.role == UserRole.ENTERPRISE) {
+                        val proAccountId = resolveProAccountIdForWarmup(user)
+                        if (proAccountId != null) {
+                            licenseCacheManager.forceRefresh(proAccountId)
+                        } else {
+                            MotiumApplication.logger.w(
+                                "Pro account ID not resolved during warmup - skipping license refresh",
+                                "SupabaseAuth"
+                            )
+                        }
+                    }
+                    null
+                }
+
+                val results = withTimeoutOrNull(INITIAL_PREFETCH_TIMEOUT_MS) {
+                    tasks.awaitAll()
+                }
+
+                if (results == null) {
+                    MotiumApplication.logger.w(
+                        "Initial warmup timeout after ${INITIAL_PREFETCH_TIMEOUT_MS}ms",
+                        "SupabaseAuth"
+                    )
+                } else {
+                    val tripCount = results.getOrNull(0) as? Int
+                    val vehicleCount = results.getOrNull(1) as? Int
+                    MotiumApplication.logger.i(
+                        "Initial warmup done: trips=${tripCount ?: "?"}, vehicles=${vehicleCount ?: "?"}",
+                        "SupabaseAuth"
+                    )
+                }
+            } catch (e: Exception) {
+                MotiumApplication.logger.w(
+                    "Initial warmup failed: ${e.message}",
+                    "SupabaseAuth"
+                )
+            } finally {
+                val currentState = _authState.value
+                if (currentState.isAuthenticated && currentState.user?.id == warmupUserId) {
+                    _authState.value = currentState.copy(initialSyncDone = true)
+                }
+                // Clear job reference if we're still the active warmup
+                if (initialWarmupJob == coroutineContext[Job]) {
+                    initialWarmupJob = null
+                }
+            }
+        }
+
+        initialWarmupJob = warmupJob
+    }
+
+    /**
+     * Resolve Pro account ID for warmup, with small retries to allow auth/session to initialize.
+     */
+    private suspend fun resolveProAccountIdForWarmup(user: User): String? {
+        // Try a few times in case auth/session isn't ready yet
+        repeat(10) { attempt ->
+            // 1) Room cache
+            proAccountDao.getByUserIdOnce(user.id)?.let { return it.id }
+
+            // 2) License cache (if any)
+            proLicenseCache.getCachedState(user.id)?.proAccountId?.let { return it }
+
+            // 3) Server fetch (auth + cache)
+            getCurrentProAccountId()?.let { return it }
+
+            // Small delay before retry
+            kotlinx.coroutines.delay(500L + (attempt * 100L))
+        }
+        return null
     }
 
     /**
@@ -368,8 +555,11 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                         authUser = authUser,
                         user = user,
                         isLoading = false,
-                        initialSyncDone = true
+                        initialSyncDone = false
                     )
+
+                    // Prefetch core data before navigating to Home
+                    startInitialDataWarmup(user, reason = "silent_reauth")
 
                     MotiumApplication.logger.i("✅ Reconnexion silencieuse réussie pour ${credentials.email}", "SupabaseAuth")
                     return true
@@ -418,8 +608,11 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                         authUser = authUser,
                         user = userProfileResult.data,
                         isLoading = false,
-                        initialSyncDone = true
+                        initialSyncDone = false
                     )
+
+                    // Prefetch core data before navigating to Home
+                    startInitialDataWarmup(userProfileResult.data, reason = "migrate_old_session")
 
                     // CLEANUP: Nettoyer l'ancien stockage non chiffré après migration réussie
                     try {
@@ -915,8 +1108,11 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 authUser = authUser,
                 user = user,
                 isLoading = false,
-                initialSyncDone = true
+                initialSyncDone = false
             )
+
+            // Prefetch core data before navigating to Home
+            startInitialDataWarmup(user, reason = "sign_in_email")
 
             return AuthResult.Success(authUser)
         } catch (e: Exception) {
@@ -993,6 +1189,10 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
     override suspend fun signOut(): AuthResult<Unit> {
         return try {
             MotiumApplication.logger.i("👋 Déconnexion manuelle initiée...", "SupabaseAuth")
+
+            // Stop any ongoing warmup
+            initialWarmupJob?.cancel()
+            initialWarmupJob = null
 
             // Se déconnecter de Supabase (peut échouer si offline - c'est OK)
             try {
@@ -1221,8 +1421,11 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                 authUser = authUser,
                 user = user,
                 isLoading = false,
-                initialSyncDone = true
+                initialSyncDone = false
             )
+
+            // Prefetch core data before navigating to Home
+            startInitialDataWarmup(user, reason = "sign_in_google")
 
             AuthResult.Success(authUser)
         } catch (e: Exception) {
@@ -1800,11 +2003,24 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             return cachedProAccount.id
         }
 
+        // Fallback: check Pro license cache (if available)
+        proLicenseCache.getCachedState(currentUser.id)?.proAccountId?.let { cachedId ->
+            MotiumApplication.logger.d("✅ Pro account ID from license cache: $cachedId", "SupabaseAuth")
+            return cachedId
+        }
+
         // Not in cache - try to fetch from Supabase
         MotiumApplication.logger.d("🔍 Pro account not in cache, fetching from Supabase for user: ${currentUser.id}", "SupabaseAuth")
 
         // Check if user is authenticated before making the request
-        val authUser = auth.currentUserOrNull()
+        var authUser = auth.currentUserOrNull()
+        if (authUser == null) {
+            // Try to recover session (common during app cold start)
+            val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+            if (refreshed) {
+                authUser = auth.currentUserOrNull()
+            }
+        }
         if (authUser == null) {
             MotiumApplication.logger.w("No authenticated user, skipping pro_accounts fetch", "SupabaseAuth")
             return null
@@ -1833,6 +2049,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                     billingAddress = serverProAccount.billingAddress,
                     billingEmail = serverProAccount.billingEmail,
                     billingDay = serverProAccount.billingDay,
+                    billingAnchorDay = serverProAccount.billingAnchorDay,
                     departments = serverProAccount.departments?.toString() ?: "[]",
                     createdAt = serverProAccount.createdAt?.let { Instant.parse(it).toEpochMilliseconds() }
                         ?: System.currentTimeMillis(),

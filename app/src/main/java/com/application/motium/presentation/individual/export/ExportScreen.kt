@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.domain.model.User
 import com.application.motium.domain.model.hasFullAccess
 import com.application.motium.presentation.auth.AuthViewModel
+import com.application.motium.presentation.components.FullScreenLoading
 import com.application.motium.presentation.components.PremiumDialog
 import com.application.motium.presentation.theme.*
 import com.application.motium.presentation.theme.MotiumPrimary
@@ -61,6 +62,7 @@ fun ExportScreen(
     val stats by viewModel.stats.collectAsState()
     val vehicles by viewModel.vehicles.collectAsState()
     val filteredTrips by viewModel.filteredTrips.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
 
     var currentMonth by remember { mutableStateOf(Calendar.getInstance()) }
     var showDatePicker by remember { mutableStateOf(false) }
@@ -88,44 +90,45 @@ fun ExportScreen(
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        "Export",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        fontSize = 18.sp,
-                        color = textColor
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back",
-                            tint = textColor
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            "Export",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            fontSize = 18.sp,
+                            color = textColor
                         )
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = backgroundColor
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back",
+                                tint = textColor
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = backgroundColor
+                    )
                 )
-            )
-        },
-        // Bottom navigation is now handled at app-level in MainActivity
-        containerColor = backgroundColor
-    ) { paddingValues ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
+            },
+            // Bottom navigation is now handled at app-level in MainActivity
+            containerColor = backgroundColor
+        ) { paddingValues ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
             // Quick Export section
             item {
                 QuickExportSection(
@@ -984,6 +987,11 @@ fun ExportScreen(
             item {
                 Spacer(modifier = Modifier.height(24.dp))
             }
+            }
+        }
+
+        if (isLoading) {
+            FullScreenLoading(message = "Chargement des donnees d'export...")
         }
     }
 

@@ -311,25 +311,16 @@ class SubscriptionManager private constructor(private val context: Context) {
                 ?: return@withContext TripAccessResult.Error("Utilisateur non connecté")
 
             val subscription = user.subscription
-            // SECURITY FIX: Use trusted time for access checks
-            val trustedTimeMs = TrustedTimeProvider.getInstance(context).getTrustedTimeMs()
-
-            if (subscription.hasValidAccessSecure(trustedTimeMs)) {
-                val daysLeft = subscription.daysLeftInTrial()
-                TripAccessResult.Allowed(
-                    isInTrial = subscription.isInTrial(),
-                    trialDaysRemaining = daysLeft
+            // New policy: if the user can access the app, they can create unlimited trips.
+            // Only EXPIRED is denied; TRIAL/PREMIUM/LIFETIME/LICENSED are allowed.
+            when (subscription.type) {
+                SubscriptionType.EXPIRED -> TripAccessResult.AccessDenied(
+                    reason = "Votre abonnement est expiré"
                 )
-            } else {
-                // Check if denial is due to untrusted time
-                val reason = if (trustedTimeMs == null) {
-                    "Veuillez vous connecter à Internet pour vérifier votre abonnement"
-                } else if (subscription.type == SubscriptionType.EXPIRED) {
-                    "Votre essai gratuit est terminé"
-                } else {
-                    "Abonnement requis"
-                }
-                TripAccessResult.AccessDenied(reason = reason)
+                else -> TripAccessResult.Allowed(
+                    isInTrial = subscription.isInTrial(),
+                    trialDaysRemaining = subscription.daysLeftInTrial()
+                )
             }
         } catch (e: Exception) {
             TripAccessResult.Error("Erreur: ${e.message}")
@@ -767,7 +758,7 @@ class SubscriptionManager private constructor(private val context: Context) {
                 .post(jsonBody.toRequestBody("application/json".toMediaType()))
                 .build()
 
-            MotiumApplication.logger.i("Confirming payment: $priceType, quantity=$quantity, paymentMethod=$paymentMethodId", TAG)
+            MotiumApplication.logger.i("Confirming payment: $priceType, quantity=$quantity, paymentMethod=REDACTED", TAG)
 
             val response = httpClient.newCall(request).execute()
             val responseBody = response.body?.string() ?: throw Exception("Empty response from server")

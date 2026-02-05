@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.application.motium.presentation.theme.*
 
+private const val MAX_BILLING_ANCHOR_DAY = 15
+
 /**
  * Dialog for selecting the billing anchor day (1-15).
  * This day is used as the renewal date for all monthly licenses.
@@ -35,7 +37,8 @@ fun BillingAnchorDialog(
     onDismiss: () -> Unit,
     onConfirm: (Int) -> Unit
 ) {
-    var selectedDay by remember { mutableStateOf(currentAnchorDay ?: 1) }
+    val initialDay = (currentAnchorDay ?: 1).coerceIn(1, MAX_BILLING_ANCHOR_DAY)
+    var selectedDay by remember { mutableStateOf(initialDay) }
 
     Dialog(onDismissRequest = { if (!isLoading) onDismiss() }) {
         Card(
@@ -44,7 +47,7 @@ fun BillingAnchorDialog(
                 .padding(16.dp),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
-                containerColor = Color.White
+                containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
             Column(
@@ -98,7 +101,7 @@ fun BillingAnchorDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items((1..15).toList()) { day ->
+                    items((1..MAX_BILLING_ANCHOR_DAY).toList()) { day ->
                         DayChip(
                             day = day,
                             isSelected = day == selectedDay,
@@ -131,7 +134,7 @@ fun BillingAnchorDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Cette modification s'appliquera aux prochains achats de licences.",
+                            text = "Cette modification s'applique immediatement a toutes vos licences mensuelles et au prochain renouvellement.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

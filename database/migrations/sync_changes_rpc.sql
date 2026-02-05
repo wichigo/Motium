@@ -790,6 +790,33 @@ END;
 $$;
 
 -- ========================================
+-- HELPER: normalize_favorite_colors()
+-- ========================================
+CREATE OR REPLACE FUNCTION normalize_favorite_colors(p_val JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_val IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF jsonb_typeof(p_val) = 'array' THEN
+        RETURN p_val;
+    ELSIF jsonb_typeof(p_val) = 'string' THEN
+        BEGIN
+            RETURN (p_val #>> '{}')::jsonb;
+        EXCEPTION WHEN others THEN
+            RETURN '[]'::jsonb;
+        END;
+    ELSE
+        RETURN '[]'::jsonb;
+    END IF;
+END;
+$$;
+
+-- ========================================
 -- HELPER: push_user_change() - AVEC VERSION
 -- ========================================
 CREATE OR REPLACE FUNCTION push_user_change(
@@ -836,7 +863,7 @@ BEGIN
         name = COALESCE(p_payload->>'name', name),
         phone_number = COALESCE(p_payload->>'phone_number', phone_number),
         address = COALESCE(p_payload->>'address', address),
-        favorite_colors = COALESCE(p_payload->'favorite_colors', favorite_colors),
+        favorite_colors = COALESCE(normalize_favorite_colors(p_payload->'favorite_colors'), favorite_colors),
         consider_full_distance = COALESCE((p_payload->>'consider_full_distance')::BOOLEAN, consider_full_distance),
         version = p_client_version,
         updated_at = now()

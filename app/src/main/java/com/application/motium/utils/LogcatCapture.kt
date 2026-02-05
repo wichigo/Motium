@@ -17,6 +17,65 @@ import java.util.*
  * incluant les crashs, exceptions, et messages système
  */
 object LogcatCapture {
+    private const val PREFS_NAME = "logcat_capture_prefs"
+    private const val KEY_CAPTURE_START_MS = "capture_start_ms"
+
+    /**
+     * Marque le début d'une nouvelle capture et nettoie le buffer logcat.
+     * Utile pour partir d'un état "propre" avant un test.
+     */
+    fun markLogCaptureStart(context: Context) {
+        val now = System.currentTimeMillis()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_CAPTURE_START_MS, now)
+            .apply()
+
+        // Best-effort clear: may be restricted on some devices.
+        clearLogcat()
+
+        MotiumApplication.logger.i(
+            "🧹 Log capture start marked at ${formatLogcatTime(now)}",
+            "LogcatCapture"
+        )
+    }
+
+    private fun getCaptureStartMs(context: Context): Long? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val value = prefs.getLong(KEY_CAPTURE_START_MS, 0L)
+        return if (value > 0L) value else null
+    }
+
+    private fun formatLogcatTime(timestampMs: Long): String {
+        val formatter = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+        formatter.timeZone = TimeZone.getDefault()
+        return formatter.format(Date(timestampMs))
+    }
+
+    private fun buildLogcatCommand(
+        maxLines: Int?,
+        pid: Int?,
+        sinceMs: Long?
+    ): Array<String> {
+        val command = mutableListOf("logcat", "-d", "-b", "all")
+
+        if (sinceMs != null) {
+            command.add("-T")
+            command.add(formatLogcatTime(sinceMs))
+        }
+
+        if (maxLines != null && maxLines > 0) {
+            command.add("-t")
+            command.add(maxLines.toString())
+        }
+
+        if (pid != null) {
+            command.add("--pid=$pid")
+        }
+
+        command.addAll(listOf("-v", "threadtime", "*:V"))
+        return command.toTypedArray()
+    }
 
     /**
      * Capture les logs logcat et les sauvegarde dans un fichier
@@ -31,11 +90,8 @@ object LogcatCapture {
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             val logcatFile = File(context.getExternalFilesDir(null), "motium_logcat_$timestamp.txt")
 
-            // Commande logcat pour capturer les logs
-            // -d : dump les logs et quitte (ne reste pas en mode follow)
-            // -t : nombre maximum de lignes à récupérer
-            // *:V : tous les tags avec niveau VERBOSE et au-dessus
-            val command = arrayOf("logcat", "-d", "-t", maxLines.toString(), "*:V")
+            val sinceMs = getCaptureStartMs(context)
+            val command = buildLogcatCommand(maxLines, null, sinceMs)
 
             MotiumApplication.logger.i("🔧 Exécution de la commande: ${command.joinToString(" ")}", "LogcatCapture")
 
@@ -114,10 +170,9 @@ object LogcatCapture {
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             val logcatFile = File(context.getExternalFilesDir(null), "motium_logcat_filtered_$timestamp.txt")
 
-            // Filtrer uniquement les logs de l'application Motium
-            // --pid : filtrer par PID de l'application
             val pid = android.os.Process.myPid()
-            val command = arrayOf("logcat", "-d", "-t", maxLines.toString(), "--pid=$pid", "*:V")
+            val sinceMs = getCaptureStartMs(context)
+            val command = buildLogcatCommand(maxLines, pid, sinceMs)
 
             MotiumApplication.logger.i("🔧 Exécution de la commande filtrée (PID=$pid): ${command.joinToString(" ")}", "LogcatCapture")
 
@@ -212,7 +267,8 @@ object LogcatCapture {
 
             // Capturer le logcat filtré par PID (même pattern que captureMotiumLogcat)
             val pid = android.os.Process.myPid()
-            val command = arrayOf("logcat", "-d", "-t", maxLines.toString(), "--pid=$pid", "*:V")
+            val sinceMs = getCaptureStartMs(context)
+            val command = buildLogcatCommand(maxLines, pid, sinceMs)
             val process = Runtime.getRuntime().run { this@run.exec(command) }
             val bufferedReader = BufferedReader(InputStreamReader(process.inputStream))
 
@@ -269,6 +325,103 @@ object LogcatCapture {
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Erreur capture auto-tracking: ${e.message}", "LogcatCapture", e)
+            null
+        }
+    }
+
+    /**
+     * Capture un diagnostic complet:
+     * - Logs applicatifs Motium (fichier interne)
+     * - Rapport AutoTrackingDiagnostics
+     * - Logcat complet (best effort, peut être limité par Android)
+     */
+    suspend fun captureFullDiagnostics(context: Context, maxLines: Int = 0): File? = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("📋 Capture diagnostic complet (full logcat)", "LogcatCapture")
+
+            val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+            val logFile = File(context.getExternalFilesDir(null), "motium_full_diagnostics_$timestamp.txt")
+
+            val sinceMs = getCaptureStartMs(context)
+            val command = buildLogcatCommand(maxLines.takeIf { it > 0 }, null, sinceMs)
+
+            MotiumApplication.logger.i("🔧 Exécution commande full logcat: ${command.joinToString(" ")}", "LogcatCapture")
+
+            val process = Runtime.getRuntime().exec(command)
+            val bufferedReader = BufferedReader(InputStreamReader(process.inputStream))
+
+            logFile.bufferedWriter().use { writer ->
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.write("Motium - Full Diagnostics")
+                writer.newLine()
+                writer.write("Captured at: $timestamp")
+                writer.newLine()
+                writer.write("Package: ${context.packageName}")
+                writer.newLine()
+                writer.write("Logcat since: ${sinceMs?.let { formatLogcatTime(it) } ?: "FULL BUFFER"}")
+                writer.newLine()
+                writer.write("Note: System logs may be limited on production devices without READ_LOGS.")
+                writer.newLine()
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.newLine()
+
+                writer.write("=== APP LOGS (MotiumApplication logger) ===")
+                writer.newLine()
+                val appLogFile = MotiumApplication.logger.getLogFile()
+                if (appLogFile.exists() && appLogFile.length() > 0L) {
+                    appLogFile.bufferedReader().useLines { lines ->
+                        lines.forEach { line ->
+                            writer.write(line)
+                            writer.newLine()
+                        }
+                    }
+                } else {
+                    writer.write("No app logs available.")
+                    writer.newLine()
+                }
+                writer.newLine()
+
+                writer.write("=== AUTO-TRACKING DIAGNOSTICS ===")
+                writer.newLine()
+                writer.write(AutoTrackingDiagnostics.getFormattedReport(context))
+                writer.newLine()
+                writer.newLine()
+
+                writer.write("=== FULL LOGCAT (best effort) ===")
+                writer.newLine()
+
+                var lineCount = 0
+                var line: String?
+                while (bufferedReader.readLine().also { line = it } != null) {
+                    writer.write(line)
+                    writer.newLine()
+                    lineCount++
+                    if (lineCount % 2000 == 0) {
+                        MotiumApplication.logger.d("📋 Full logcat captured: $lineCount lines", "LogcatCapture")
+                    }
+                }
+
+                writer.newLine()
+                writer.write("=".repeat(80))
+                writer.newLine()
+                writer.write("Total logcat lines: $lineCount")
+                writer.newLine()
+                writer.write("=".repeat(80))
+            }
+
+            process.waitFor()
+
+            if (logFile.exists() && logFile.length() > 0) {
+                MotiumApplication.logger.i("✅ Full diagnostics captured: ${logFile.absolutePath}", "LogcatCapture")
+                logFile
+            } else {
+                MotiumApplication.logger.e("❌ Full diagnostics file empty or missing", "LogcatCapture")
+                null
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Error capturing full diagnostics: ${e.message}", "LogcatCapture", e)
             null
         }
     }

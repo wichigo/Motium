@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.Handler
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.R
 import com.application.motium.data.Trip
@@ -1257,6 +1258,10 @@ class LocationTrackingService : Service() {
             }
 
             ACTION_DEBUG_LOCATION -> {
+                if (!BuildConfig.DEBUG) {
+                    MotiumApplication.logger.w("Debug location ignored in non-debug build", "DebugGPS")
+                    return START_NOT_STICKY
+                }
                 // DEBUG: Injection de position GPS simulée via ADB
                 val lat = intent.getDoubleExtra(EXTRA_DEBUG_LAT, 0.0)
                 val lon = intent.getDoubleExtra(EXTRA_DEBUG_LON, 0.0)
@@ -2524,7 +2529,7 @@ class LocationTrackingService : Service() {
                         "Trip: ${trip.locations.size} points, ${String.format("%.2f", trip.totalDistance / 1000)} km",
                         "DatabaseSave"
                     )
-                    showTripLimitNotification()
+                    showSubscriptionRequiredNotification()
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e(
@@ -2695,9 +2700,9 @@ class LocationTrackingService : Service() {
     }
 
     /**
-     * Show a notification when a trip was not saved due to monthly limit
+     * Show a notification when a trip was not saved due to expired access.
      */
-    private fun showTripLimitNotification() {
+    private fun showSubscriptionRequiredNotification() {
         try {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
 
@@ -2714,8 +2719,8 @@ class LocationTrackingService : Service() {
             )
 
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Limite de trajets atteinte")
-                .setContentText("Passez à Premium pour des trajets illimités")
+                .setContentTitle("Abonnement requis")
+                .setContentText("Votre accès est expiré. Renouvelez votre abonnement pour enregistrer des trajets.")
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
@@ -2724,7 +2729,7 @@ class LocationTrackingService : Service() {
                 .build()
 
             notificationManager.notify(NOTIFICATION_ID + 100, notification)
-            MotiumApplication.logger.i("📢 Trip limit notification shown", "LocationService")
+            MotiumApplication.logger.i("📢 Subscription required notification shown", "LocationService")
         } catch (e: Exception) {
             MotiumApplication.logger.e("Failed to show trip limit notification: ${e.message}", "LocationService", e)
         }

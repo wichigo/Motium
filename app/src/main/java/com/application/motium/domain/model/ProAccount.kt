@@ -27,7 +27,7 @@ data class ProAccount(
     @SerialName("billing_day")
     val billingDay: Int = 5,
 
-    // Jour de renouvellement unifié pour les licences mensuelles (1-15)
+    // Jour de renouvellement unifié pour les licences mensuelles (1-28)
     // Utilisé par Stripe pour ancrer les subscriptions
     @SerialName("billing_anchor_day")
     val billingAnchorDay: Int? = null,

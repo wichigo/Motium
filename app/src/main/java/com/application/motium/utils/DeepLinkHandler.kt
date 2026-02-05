@@ -131,11 +131,11 @@ object DeepLinkHandler {
      * Supports both HTTPS URLs and custom scheme.
      *
      * Supported formats:
-     * - https://motium.org/link?token=xxx (company invitation)
-     * - https://motium.org/link/xxx (company invitation)
-     * - https://motium.org/reset?token=xxx (password reset)
-     * - https://motium.org/verify?token=xxx (email verification)
-     * - https://motium.org/unlink?token=xxx (unlink confirmation)
+     * - https://motium.app/link?token=xxx (company invitation)
+     * - https://motium.app/link/xxx (company invitation)
+     * - https://motium.app/reset?token=xxx (password reset)
+     * - https://motium.app/verify?token=xxx (email verification)
+     * - https://motium.app/unlink?token=xxx (unlink confirmation)
      * - motium://link?token=xxx (company invitation)
      * - motium://link/xxx (company invitation)
      * - motium://reset?token=xxx (password reset)
@@ -147,7 +147,9 @@ object DeepLinkHandler {
     fun handleIntent(intent: Intent): DeepLinkType? {
         val data = intent.data ?: return null
 
-        MotiumApplication.logger.d("Processing deep link: $data", TAG)
+        val pathRoot = data.pathSegments.firstOrNull()
+        val safeSummary = "scheme=${data.scheme}, host=${data.host}, path=/${pathRoot ?: ""}"
+        MotiumApplication.logger.d("Processing deep link: $safeSummary", TAG)
 
         return when {
             isPasswordResetUri(data) -> {
@@ -202,63 +204,49 @@ object DeepLinkHandler {
     }
 
     /**
+     * Check if URI host is the Motium web domain.
+     */
+    private fun isWebHost(uri: Uri): Boolean {
+        return uri.host == "motium.app"
+    }
+
+    /**
+     * Check if URI uses the custom scheme with a specific host.
+     */
+    private fun isCustomHost(uri: Uri, host: String): Boolean {
+        return uri.scheme == "motium" && uri.host == host
+    }
+
+    /**
      * Check if URI is a password reset link.
      */
     private fun isPasswordResetUri(uri: Uri): Boolean {
-        val path = uri.path ?: return false
-
-        // Check for motium.org host or motium scheme
-        val isValidHost = uri.host == "motium.org" || uri.scheme == "motium"
-
-        // Check for /reset path
-        val isResetPath = path.startsWith("/reset")
-
-        return isValidHost && isResetPath
+        val path = uri.path ?: ""
+        return (isWebHost(uri) && path.startsWith("/reset")) || isCustomHost(uri, "reset")
     }
 
     /**
      * Check if URI is a company link invitation.
      */
     private fun isCompanyLinkUri(uri: Uri): Boolean {
-        val path = uri.path ?: return false
-
-        // Check for motium.org host or motium scheme
-        val isValidHost = uri.host == "motium.org" || uri.scheme == "motium"
-
-        // Check for /link path
-        val isLinkPath = path.startsWith("/link")
-
-        return isValidHost && isLinkPath
+        val path = uri.path ?: ""
+        return (isWebHost(uri) && path.startsWith("/link")) || isCustomHost(uri, "link")
     }
 
     /**
      * Check if URI is an email verification link.
      */
     private fun isEmailVerifyUri(uri: Uri): Boolean {
-        val path = uri.path ?: return false
-
-        // Check for motium.org host or motium scheme
-        val isValidHost = uri.host == "motium.org" || uri.scheme == "motium"
-
-        // Check for /verify path
-        val isVerifyPath = path.startsWith("/verify")
-
-        return isValidHost && isVerifyPath
+        val path = uri.path ?: ""
+        return (isWebHost(uri) && path.startsWith("/verify")) || isCustomHost(uri, "verify")
     }
 
     /**
      * Check if URI is an unlink confirmation link.
      */
     private fun isUnlinkConfirmUri(uri: Uri): Boolean {
-        val path = uri.path ?: return false
-
-        // Check for motium.org host or motium scheme
-        val isValidHost = uri.host == "motium.org" || uri.scheme == "motium"
-
-        // Check for /unlink path
-        val isUnlinkPath = path.startsWith("/unlink")
-
-        return isValidHost && isUnlinkPath
+        val path = uri.path ?: ""
+        return (isWebHost(uri) && path.startsWith("/unlink")) || isCustomHost(uri, "unlink")
     }
 
     /**
@@ -272,12 +260,25 @@ object DeepLinkHandler {
             return queryToken
         }
 
-        // Try path segment: /link/xxx
+        // Try path segment: /link/xxx (or /reset/xxx, /verify/xxx, /unlink/xxx)
         val pathSegments = uri.pathSegments
-        if (pathSegments.size >= 2 && pathSegments[0] == "link") {
-            val pathToken = pathSegments[1]
-            if (pathToken.isNotBlank()) {
-                return pathToken
+        if (pathSegments.isNotEmpty()) {
+            if (isWebHost(uri) && pathSegments.size >= 2) {
+                val first = pathSegments[0]
+                if (first in listOf("link", "reset", "verify", "unlink")) {
+                    val pathToken = pathSegments[1]
+                    if (pathToken.isNotBlank()) {
+                        return pathToken
+                    }
+                }
+            }
+
+            // motium://link/<token>
+            if (uri.scheme == "motium" && uri.host in listOf("link", "reset", "verify", "unlink")) {
+                val pathToken = pathSegments[0]
+                if (pathToken.isNotBlank()) {
+                    return pathToken
+                }
             }
         }
 

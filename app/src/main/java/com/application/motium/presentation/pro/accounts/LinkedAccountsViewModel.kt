@@ -418,7 +418,7 @@ class LinkedAccountsViewModel(
     /**
      * Delete a linked account.
      * If the account had a license assigned, the license will be set to pending unlink.
-     * The linked user loses Pro access and reverts to FREE (unless they have their own subscription).
+     * The linked user loses Pro access and reverts to TRIAL/EXPIRED (unless they have their own subscription).
      */
     fun deleteLinkedAccount(user: LinkedUserDto) {
         viewModelScope.launch {

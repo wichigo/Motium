@@ -62,18 +62,30 @@ class ExportViewModel(private val context: Context) : ViewModel() {
     private val _vehicles = MutableStateFlow<List<Vehicle>>(emptyList())
     val vehicles: StateFlow<List<Vehicle>> = _vehicles.asStateFlow()
 
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
     init {
         viewModelScope.launch {
             authRepository.authState.collect { authState ->
                 if (authState.isAuthenticated && authState.user != null) {
-                    // User is authenticated, now load data
-                    loadVehicles(authState.user.id)
-                    loadTrips()
+                    _isLoading.value = true
+                    val userId = authState.user.id
+                    try {
+                        val vehicleList = vehicleRepository.getAllVehiclesForUser(userId)
+                        _vehicles.value = vehicleList
+
+                        val allTrips = tripRepository.getAllTrips()
+                        applyFilters(allTrips)
+                    } finally {
+                        _isLoading.value = false
+                    }
                 } else {
                     // User logged out, clear data
                     _vehicles.value = emptyList()
                     _filteredTrips.value = emptyList()
                     _stats.value = ExportStats()
+                    _isLoading.value = false
                 }
             }
         }

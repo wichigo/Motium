@@ -56,6 +56,9 @@ interface LicenseDao {
     @Query("UPDATE licenses SET status = :status, syncStatus = 'PENDING_UPLOAD', localUpdatedAt = :now, version = version + 1 WHERE id = :licenseId")
     suspend fun updateStatus(licenseId: String, status: String, now: Long)
 
+    @Query("UPDATE licenses SET linkedAccountId = NULL, linkedAt = NULL, unlinkRequestedAt = NULL, unlinkEffectiveAt = NULL, status = 'available', syncStatus = 'SYNCED', localUpdatedAt = :now WHERE id = :licenseId")
+    suspend fun rollbackAssignment(licenseId: String, now: Long)
+
     @Query("DELETE FROM licenses WHERE proAccountId = :proAccountId")
     suspend fun deleteByProAccount(proAccountId: String)
 

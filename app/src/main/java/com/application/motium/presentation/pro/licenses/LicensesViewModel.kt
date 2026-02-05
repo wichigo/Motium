@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.repository.OfflineFirstLicenseRepository
+import com.application.motium.data.supabase.LicenseAssignmentResult
 import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
@@ -52,6 +53,7 @@ data class LicensesDialogState(
     val selectedLicenseForAssignment: License? = null,
     val linkedAccountsForAssignment: List<LinkedUserDto> = emptyList(),
     val isLoadingAccounts: Boolean = false,
+    val assignmentErrorMessage: String? = null,
     // Unlink confirm dialog state
     val showUnlinkConfirmDialog: Boolean = false,
     val licenseToUnlink: License? = null,
@@ -98,6 +100,7 @@ data class LicensesUiState(
     val selectedLicenseForAssignment: License? = null,
     val linkedAccountsForAssignment: List<LinkedUserDto> = emptyList(),
     val isLoadingAccounts: Boolean = false,
+    val assignmentErrorMessage: String? = null,
     // Unlink confirm dialog state
     val showUnlinkConfirmDialog: Boolean = false,
     val licenseToUnlink: License? = null,
@@ -199,6 +202,7 @@ class LicensesViewModel(
             selectedLicenseForAssignment = dialogState.selectedLicenseForAssignment,
             linkedAccountsForAssignment = dialogState.linkedAccountsForAssignment,
             isLoadingAccounts = dialogState.isLoadingAccounts,
+            assignmentErrorMessage = dialogState.assignmentErrorMessage,
             showUnlinkConfirmDialog = dialogState.showUnlinkConfirmDialog,
             licenseToUnlink = dialogState.licenseToUnlink,
             isUnlinking = dialogState.isUnlinking,
@@ -524,7 +528,8 @@ class LicensesViewModel(
         _dialogState.update { it.copy(
             showAssignDialog = true,
             selectedLicenseForAssignment = license,
-            isLoadingAccounts = true
+            isLoadingAccounts = true,
+            assignmentErrorMessage = null
         )}
         loadUnlicensedAccounts()
     }
@@ -536,7 +541,8 @@ class LicensesViewModel(
         _dialogState.update { it.copy(
             showAssignDialog = false,
             selectedLicenseForAssignment = null,
-            linkedAccountsForAssignment = emptyList()
+            linkedAccountsForAssignment = emptyList(),
+            assignmentErrorMessage = null
         )}
     }
 
@@ -603,20 +609,74 @@ class LicensesViewModel(
                     return@launch
                 }
 
-                offlineFirstLicenseRepo.assignLicenseToAccount(
+                when (val result = licenseRemoteDataSource.assignLicenseWithValidation(
                     licenseId = licenseId,
                     proAccountId = proAccountId,
-                    linkedAccountId = linkedAccountId
-                )
+                    collaboratorId = linkedAccountId
+                )) {
+                    is LicenseAssignmentResult.Success -> {
+                        // Refresh cache to sync local DB
+                        licenseCacheManager.forceRefresh(proAccountId)
+                        _dialogState.update { it.copy(
+                            showAssignDialog = false,
+                            selectedLicenseForAssignment = null,
+                            assignmentErrorMessage = null,
+                            successMessage = "Licence assignee avec succes"
+                        )}
+                    }
+                    is LicenseAssignmentResult.AlreadyLifetime -> {
+                        _dialogState.update { it.copy(assignmentErrorMessage = result.message) }
+                    }
+                    is LicenseAssignmentResult.AlreadyLicensed -> {
+                        _dialogState.update { it.copy(assignmentErrorMessage = result.message) }
+                    }
+                    is LicenseAssignmentResult.LicenseNotAvailable -> {
+                        _dialogState.update { it.copy(assignmentErrorMessage = result.message) }
+                    }
+                    is LicenseAssignmentResult.CollaboratorNotFound -> {
+                        _dialogState.update { it.copy(assignmentErrorMessage = result.message) }
+                    }
+                    is LicenseAssignmentResult.NeedsCancelExisting -> {
+                        // Cancel collaborator's individual subscription, then assign license
+                        val cancelResult = subscriptionManager.cancelSubscription(
+                            userId = linkedAccountId,
+                            cancelImmediately = true
+                        )
+                        if (cancelResult.isFailure) {
+                            _dialogState.update { it.copy(
+                                assignmentErrorMessage = cancelResult.exceptionOrNull()?.message
+                                    ?: "Erreur lors de la resiliation de l'abonnement"
+                            ) }
+                            return@launch
+                        }
 
-                _dialogState.update { it.copy(
-                    showAssignDialog = false,
-                    selectedLicenseForAssignment = null,
-                    successMessage = "Licence assignee avec succes"
-                )}
-                // Flow will auto-update when local DB changes
+                        val assignAfterCancel = licenseRemoteDataSource.assignLicenseToAccount(
+                            licenseId = licenseId,
+                            proAccountId = proAccountId,
+                            linkedAccountId = linkedAccountId
+                        )
+
+                        if (assignAfterCancel.isSuccess) {
+                            licenseCacheManager.forceRefresh(proAccountId)
+                            _dialogState.update { it.copy(
+                                showAssignDialog = false,
+                                selectedLicenseForAssignment = null,
+                                assignmentErrorMessage = null,
+                                successMessage = "Abonnement resilie et licence assignee"
+                            )}
+                        } else {
+                            _dialogState.update { it.copy(
+                                assignmentErrorMessage = assignAfterCancel.exceptionOrNull()?.message
+                                    ?: "Erreur lors de l'attribution de la licence"
+                            ) }
+                        }
+                    }
+                    is LicenseAssignmentResult.Error -> {
+                        _dialogState.update { it.copy(assignmentErrorMessage = result.message) }
+                    }
+                }
             } catch (e: Exception) {
-                _dialogState.update { it.copy(error = "Erreur: ${e.message}") }
+                _dialogState.update { it.copy(assignmentErrorMessage = "Erreur: ${e.message}") }
             }
         }
     }
@@ -831,6 +891,13 @@ class LicensesViewModel(
      */
     fun clearError() {
         _dialogState.update { it.copy(error = null) }
+    }
+
+    /**
+     * Clear assignment error message
+     */
+    fun clearAssignmentError() {
+        _dialogState.update { it.copy(assignmentErrorMessage = null) }
     }
 
     /**

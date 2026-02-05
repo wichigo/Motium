@@ -1137,10 +1137,10 @@ class ExportManager(private val context: Context) {
                                         stream.readBytes()
                                     }
                                 }
-                                expense.photoUri.startsWith("http://") || expense.photoUri.startsWith("https://") -> {
-                                    // C'est une URL Supabase, utiliser le service authentifié
+                                expense.photoUri.startsWith("https://") -> {
+                                    // URL Supabase en HTTPS uniquement
                                     try {
-                                        MotiumApplication.logger.i("Downloading photo from Supabase: ${expense.photoUri}", "ExportManager")
+                                        MotiumApplication.logger.i("Downloading photo from Supabase", "ExportManager")
                                         val result = runBlocking {
                                             storageService.downloadReceiptPhoto(expense.photoUri)
                                         }
@@ -1154,6 +1154,10 @@ class ExportManager(private val context: Context) {
                                         MotiumApplication.logger.e("Error downloading photo: ${e.message}", "ExportManager", e)
                                         null
                                     }
+                                }
+                                expense.photoUri.startsWith("http://") -> {
+                                    MotiumApplication.logger.w("Blocked cleartext photo URL in export", "ExportManager")
+                                    null
                                 }
                                 else -> null
                             }
@@ -1912,10 +1916,14 @@ class ExportManager(private val context: Context) {
                         stream.readBytes()
                     }
                 }
-                photoUri.startsWith("http://") || photoUri.startsWith("https://") -> {
+                photoUri.startsWith("https://") -> {
                     runBlocking {
                         storageService.downloadReceiptPhoto(photoUri).getOrNull()
                     }
+                }
+                photoUri.startsWith("http://") -> {
+                    MotiumApplication.logger.w("Blocked cleartext photo URL in export", "ExportManager")
+                    null
                 }
                 else -> null
             }
@@ -2696,14 +2704,21 @@ class ExportManager(private val context: Context) {
                     try {
                         // Tenter de charger l'image depuis l'URI (peut être local ou Supabase)
                         val photoUri = expense.photoUri!!
-                        val photoBytes: ByteArray? = if (photoUri.startsWith("http")) {
-                            // URL Supabase
-                            runBlocking { storageService.downloadReceiptPhoto(photoUri).getOrNull() }
-                        } else {
-                            // Fichier local
-                            try {
-                                java.io.File(photoUri).readBytes()
-                            } catch (e: Exception) { null }
+                        val photoBytes: ByteArray? = when {
+                            photoUri.startsWith("https://") -> {
+                                // URL Supabase (HTTPS uniquement)
+                                runBlocking { storageService.downloadReceiptPhoto(photoUri).getOrNull() }
+                            }
+                            photoUri.startsWith("http://") -> {
+                                MotiumApplication.logger.w("Blocked cleartext photo URL in export", "ExportManager")
+                                null
+                            }
+                            else -> {
+                                // Fichier local
+                                try {
+                                    java.io.File(photoUri).readBytes()
+                                } catch (e: Exception) { null }
+                            }
                         }
                         if (photoBytes != null && photoBytes.isNotEmpty()) {
                             val imageData = com.itextpdf.io.image.ImageDataFactory.create(photoBytes)

@@ -27,10 +27,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.LinkedAccountRemoteDataSource
 import com.application.motium.data.supabase.LinkedUserDto
+import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.data.supabase.ProSettingsRepository
 import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.supabase.TripRemoteDataSource
 import com.application.motium.data.supabase.VehicleRemoteDataSource
+import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicenseEffectiveStatus
 import com.application.motium.domain.model.LinkStatus
@@ -59,6 +61,8 @@ fun AccountDetailsScreen(
     val coroutineScope = rememberCoroutineScope()
     val themeManager = remember { ThemeManager.getInstance(context) }
     val linkedAccountRemoteDataSource = remember { LinkedAccountRemoteDataSource.getInstance(context) }
+    val licenseRemoteDataSource = remember { LicenseRemoteDataSource.getInstance(context) }
+    val subscriptionManager = remember { SubscriptionManager.getInstance(context) }
     val tripRemoteDataSource = remember { TripRemoteDataSource.getInstance(context) }
     val vehicleRemoteDataSource = remember { VehicleRemoteDataSource.getInstance(context) }
     val offlineFirstLicenseRepo = remember { com.application.motium.data.repository.OfflineFirstLicenseRepository.getInstance(context) }
@@ -410,14 +414,58 @@ fun AccountDetailsScreen(
                 proAccountId?.let { proId ->
                     coroutineScope.launch(Dispatchers.IO) {
                         try {
-                            offlineFirstLicenseRepo.assignLicenseToAccount(
+                            when (val result = licenseRemoteDataSource.assignLicenseWithValidation(
                                 licenseId = selectedLicense.id,
                                 proAccountId = proId,
-                                linkedAccountId = accountId
-                            )
-                            showAssignLicenseDialog = false
-                            successMessage = "Licence assignee avec succes"
-                            reloadLicenseData()
+                                collaboratorId = accountId
+                            )) {
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.Success -> {
+                                    licenseCacheManager.forceRefresh(proId)
+                                    showAssignLicenseDialog = false
+                                    successMessage = "Licence assignee avec succes"
+                                    reloadLicenseData()
+                                }
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.NeedsCancelExisting -> {
+                                    val cancelResult = subscriptionManager.cancelSubscription(
+                                        userId = accountId,
+                                        cancelImmediately = true
+                                    )
+                                    if (cancelResult.isFailure) {
+                                        error = cancelResult.exceptionOrNull()?.message
+                                            ?: "Erreur lors de la resiliation de l'abonnement"
+                                        return@launch
+                                    }
+                                    val assignAfterCancel = licenseRemoteDataSource.assignLicenseToAccount(
+                                        licenseId = selectedLicense.id,
+                                        proAccountId = proId,
+                                        linkedAccountId = accountId
+                                    )
+                                    if (assignAfterCancel.isSuccess) {
+                                        licenseCacheManager.forceRefresh(proId)
+                                        showAssignLicenseDialog = false
+                                        successMessage = "Abonnement resilie et licence assignee"
+                                        reloadLicenseData()
+                                    } else {
+                                        error = assignAfterCancel.exceptionOrNull()?.message
+                                            ?: "Erreur lors de l'attribution de la licence"
+                                    }
+                                }
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.AlreadyLifetime -> {
+                                    error = result.message
+                                }
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.AlreadyLicensed -> {
+                                    error = result.message
+                                }
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.LicenseNotAvailable -> {
+                                    error = result.message
+                                }
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.CollaboratorNotFound -> {
+                                    error = result.message
+                                }
+                                is com.application.motium.data.supabase.LicenseAssignmentResult.Error -> {
+                                    error = result.message
+                                }
+                            }
                         } catch (e: Exception) {
                             error = e.message
                         }

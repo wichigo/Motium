@@ -113,7 +113,7 @@ serve(async (req) => {
         console.log(`Found existing customer for user: ${stripeCustomerId}`)
       } else {
         // Create new Stripe customer
-        const customerEmail = email || userData?.email || `user_${user_id}@motium.org`
+        const customerEmail = email || userData?.email || `user_${user_id}@motium.app`
         const customer = await stripe.customers.create({
           email: customerEmail,
           metadata: {
@@ -159,7 +159,7 @@ serve(async (req) => {
         console.log(`Found existing customer for pro owner: ${stripeCustomerId}`)
       } else {
         // Create new Stripe customer for the pro account owner
-        const customerEmail = email || ownerData?.email || `user_${ownerUserId}@motium.org`
+        const customerEmail = email || ownerData?.email || `user_${ownerUserId}@motium.app`
         const customer = await stripe.customers.create({
           email: customerEmail,
           name: proData?.company_name || undefined,
@@ -220,7 +220,7 @@ serve(async (req) => {
           quantity: quantity.toString(),
           product_id: productId,
         },
-        return_url: 'https://motium.org/payment/complete',
+        return_url: 'https://motium.app/payment/complete',
       })
 
       console.log(`✅ Lifetime PaymentIntent created: ${paymentIntent.id}, status: ${paymentIntent.status}`)
@@ -259,7 +259,7 @@ serve(async (req) => {
           product_id: productId,
           is_initial_payment: 'true', // Mark as initial payment
         },
-        return_url: 'https://motium.org/payment/complete',
+        return_url: 'https://motium.app/payment/complete',
       })
 
       console.log(`✅ Initial PaymentIntent: ${paymentIntent.id}, status: ${paymentIntent.status}`)
@@ -380,11 +380,24 @@ async function handleProSubscription(
     const subscriptionItem = subscription.items.data[0]
 
     if (subscriptionItem) {
+      // Use the larger of Stripe quantity or DB license count to avoid drift
+      const { count: currentLicenseCount } = await supabase
+        .from('licenses')
+        .select('id', { count: 'exact', head: true })
+        .eq('pro_account_id', proAccountId)
+        .eq('is_lifetime', false)
+        .not('status', 'eq', 'canceled')
+
+      const stripeQuantity = subscriptionItem.quantity || 0
+      const dbQuantity = currentLicenseCount || 0
+      const baseQuantity = Math.max(stripeQuantity, dbQuantity)
+      const newQuantity = baseQuantity + quantity
+
       // Increment quantity without proration
       await stripe.subscriptions.update(existingSubscriptionId, {
         items: [{
           id: subscriptionItem.id,
-          quantity: (subscriptionItem.quantity || 0) + quantity,
+          quantity: newQuantity,
         }],
         proration_behavior: 'none', // No proration, user already paid
         metadata: {
@@ -393,7 +406,7 @@ async function handleProSubscription(
           last_payment_intent: paymentIntentId,
         },
       })
-      console.log(`✅ Updated subscription quantity to ${(subscriptionItem.quantity || 0) + quantity}`)
+      console.log(`✅ Updated subscription quantity to ${newQuantity} (stripe=${stripeQuantity}, db=${dbQuantity})`)
     }
   } else {
     // Create new subscription for this Pro account

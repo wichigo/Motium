@@ -235,7 +235,10 @@
       "Bash(.gradlew.bat assembleDebug)",
       "Bash(cmd /c \"gradlew assembleDebug\")",
       "Bash(C:/Users/Wylde_2y5smzd/AndroidStudioProjects/Motium/gradlew.bat assembleDebug:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(git -C \"C:\\\\Users\\\\Wylde_2y5smzd\\\\AndroidStudioProjects\\\\Motium\" commit:*)",
+      "WebFetch(domain:support.stripe.com)",
+      "Bash(deno test:*)"
     ],
     "deny": [],
     "ask": []

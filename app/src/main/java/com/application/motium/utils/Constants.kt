@@ -83,8 +83,7 @@ object Constants {
 
     const val NOMINATIM_USER_AGENT = "Motium/1.0"
 
-    // Subscription limits
-    const val FREE_PLAN_TRIP_LIMIT = 10
+    // Subscription pricing
     const val PREMIUM_PLAN_PRICE_EUR = 5
     const val LIFETIME_PLAN_PRICE_EUR = 150
 

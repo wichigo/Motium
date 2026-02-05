@@ -756,7 +756,7 @@ PRO USER:
 3. Enter employee email
 4. Select sharing permissions
 5. System generates invitation token
-6. Email sent with deep link: https://motium.org/link?token=xxx
+6. Email sent with deep link: https://motium.app/link?token=xxx
 
 INDIVIDUAL USER:
 7. Opens email, taps link

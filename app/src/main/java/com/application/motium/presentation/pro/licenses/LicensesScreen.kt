@@ -274,6 +274,13 @@ fun LicensesScreen(
             onAssign = { licenseId, accountId -> viewModel.assignLicenseToAccount(licenseId, accountId) }
         )
     }
+    val assignmentErrorMessage = uiState.assignmentErrorMessage
+    if (uiState.showAssignDialog && assignmentErrorMessage != null) {
+        AssignmentErrorDialog(
+            message = assignmentErrorMessage,
+            onDismiss = { viewModel.clearAssignmentError() }
+        )
+    }
 
     // Unlink confirmation dialog
     val licenseToUnlink = uiState.licenseToUnlink

@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.R
 import com.google.android.gms.location.*
@@ -274,6 +275,10 @@ class ActivityRecognitionService : Service() {
         // ==================== DEBUG TRANSITION (Tests ADB) ====================
         // Permet d'injecter des transitions via ADB pour tester la state machine
         if (action == ACTION_DEBUG_TRANSITION) {
+            if (!BuildConfig.DEBUG) {
+                MotiumApplication.logger.w("Debug transition ignored in non-debug build", TAG)
+                return START_NOT_STICKY
+            }
             handleDebugTransition(intent)
             return START_STICKY
         }

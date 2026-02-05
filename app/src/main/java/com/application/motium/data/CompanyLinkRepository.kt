@@ -264,7 +264,7 @@ class CompanyLinkRepository private constructor(private val context: Context) {
      */
     suspend fun activateLinkOfflineFirst(token: String, userId: String): Result<CompanyLink> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("Offline-first activation for token: $token, user: $userId", "CompanyLinkRepository")
+            MotiumApplication.logger.i("Offline-first activation for invitation token (redacted), user: $userId", "CompanyLinkRepository")
 
             // 1. Create a pending operation for this activation
             val operationId = UUID.randomUUID().toString()

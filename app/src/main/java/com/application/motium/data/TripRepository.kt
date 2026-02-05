@@ -12,6 +12,7 @@ import com.application.motium.domain.model.Trip as DomainTrip
 import com.application.motium.domain.model.TripType
 import com.application.motium.domain.model.LocationPoint
 import com.application.motium.domain.model.TrackingMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
@@ -33,7 +34,6 @@ import com.application.motium.data.preferences.ProLicenseCache
 import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.UserRole
 import com.application.motium.utils.TripCalculator
-import com.application.motium.utils.TrustedTimeProvider
 
 @Serializable
 data class TripLocation(
@@ -494,22 +494,16 @@ class TripRepository private constructor(context: Context) {
                 )
             }
 
-            // SECURITY FIX: Use trusted time for access checks to prevent clock manipulation
-            val trustedTimeMs = TrustedTimeProvider.getInstance(appContext).getTrustedTimeMs()
-
-            if (subscription.hasValidAccessSecure(trustedTimeMs)) {
-                TripAccessCheckResult.Allowed(
+            // New policy: if the user can access the app, they can create unlimited trips.
+            // Only EXPIRED is denied; TRIAL/PREMIUM/LIFETIME/LICENSED are allowed.
+            when (subscription.type) {
+                SubscriptionType.EXPIRED -> TripAccessCheckResult.AccessDenied(
+                    reason = "Votre abonnement est expiré"
+                )
+                else -> TripAccessCheckResult.Allowed(
                     isInTrial = subscription.isInTrial(),
                     trialDaysRemaining = subscription.daysLeftInTrial()
                 )
-            } else {
-                // Determine the denial reason
-                val reason = when {
-                    trustedTimeMs == null -> "Veuillez vous connecter à Internet pour vérifier votre abonnement"
-                    subscription.type == SubscriptionType.EXPIRED -> "Votre essai gratuit est terminé"
-                    else -> "Abonnement requis"
-                }
-                TripAccessCheckResult.AccessDenied(reason = reason)
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error checking trip access: ${e.message}", "TripRepository", e)
@@ -649,6 +643,80 @@ class TripRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading paginated trips: ${e.message}", "TripRepository", e)
             return@withContext emptyList()
+        }
+    }
+
+    /**
+     * PREFETCH: Charge rapidement les derniers trajets depuis Supabase si Room est vide.
+     * Objectif: afficher des trajets dÃ¨s la connexion (avant que le delta sync complet termine).
+     *
+     * - Ne touche pas aux donnÃ©es locales si elles existent dÃ©jÃ 
+     * - N'Ã©crit que des entitÃ©s SYNCED pour Ã©viter les conflits
+     *
+     * @return Nombre de trajets prÃ©chargÃ©s
+     */
+    suspend fun prefetchLatestTripsIfEmpty(userId: String, limit: Int = 10): Int = withContext(Dispatchers.IO) {
+        try {
+            // Ne rien faire si on a dÃ©jÃ  des trajets locaux
+            val localTrips = tripDao.getTripsForUser(userId)
+            if (localTrips.isNotEmpty()) {
+                return@withContext 0
+            }
+
+            MotiumApplication.logger.i(
+                "Prefetching latest trips from Supabase (limit=$limit) for user: $userId",
+                "TripRepository"
+            )
+
+            val result = tripRemoteDataSource.getTripsWithPagination(
+                userId = userId,
+                limit = limit,
+                offset = 0,
+                validatedOnly = false
+            )
+
+            if (result.isFailure) {
+                MotiumApplication.logger.w(
+                    "Trip prefetch failed: ${result.exceptionOrNull()?.message}",
+                    "TripRepository"
+                )
+                return@withContext 0
+            }
+
+            val remoteTrips = result.getOrNull()?.trips ?: emptyList()
+            if (remoteTrips.isEmpty()) {
+                return@withContext 0
+            }
+
+            val now = System.currentTimeMillis()
+            val entities = remoteTrips.map { domainTrip ->
+                val dataTrip = domainTrip.toDataTrip().copy(userId = userId)
+                dataTrip.toEntity(
+                    userId = userId,
+                    syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name,
+                    localUpdatedAt = now,
+                    serverUpdatedAt = dataTrip.updatedAt,
+                    version = 1
+                )
+            }
+
+            tripDao.insertTrips(entities)
+
+            MotiumApplication.logger.i(
+                "Prefetched ${entities.size} trips into Room",
+                "TripRepository"
+            )
+
+            return@withContext entities.size
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Error prefetching trips: ${e.message}",
+                "TripRepository",
+                e
+            )
+            return@withContext 0
         }
     }
 

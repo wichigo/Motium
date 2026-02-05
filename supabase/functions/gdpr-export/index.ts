@@ -10,10 +10,34 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 }
 
+const textEncoder = new TextEncoder()
+
+const base64UrlEncode = (data: ArrayBuffer): string => {
+  let binary = ""
+  const bytes = new Uint8Array(data)
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+const createDownloadToken = async (secret: string, requestId: string): Promise<string> => {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  )
+  const signature = await crypto.subtle.sign("HMAC", key, textEncoder.encode(requestId))
+  return base64UrlEncode(signature)
+}
+
 interface ExportResponse {
   success: boolean
   request_id?: string
   download_url?: string
+  expires_at?: string
   expires_in_hours?: number
   data?: object
   error?: string
@@ -147,19 +171,15 @@ serve(async (req) => {
         upsert: false
       })
 
-    let downloadUrl: string | null = null
     const expiresInSeconds = 86400 // 24 hours
 
+    // Generate download URL via our proxy function (hides storage path, forces download)
+    let downloadUrl: string | null = null
     if (!storageError) {
-      // Create signed URL (valid for 24 hours)
-      const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
-        .storage
-        .from("gdpr-exports")
-        .createSignedUrl(fileName, expiresInSeconds)
-
-      if (!signedUrlError && signedUrlData) {
-        downloadUrl = signedUrlData.signedUrl
-      }
+      // Use public URL for the download endpoint
+      const publicApiUrl = "https://api.motium.app"
+      const downloadToken = await createDownloadToken(supabaseServiceKey, requestId)
+      downloadUrl = `${publicApiUrl}/functions/v1/gdpr-download?request_id=${requestId}&token=${downloadToken}`
     } else {
       console.warn("Storage upload error (non-fatal):", storageError)
     }
@@ -221,6 +241,7 @@ serve(async (req) => {
       success: true,
       request_id: requestId,
       download_url: downloadUrl || undefined,
+      expires_at: expiresAt,
       expires_in_hours: 24,
       data: exportData
     }

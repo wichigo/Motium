@@ -122,7 +122,12 @@ class SupabaseStorageService(private val context: Context) {
      */
     suspend fun downloadReceiptPhoto(photoUrl: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         try {
-            MotiumApplication.logger.i("📥 Downloading receipt photo: $photoUrl", "SupabaseStorage")
+            if (photoUrl.startsWith("http://")) {
+                MotiumApplication.logger.w("Blocked cleartext receipt photo URL", "SupabaseStorage")
+                return@withContext Result.failure(Exception("Cleartext HTTP blocked"))
+            }
+
+            MotiumApplication.logger.i("📥 Downloading receipt photo", "SupabaseStorage")
 
             // Download directly via public URL using OkHttp
             val request = Request.Builder()

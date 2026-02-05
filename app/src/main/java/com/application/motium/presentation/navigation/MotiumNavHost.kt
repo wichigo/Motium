@@ -69,7 +69,7 @@ fun MotiumNavHost(
         MotiumApplication.logger.i("🧭 Navigation LaunchedEffect triggered", "Navigation")
         MotiumApplication.logger.i("   - isLoading: ${authState.isLoading}", "Navigation")
         MotiumApplication.logger.i("   - isAuthenticated: ${authState.isAuthenticated}", "Navigation")
-        MotiumApplication.logger.i("   - user: ${authState.user?.email}", "Navigation")
+        MotiumApplication.logger.i("   - userPresent: ${authState.user != null}", "Navigation")
         MotiumApplication.logger.i("   - role: ${authState.user?.role}", "Navigation")
         MotiumApplication.logger.i("   - subscription: ${authState.user?.subscription?.type}", "Navigation")
         MotiumApplication.logger.i("   - initialSyncDone: ${authState.initialSyncDone}", "Navigation")
@@ -77,6 +77,11 @@ fun MotiumNavHost(
         if (!authState.isLoading) {
             // Chargement terminé, naviguer vers la destination appropriée
             if (authState.isAuthenticated && authState.user != null) {
+                if (!authState.initialSyncDone) {
+                    MotiumApplication.logger.d("⏳ Waiting for initial sync before navigation...", "Navigation")
+                    return@LaunchedEffect
+                }
+
                 val subscriptionType = authState.user?.subscription?.type
                 val hasValidAccess = authState.user?.subscription?.hasValidAccess() == true
                 val isProUser = authState.user?.role == UserRole.ENTERPRISE
@@ -91,7 +96,7 @@ fun MotiumNavHost(
                     return@LaunchedEffect  // Wait for proLicenseState to update
                 }
                 // INDIVIDUAL USERS: Check subscription/trial expiration
-                // IMPORTANT: Attendre initialSyncDone pour éviter de naviguer vers expired screen
+                // IMPORTANT: Attendre initialSyncDone pour éviter de forcer logout
                 // avec des données Room obsolètes (ex: user a payé mais Room pas encore mis à jour)
                 else if (subscriptionType == SubscriptionType.EXPIRED || !hasValidAccess) {
                     if (!authState.initialSyncDone) {
@@ -99,22 +104,10 @@ fun MotiumNavHost(
                         return@LaunchedEffect  // Attendre que la sync soit terminée
                     }
 
-                    // Determine if this is a subscription expiration (had paid) or trial expiration
-                    val hadPaidSubscription = authState.user?.subscription?.stripeCustomerId != null ||
-                        authState.user?.subscription?.stripeSubscriptionId != null ||
-                        subscriptionType == SubscriptionType.PREMIUM
-
-                    val targetRoute = if (hadPaidSubscription) "subscription_expired" else "trial_expired"
-                    MotiumApplication.logger.i("🚫 Access expired (sync done) - navigating to $targetRoute", "Navigation")
-
-                    navController.navigate(targetRoute) {
-                        popUpTo("splash") { inclusive = true }
-                        popUpTo("login") { inclusive = true }
-                        popUpTo("register") { inclusive = true }
-                        popUpTo("home") { inclusive = true }
-                        popUpTo("enterprise_home") { inclusive = true }
-                        launchSingleTop = true
-                    }
+                    // EXPIRED = forced logout (no expired screen, direct logout)
+                    // This ensures users cannot use the app with expired status
+                    MotiumApplication.logger.i("🔴 EXPIRED detected in navigation (sync done) - forcing logout", "Navigation")
+                    authViewModel.signOut()
                     return@LaunchedEffect
                 }
 

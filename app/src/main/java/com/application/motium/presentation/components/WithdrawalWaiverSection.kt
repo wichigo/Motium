@@ -86,7 +86,7 @@ fun WithdrawalWaiverSection(
             // Lien vers les CGV
             TextButton(
                 onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://motium.org/terms"))
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://motium.app/terms"))
                     context.startActivity(intent)
                 },
                 modifier = Modifier.align(Alignment.End)

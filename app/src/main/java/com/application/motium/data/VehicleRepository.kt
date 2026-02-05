@@ -8,6 +8,7 @@ import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.local.entities.toDomainModel
 import com.application.motium.data.local.entities.toEntity
+import com.application.motium.data.supabase.VehicleRemoteDataSource
 import com.application.motium.data.sync.OfflineFirstSyncManager
 import com.application.motium.domain.model.Vehicle
 import kotlinx.coroutines.Dispatchers
@@ -168,6 +169,136 @@ class VehicleRepository private constructor(context: Context) {
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error loading vehicles from Room: ${e.message}", "VehicleRepository", e)
             return@withContext emptyList()
+        }
+    }
+
+    /**
+     * PREFETCH: Charge rapidement les vÃ©hicules depuis Supabase si Room est vide.
+     * Objectif: afficher les vÃ©hicules dÃ¨s la connexion (avant la fin du delta sync).
+     *
+     * - Ne touche pas aux donnÃ©es locales si elles existent dÃ©jÃ 
+     * - N'Ã©crit que des entitÃ©s SYNCED pour Ã©viter les conflits
+     *
+     * @return Nombre de vÃ©hicules prÃ©chargÃ©s
+     */
+    suspend fun prefetchVehiclesIfEmpty(userId: String): Int = withContext(Dispatchers.IO) {
+        try {
+            val localVehicles = vehicleDao.getVehiclesForUser(userId)
+            if (localVehicles.isNotEmpty()) {
+                return@withContext 0
+            }
+
+            MotiumApplication.logger.i(
+                "Prefetching vehicles from Supabase for user: $userId",
+                "VehicleRepository"
+            )
+
+            val remoteVehicles = VehicleRemoteDataSource.getInstance(appContext)
+                .getAllVehiclesForUser(userId)
+
+            if (remoteVehicles.isEmpty()) {
+                return@withContext 0
+            }
+
+            val now = System.currentTimeMillis()
+            val entities = remoteVehicles.map { vehicle ->
+                vehicle.toEntity(
+                    syncStatus = SyncStatus.SYNCED.name,
+                    localUpdatedAt = now,
+                    serverUpdatedAt = vehicle.updatedAt.toEpochMilliseconds(),
+                    version = 1
+                )
+            }
+
+            vehicleDao.insertVehicles(entities)
+
+            MotiumApplication.logger.i(
+                "Prefetched ${entities.size} vehicles into Room",
+                "VehicleRepository"
+            )
+
+            return@withContext entities.size
+        } catch (e: java.util.concurrent.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Error prefetching vehicles: ${e.message}",
+                "VehicleRepository",
+                e
+            )
+            return@withContext 0
+        }
+    }
+
+    /**
+     * FORCE REFRESH: Charge tous les vÃ©hicules depuis Supabase et met Ã  jour Room.
+     * UtilisÃ© pour s'assurer que les vÃ©hicules sont prÃªts avant d'afficher Home.
+     *
+     * - Ne remplace pas les vÃ©hicules avec modifications locales (syncStatus != SYNCED)
+     * - Supprime les vÃ©hicules orphelins cÃ´tÃ© local (si absents serveur et SYNCED)
+     *
+     * @return Nombre de vÃ©hicules synchronisÃ©s depuis le serveur
+     */
+    suspend fun refreshVehiclesBlocking(userId: String): Int = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i(
+                "Refreshing vehicles from Supabase for user: $userId",
+                "VehicleRepository"
+            )
+
+            val remoteVehicles = VehicleRemoteDataSource.getInstance(appContext)
+                .getAllVehiclesForUser(userId)
+
+            val localVehicles = vehicleDao.getVehiclesForUser(userId)
+            val localById = localVehicles.associateBy { it.id }
+            val serverIds = remoteVehicles.map { it.id }.toSet()
+
+            var syncedCount = 0
+            var skippedCount = 0
+            var deletedCount = 0
+
+            // Delete local vehicles that no longer exist on server (only if SYNCED)
+            for (local in localVehicles) {
+                if (local.id !in serverIds && local.syncStatus == SyncStatus.SYNCED.name) {
+                    vehicleDao.deleteVehicleById(local.id)
+                    deletedCount++
+                }
+            }
+
+            // Upsert server vehicles (skip if local has pending changes)
+            val now = System.currentTimeMillis()
+            for (vehicle in remoteVehicles) {
+                val local = localById[vehicle.id]
+                if (local == null || local.syncStatus == SyncStatus.SYNCED.name) {
+                    vehicleDao.insertVehicle(
+                        vehicle.toEntity(
+                            syncStatus = SyncStatus.SYNCED.name,
+                            localUpdatedAt = now,
+                            serverUpdatedAt = vehicle.updatedAt.toEpochMilliseconds(),
+                            version = 1
+                        )
+                    )
+                    syncedCount++
+                } else {
+                    skippedCount++
+                }
+            }
+
+            MotiumApplication.logger.i(
+                "Vehicle refresh: $syncedCount synced, $skippedCount skipped, $deletedCount deleted",
+                "VehicleRepository"
+            )
+
+            return@withContext syncedCount
+        } catch (e: java.util.concurrent.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Error refreshing vehicles: ${e.message}",
+                "VehicleRepository",
+                e
+            )
+            return@withContext 0
         }
     }
 

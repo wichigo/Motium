@@ -91,7 +91,7 @@ serve(async (req) => {
     switch (event.type) {
       case "payment_intent.succeeded": {
         const paymentIntent = event.data.object as Stripe.PaymentIntent
-        await handlePaymentIntentSucceeded(supabase, paymentIntent)
+        await handlePaymentIntentSucceeded(supabase, stripe, paymentIntent)
         break
       }
 
@@ -177,6 +177,7 @@ serve(async (req) => {
  */
 async function handlePaymentIntentSucceeded(
   supabase: any,
+  stripe: Stripe,
   paymentIntent: Stripe.PaymentIntent
 ) {
   // FIX BUG: Skip PaymentIntents that belong to subscriptions (invoices)
@@ -232,9 +233,50 @@ async function handlePaymentIntentSucceeded(
     }
 
     // Rule 4: PREMIUM users CAN upgrade to LIFETIME (valid upgrade path)
-    // The old subscription should be canceled separately by the client after purchase
     if (currentType === "PREMIUM" && price_type === "individual_lifetime") {
       console.log(`⬆️ User ${supabase_user_id} upgrading from PREMIUM to LIFETIME`)
+
+      // AUTO-CANCEL: Immediately cancel the existing monthly subscription
+      // when upgrading to LIFETIME to prevent double billing
+      const { data: existingMonthly } = await supabase
+        .from("stripe_subscriptions")
+        .select("id, stripe_subscription_id")
+        .eq("user_id", supabase_user_id)
+        .eq("subscription_type", "individual_monthly")
+        .in("status", ["active", "trialing", "past_due"])
+        .maybeSingle()
+
+      if (existingMonthly?.stripe_subscription_id) {
+        const now = new Date().toISOString()
+
+        try {
+          // 1. Cancel on Stripe with cancel_at_period_end = true
+          // This stops future billing immediately
+          await stripe.subscriptions.update(existingMonthly.stripe_subscription_id, {
+            cancel_at_period_end: true,
+          })
+
+          // 2. Update our stripe_subscriptions table
+          // Mark as canceled immediately since user now has LIFETIME
+          await supabase
+            .from("stripe_subscriptions")
+            .update({
+              cancel_at_period_end: true,
+              canceled_at: now,
+              ended_at: now,
+              status: "canceled",
+              updated_at: now,
+            })
+            .eq("id", existingMonthly.id)
+
+          console.log(`✅ Auto-canceled monthly subscription ${existingMonthly.stripe_subscription_id} due to lifetime upgrade`)
+        } catch (err) {
+          // Non-blocking: Don't prevent lifetime purchase if cancellation fails
+          // The user will have their old subscription to manage manually
+          console.error(`⚠️ Failed to auto-cancel monthly subscription (non-blocking):`, err)
+        }
+      }
+
       // Continue with the payment - LIFETIME will override PREMIUM via trigger
     }
 
@@ -585,9 +627,13 @@ async function handleInvoicePaid(
   console.log(`   New period end: ${periodEnd}`)
 
   // Extract subscription item and price info for reference
-  const subscriptionItem = subscription.items.data[0]
-  const stripePriceId = subscriptionItem?.price?.id || null
-  const stripeSubscriptionItemId = subscriptionItem?.id || null
+    const subscriptionItem = subscription.items.data[0]
+    const stripePriceId = subscriptionItem?.price?.id || null
+    const stripeSubscriptionItemId = subscriptionItem?.id || null
+    const metadataQuantity = parseInt(quantity || "1")
+    const stripeQuantity = (typeof subscriptionItem?.quantity === "number" && subscriptionItem.quantity > 0)
+      ? subscriptionItem.quantity
+      : (metadataQuantity > 0 ? metadataQuantity : 1)
 
   // FIX: Get internal stripe_subscription_ref (UUID) from stripe_subscriptions table
   const { data: internalSub } = await supabase
@@ -943,6 +989,10 @@ async function handleSubscriptionUpdate(
   const subscriptionItem = subscription.items.data[0]
   const stripePriceId = subscriptionItem?.price?.id || null
   const stripeSubscriptionItemId = subscriptionItem?.id || null
+  const metadataQuantity = parseInt(quantity || "1", 10)
+  const stripeQuantity = (typeof subscriptionItem?.quantity === "number" && subscriptionItem.quantity > 0)
+    ? subscriptionItem.quantity
+    : (metadataQuantity > 0 ? metadataQuantity : 1)
 
   // FIX BUG-003: In newer Stripe API versions (2025+), current_period_start/end
   // are in subscription.items.data[0], not at the subscription level.
@@ -963,7 +1013,7 @@ async function handleSubscriptionUpdate(
     stripe_price_id: stripePriceId,
     subscription_type: price_type || "individual_monthly",
     status: subscription.status,
-    quantity: parseInt(quantity || "1"),
+    quantity: stripeQuantity,
     currency: subscription.currency,
     unit_amount_cents: subscriptionItem?.price?.unit_amount || null,
     current_period_start: periodStart
@@ -1039,10 +1089,7 @@ async function handleSubscriptionUpdate(
       // When adding licenses to an existing subscription, metadata.quantity
       // only reflects the NEW licenses being added, but items.data[0].quantity
       // reflects the TOTAL licenses on the subscription
-      const stripeQuantity = subscriptionItem?.quantity || 1
-      const metadataQuantity = parseInt(quantity || "1")
-
-      console.log(`📊 Subscription quantity check: Stripe items.quantity=${stripeQuantity}, metadata.quantity=${metadataQuantity}`)
+        console.log(`📊 Subscription quantity check: Stripe items.quantity=${stripeQuantity}, metadata.quantity=${metadataQuantity}`)
 
       const subPeriodEnd = subscription.current_period_end
         || (subscriptionItem as any)?.current_period_end

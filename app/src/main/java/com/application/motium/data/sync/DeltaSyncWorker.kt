@@ -44,6 +44,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.text.SimpleDateFormat
@@ -546,6 +548,14 @@ class DeltaSyncWorker(
                 // Mark entity as synced in local DB
                 markEntityAsSynced(op.entityType, op.entityId, timestamp)
             } else {
+                // Special handling: rollback local LICENSE assignment on non-retryable server rejection
+                if (op.entityType == PendingOperationEntity.TYPE_LICENSE) {
+                    val handled = handleLicensePushFailure(op, result, timestamp)
+                    if (handled) {
+                        return@forEach
+                    }
+                }
+
                 // Failed - check error code for retry strategy
                 when (result.errorCode) {
                     "VERSION_CONFLICT" -> {
@@ -662,6 +672,69 @@ class DeltaSyncWorker(
         }
 
         return conflictedEntityTypes
+    }
+
+    /**
+     * Roll back local license assignment when server rejects it (non-retryable).
+     * This prevents "visual" assignments that never succeeded on the server.
+     */
+    private suspend fun handleLicensePushFailure(
+        op: PendingOperationEntity,
+        result: SyncChangesRemoteDataSource.PushResult,
+        timestamp: Long
+    ): Boolean {
+        if (op.action != PendingOperationEntity.ACTION_UPDATE) return false
+
+        val payloadObj = parsePayloadObject(op.payload) ?: return false
+        if (!isLicenseAssignmentPayload(payloadObj)) return false
+        if (!isNonRetryableLicenseError(result)) return false
+
+        MotiumApplication.logger.w(
+            "Rolling back local license assignment after server rejection: " +
+                "licenseId=${op.entityId}, error=${result.errorMessage}",
+            TAG
+        )
+
+        // Revert local assignment to available pool
+        licenseDao.rollbackAssignment(op.entityId, timestamp)
+
+        // Remove pending operation to avoid infinite retries
+        pendingOpDao.deleteById(op.id)
+
+        // Force a full license re-fetch on next sync to reconcile with server
+        syncMetadataDao.updateLastSyncTimestamp(SyncMetadataEntity.TYPE_LICENSE, 0L, 0)
+
+        return true
+    }
+
+    private fun parsePayloadObject(payload: String?): JsonObject? {
+        if (payload.isNullOrBlank()) return null
+        return try {
+            val element = Json.parseToJsonElement(payload)
+            element as? JsonObject
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun isLicenseAssignmentPayload(payload: JsonObject): Boolean {
+        if (!payload.containsKey("linked_account_id")) return false
+        val value = payload["linked_account_id"] ?: return false
+        if (value is JsonNull) return false
+        val raw = value.toString().trim('"')
+        return raw.isNotBlank() && raw.lowercase(Locale.ROOT) != "null"
+    }
+
+    private fun isNonRetryableLicenseError(result: SyncChangesRemoteDataSource.PushResult): Boolean {
+        val msg = result.errorMessage?.lowercase(Locale.ROOT) ?: return false
+        return msg.contains("cannot assign license") ||
+            msg.contains("not an active member") ||
+            msg.contains("not authorized") ||
+            msg.contains("license not found") ||
+            msg.contains("license not available") ||
+            msg.contains("already licensed") ||
+            msg.contains("lifetime") ||
+            msg.contains("only pro account owners")
     }
 
     /**

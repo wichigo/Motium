@@ -25,6 +25,44 @@ class AppLogger private constructor(private val context: Context) {
         }
     }
 
+    private fun sanitize(message: String): String {
+        var sanitized = message
+        sanitized = sanitized.replace(
+            Regex("(?i)(token|access_token|refresh_token|apikey|api_key|authorization|password)\\s*[:=]\\s*([^&\\s]+)"),
+            "\$1=[REDACTED]"
+        )
+        sanitized = sanitized.replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._-]+"), "Bearer [REDACTED]")
+        sanitized = sanitized.replace(Regex("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b"), "[REDACTED_JWT]")
+        sanitized = sanitized.replace(Regex("\\bpm_[A-Za-z0-9]+\\b"), "[REDACTED_PAYMENT_METHOD]")
+        sanitized = sanitized.replace(
+            Regex("\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b", RegexOption.IGNORE_CASE),
+            "[REDACTED_EMAIL]"
+        )
+        sanitized = sanitized.replace(Regex("(lat=)[-0-9.]+"), "\$1[REDACTED]")
+        sanitized = sanitized.replace(Regex("((?:lng|lon)=)[-0-9.]+"), "\$1[REDACTED]")
+        sanitized = sanitized.replace(
+            Regex("(?i)(https?://motium\\.(?:org|app)/(?:link|reset|verify|unlink)/)([^/?\\s]+)"),
+            "\$1[REDACTED]"
+        )
+        sanitized = sanitized.replace(
+            Regex("(?i)(motium://(?:link|reset|verify|unlink)/)([^/?\\s]+)"),
+            "\$1[REDACTED]"
+        )
+        return sanitized
+    }
+
+    private fun sanitizeThrowable(throwable: Throwable?): Throwable? {
+        if (throwable == null) return null
+        val typeName = throwable.javaClass.name
+        val sanitized = Throwable("$typeName: ${sanitize(throwable.message ?: "")}")
+        sanitized.stackTrace = throwable.stackTrace
+        val cause = throwable.cause
+        if (cause != null) {
+            sanitized.initCause(sanitizeThrowable(cause))
+        }
+        return sanitized
+    }
+
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
     private val logFile = File(context.filesDir, LOG_FILE_NAME)
 
@@ -46,23 +84,29 @@ class AppLogger private constructor(private val context: Context) {
     }
 
     fun d(message: String, tag: String = TAG) {
-        Log.d(tag, message)
-        writeToFile("DEBUG", message, tag)
+        val safeMessage = sanitize(message)
+        Log.d(tag, safeMessage)
+        writeToFile("DEBUG", safeMessage, tag)
     }
 
     fun i(message: String, tag: String = TAG) {
-        Log.i(tag, message)
-        writeToFile("INFO", message, tag)
+        val safeMessage = sanitize(message)
+        Log.i(tag, safeMessage)
+        writeToFile("INFO", safeMessage, tag)
     }
 
     fun w(message: String, tag: String = TAG, throwable: Throwable? = null) {
-        Log.w(tag, message, throwable)
-        writeToFile("WARN", message, tag, throwable)
+        val safeMessage = sanitize(message)
+        val safeThrowable = sanitizeThrowable(throwable)
+        Log.w(tag, safeMessage, safeThrowable)
+        writeToFile("WARN", safeMessage, tag, safeThrowable)
     }
 
     fun e(message: String, tag: String = TAG, throwable: Throwable? = null) {
-        Log.e(tag, message, throwable)
-        writeToFile("ERROR", message, tag, throwable)
+        val safeMessage = sanitize(message)
+        val safeThrowable = sanitizeThrowable(throwable)
+        Log.e(tag, safeMessage, safeThrowable)
+        writeToFile("ERROR", safeMessage, tag, safeThrowable)
     }
 
     fun logLocationUpdate(latitude: Double, longitude: Double, accuracy: Float) {
@@ -103,7 +147,7 @@ class AppLogger private constructor(private val context: Context) {
                 append("$timestamp [$level] $tag: $message")
                 throwable?.let {
                     append("\n")
-                    append(it.stackTraceToString())
+                    append(sanitize(it.stackTraceToString()))
                 }
                 append("\n")
             }

@@ -43,6 +43,7 @@ import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.calendar.WorkScheduleViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.PremiumDialog
+import com.application.motium.presentation.components.FullScreenLoading
 import com.application.motium.presentation.theme.MotiumPrimary
 import com.application.motium.presentation.theme.MotiumPrimaryTint
 import com.application.motium.presentation.theme.MotiumPrimary
@@ -86,6 +87,7 @@ fun CalendarScreen(
 
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var expenses by remember { mutableStateOf<List<Expense>>(emptyList()) }
+    var isInitialLoading by remember { mutableStateOf(false) }
 
     // Use rememberSaveable to preserve calendar month and selected day across navigation
     var currentMonthTimestamp by rememberSaveable { mutableStateOf(Calendar.getInstance().timeInMillis) }
@@ -113,8 +115,10 @@ fun CalendarScreen(
 
     // Load trips and expenses
     LaunchedEffect(Unit) {
+        isInitialLoading = true
         trips = tripRepository.getAllTrips()
         expenses = expenseRepository.getExpensesForUser()
+        isInitialLoading = false
     }
 
     // Calculate calendar days with trips and expenses
@@ -153,31 +157,32 @@ fun CalendarScreen(
     }
 
     // Bottom navigation is now handled at app-level in MainActivity
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        "Agenda",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            "Agenda",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            )
                         )
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background
                     )
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
                 )
-            )
-        }
-    ) { paddingValues ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
-        ) {
+            }
+        ) { paddingValues ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)
+            ) {
             // Tab navigation (Calendar / Planning)
             item {
                 TabSection(
@@ -442,6 +447,11 @@ fun CalendarScreen(
                 )
             }
             } // End of Calendar section
+            }
+        }
+
+        if (isInitialLoading) {
+            FullScreenLoading(message = "Chargement du calendrier...")
         }
     }
 

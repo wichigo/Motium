@@ -1,6 +1,7 @@
 package com.application.motium.data.supabase
 
 import android.content.Context
+import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.LegalForm
@@ -13,11 +14,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 /**
  * REMOTE DATA SOURCE - Direct API access to Supabase.
@@ -29,6 +37,14 @@ class ProAccountRemoteDataSource private constructor(
 ) {
     private val supabaseClient = SupabaseClient.client
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     companion object {
         @Volatile
@@ -50,7 +66,14 @@ class ProAccountRemoteDataSource private constructor(
     suspend fun getProAccount(userId: String): Result<ProAccountDto?> = withContext(Dispatchers.IO) {
         try {
             // Check if user is authenticated before making the request
-            val currentUser = supabaseClient.auth.currentUserOrNull()
+            var currentUser = supabaseClient.auth.currentUserOrNull()
+            if (currentUser == null) {
+                // Try to recover session before failing (common during cold start)
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    currentUser = supabaseClient.auth.currentUserOrNull()
+                }
+            }
             if (currentUser == null) {
                 MotiumApplication.logger.w("No authenticated user, skipping pro_accounts fetch", "ProAccountRepo")
                 return@withContext Result.failure(Exception("User not authenticated"))
@@ -117,7 +140,14 @@ class ProAccountRemoteDataSource private constructor(
     suspend fun getProAccountById(proAccountId: String): Result<ProAccountDto?> = withContext(Dispatchers.IO) {
         try {
             // Check if user is authenticated before making the request
-            val currentUser = supabaseClient.auth.currentUserOrNull()
+            var currentUser = supabaseClient.auth.currentUserOrNull()
+            if (currentUser == null) {
+                // Try to recover session before failing (common during cold start)
+                val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                if (refreshed) {
+                    currentUser = supabaseClient.auth.currentUserOrNull()
+                }
+            }
             if (currentUser == null) {
                 MotiumApplication.logger.w("No authenticated user, skipping pro_accounts fetch by ID", "ProAccountRepo")
                 return@withContext Result.failure(Exception("User not authenticated"))
@@ -301,54 +331,83 @@ class ProAccountRemoteDataSource private constructor(
         proAccountId: String,
         anchorDay: Int
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        // Validate anchor day is in valid range (1-15)
         if (anchorDay !in 1..15) {
             return@withContext Result.failure(
                 IllegalArgumentException("Le jour de renouvellement doit etre entre 1 et 15")
             )
         }
 
-        try {
-            supabaseClient.from("pro_accounts")
-                .update({
-                    set("billing_anchor_day", anchorDay)
-                }) {
-                    filter {
-                        eq("id", proAccountId)
-                    }
-                }
+        suspend fun callEdge(token: String): Result<Unit> {
+            val url = "${BuildConfig.SUPABASE_URL}/functions/v1/update-billing-anchor"
 
-            MotiumApplication.logger.i("Billing anchor day updated to $anchorDay for pro account $proAccountId", "ProAccountRepo")
-            Result.success(Unit)
-        } catch (e: PostgrestRestException) {
-            // JWT expired - refresh token and retry once
-            if (e.message?.contains("JWT expired") == true) {
-                MotiumApplication.logger.w("JWT expired, refreshing token and retrying...", "ProAccountRepo")
+            val requestBody = UpdateBillingAnchorRequest(
+                proAccountId = proAccountId,
+                billingAnchorDay = anchorDay
+            )
+            val jsonBody = json.encodeToString(UpdateBillingAnchorRequest.serializer(), requestBody)
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                val errorMessage = try {
+                    val parsed = json.parseToJsonElement(responseBody).jsonObject
+                    parsed["error"]?.jsonPrimitive?.content ?: "Erreur serveur: ${response.code}"
+                } catch (e: Exception) {
+                    responseBody.ifBlank { "Erreur serveur: ${response.code}" }
+                }
+                return Result.failure(Exception(errorMessage))
+            }
+
+            val parsed = json.decodeFromString(UpdateBillingAnchorResponse.serializer(), responseBody)
+            return if (parsed.success) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception(parsed.error ?: "Erreur lors de la mise a jour"))
+            }
+        }
+
+        try {
+            val accessToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
+                ?: return@withContext Result.failure(Exception("Not authenticated"))
+
+            val initialResult = callEdge(accessToken)
+            if (initialResult.isSuccess) {
+                MotiumApplication.logger.i("Billing anchor day updated to $anchorDay for pro account $proAccountId", "ProAccountRepo")
+                return@withContext initialResult
+            }
+
+            val errorMessage = initialResult.exceptionOrNull()?.message ?: ""
+            val shouldRefresh = errorMessage.contains("JWT expired", ignoreCase = true) ||
+                errorMessage.contains("Invalid token", ignoreCase = true) ||
+                errorMessage.contains("Unauthorized", ignoreCase = true)
+
+            if (shouldRefresh) {
+                MotiumApplication.logger.w("JWT expired or invalid, refreshing token and retrying...", "ProAccountRepo")
                 val refreshed = tokenRefreshCoordinator.refreshIfNeeded(force = true)
                 if (refreshed) {
-                    return@withContext try {
-                        supabaseClient.from("pro_accounts")
-                            .update({
-                                set("billing_anchor_day", anchorDay)
-                            }) {
-                                filter {
-                                    eq("id", proAccountId)
-                                }
-                            }
+                    val refreshedToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
+                        ?: return@withContext Result.failure(Exception("Not authenticated"))
+                    val retryResult = callEdge(refreshedToken)
+                    if (retryResult.isSuccess) {
                         MotiumApplication.logger.i("Billing anchor day updated after token refresh", "ProAccountRepo")
-                        Result.success(Unit)
-                    } catch (retryError: Exception) {
-                        MotiumApplication.logger.e("Error after token refresh: ${retryError.message}", "ProAccountRepo", retryError)
-                        Result.failure(retryError)
                     }
+                    return@withContext retryResult
                 }
             }
-            MotiumApplication.logger.e("Error updating billing anchor day: ${e.message}", "ProAccountRepo", e)
-            Result.failure(e)
+
+            Result.failure(initialResult.exceptionOrNull() ?: Exception("Erreur lors de la mise a jour"))
         } catch (e: CancellationException) {
-            // Don't log cancellation as error - it's expected during navigation/scope cleanup
             MotiumApplication.logger.d("Billing anchor day update cancelled (navigation)", "ProAccountRepo")
-            throw e // Re-throw to properly propagate cancellation
+            throw e
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error updating billing anchor day: ${e.message}", "ProAccountRepo", e)
             Result.failure(e)
@@ -408,6 +467,21 @@ class ProAccountRemoteDataSource private constructor(
 /**
  * DTO for Pro account data
  */
+
+@Serializable
+private data class UpdateBillingAnchorRequest(
+    @SerialName("pro_account_id")
+    val proAccountId: String,
+    @SerialName("billing_anchor_day")
+    val billingAnchorDay: Int
+)
+
+@Serializable
+private data class UpdateBillingAnchorResponse(
+    val success: Boolean,
+    val error: String? = null
+)
+
 @Serializable
 data class ProAccountDto(
     val id: String,
@@ -427,7 +501,7 @@ data class ProAccountDto(
     @SerialName("billing_day")
     val billingDay: Int = 5,
     @SerialName("billing_anchor_day")
-    val billingAnchorDay: Int? = null,  // Jour de renouvellement unifié pour licences (1-15)
+    val billingAnchorDay: Int? = null,  // Jour de renouvellement unifié pour licences (1-28)
     val departments: JsonElement? = null,  // JSONB from Supabase can be string or array
     @SerialName("created_at")
     val createdAt: String? = null,

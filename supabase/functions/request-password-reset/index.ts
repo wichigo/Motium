@@ -64,7 +64,7 @@ serve(async (req) => {
     const resendApiKey = Deno.env.get('RESEND_API_KEY')
 
     if (resendApiKey) {
-      const resetUrl = `https://motium.org/reset?token=${token}`
+      const resetUrl = `https://motium.app/reset?token=${token}`
 
       const emailResponse = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -73,7 +73,7 @@ serve(async (req) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: 'Motium <noreply@motium.org>',
+          from: 'Motium <noreply@motium.app>',
           to: [email],
           subject: 'Réinitialisation de votre mot de passe Motium',
           html: `
@@ -112,7 +112,7 @@ serve(async (req) => {
 
   <p style="color: #9ca3af; font-size: 12px; text-align: center;">
     Motium - Suivi de mobilité professionnelle<br>
-    <a href="https://motium.org" style="color: #6366F1;">motium.org</a>
+    <a href="https://motium.app" style="color: #6366F1;">motium.app</a>
   </p>
 </body>
 </html>
@@ -131,7 +131,7 @@ Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet ema
 
 ---
 Motium - Suivi de mobilité professionnelle
-https://motium.org
+https://motium.app
           `
         }),
       })

@@ -283,14 +283,14 @@ Vous recevez cet email car vous avez un compte Motium.
     </ul>
 
     <div style="text-align: center; margin: 24px 0;">
-      <a href="https://motium.org"
+      <a href="https://motium.app"
          style="display: inline-block; background: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600;">
         Ouvrir l'application
       </a>
     </div>
 
     <p style="font-size: 14px; color: #64748b;">
-      Besoin d'aide ? Consultez notre centre d'aide ou contactez-nous a support@motium.org
+      Besoin d'aide ? Consultez notre centre d'aide ou contactez-nous a support@motium.app
     </p>
   </div>
 
@@ -316,7 +316,7 @@ Vous beneficiez d'une periode d'essai de 7 jours pour decouvrir toutes les fonct
 - Export PDF et Excel
 - Reconnaissance OCR des tickets
 
-Besoin d'aide ? Contactez-nous a support@motium.org
+Besoin d'aide ? Contactez-nous a support@motium.app
 
 ---
 (c) ${new Date().getFullYear()} Motium
@@ -427,7 +427,7 @@ Cet email a ete envoye automatiquement suite a votre demande.
     </ul>
 
     <div style="text-align: center; margin: 24px 0;">
-      <a href="https://motium.org/link?token=${data.invitation_token || ''}"
+      <a href="https://motium.app/link?token=${data.invitation_token || ''}"
          style="display: inline-block; background: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600;">
         Accepter l'invitation
       </a>
@@ -439,7 +439,7 @@ Cet email a ete envoye automatiquement suite a votre demande.
 
     <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">
       Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
-      <span style="word-break: break-all;">https://motium.org/link?token=${data.invitation_token || ''}</span>
+      <span style="word-break: break-all;">https://motium.app/link?token=${data.invitation_token || ''}</span>
     </p>
   </div>
 
@@ -469,7 +469,7 @@ En acceptant cette invitation, vous pourrez :
 - Beneficier d'une licence Pro gratuite
 - Exporter vos notes de frais
 
-Accepter l'invitation : https://motium.org/link?token=${data.invitation_token || ''}
+Accepter l'invitation : https://motium.app/link?token=${data.invitation_token || ''}
 
 Si vous n'avez pas de compte Motium, vous serez invite a en creer un gratuitement.
 
@@ -508,7 +508,7 @@ Si vous ne connaissez pas cette entreprise, ignorez cet email.
     </p>
 
     <div style="text-align: center; margin: 24px 0;">
-      <a href="https://motium.org/verify?token=${data.token || ''}"
+      <a href="https://motium.app/verify?token=${data.token || ''}"
          style="display: inline-block; background: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600;">
         Verifier mon email
       </a>
@@ -520,7 +520,7 @@ Si vous ne connaissez pas cette entreprise, ignorez cet email.
 
     <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">
       Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
-      <span style="word-break: break-all;">https://motium.org/verify?token=${data.token || ''}</span>
+      <span style="word-break: break-all;">https://motium.app/verify?token=${data.token || ''}</span>
     </p>
   </div>
 
@@ -540,7 +540,7 @@ Pour activer votre compte Motium, veuillez verifier votre adresse email.
 
 Important : Ce lien est valide pendant 24 heures.
 
-Verifier votre email : https://motium.org/verify?token=${data.token || ''}
+Verifier votre email : https://motium.app/verify?token=${data.token || ''}
 
 Si vous n'avez pas cree de compte Motium, ignorez cet email.
 
@@ -587,7 +587,7 @@ Cet email a ete envoye automatiquement lors de votre inscription.
     <p>Si vous etes a l'origine de cette demande, cliquez sur le bouton ci-dessous pour confirmer :</p>
 
     <div style="text-align: center; margin: 24px 0;">
-      <a href="https://motium.org/unlink?token=${data.token || ''}"
+      <a href="https://motium.app/unlink?token=${data.token || ''}"
          style="display: inline-block; background: #dc2626; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600;">
         Confirmer la deliaison
       </a>
@@ -599,7 +599,7 @@ Cet email a ete envoye automatiquement lors de votre inscription.
 
     <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">
       Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
-      <span style="word-break: break-all;">https://motium.org/unlink?token=${data.token || ''}</span>
+      <span style="word-break: break-all;">https://motium.app/unlink?token=${data.token || ''}</span>
     </p>
   </div>
 
@@ -622,7 +622,7 @@ Une demande de deliaison a ete initiee ${data.initiated_by === 'employee' ? 'par
 
 ATTENTION : Cette action est irreversible. Une fois confirmee, le collaborateur ne sera plus lie a l'espace professionnel de l'entreprise.
 
-Confirmer la deliaison : https://motium.org/unlink?token=${data.token || ''}
+Confirmer la deliaison : https://motium.app/unlink?token=${data.token || ''}
 
 Ce lien est valide pendant 24 heures. Si vous n'avez pas demande cette deliaison, ignorez cet email.
 
@@ -769,7 +769,7 @@ serve(async (req) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        from: "Motium <noreply@motium.org>", // Configure your domain in Resend
+        from: "Motium <noreply@motium.app>", // Configure your domain in Resend
         to: [email],
         subject: emailContent.subject,
         html: emailContent.html,

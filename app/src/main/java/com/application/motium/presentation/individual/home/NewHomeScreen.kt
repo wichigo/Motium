@@ -43,6 +43,7 @@ import com.application.motium.domain.model.TrackingMode
 import com.application.motium.presentation.auth.AuthViewModel
 import com.application.motium.presentation.components.MiniMap
 import com.application.motium.presentation.components.TrackingModeDropdown
+import com.application.motium.presentation.components.FullScreenLoading
 import com.application.motium.data.sync.AutoTrackingScheduleWorker
 import com.application.motium.domain.model.AutoTrackingSettings
 import kotlinx.datetime.Instant
@@ -101,6 +102,7 @@ fun NewHomeScreen(
     var hasWorkSchedules by remember { mutableStateOf(false) }
     var showNoSchedulesDialog by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var isInitialLoading by remember { mutableStateOf(false) }
     val isDarkMode by themeManager.isDarkMode.collectAsState()
 
     // Pagination state
@@ -169,6 +171,7 @@ fun NewHomeScreen(
     // Charger les données avec pagination - une seule fois au démarrage
     LaunchedEffect(Unit) {
         if (trips.isEmpty()) {
+            isInitialLoading = true
             // 1. Charger d'abord depuis la BDD locale pour affichage immédiat
             // Pas besoin d'attendre l'auth, getAllTrips() utilise le dernier userId connu
             currentOffset = 0
@@ -229,6 +232,7 @@ fun NewHomeScreen(
                 MotiumApplication.logger.i("Auto tracking is enabled, ensuring service is running", "HomeScreen")
                 ActivityRecognitionService.startService(context)
             }
+            isInitialLoading = false
         }
     }
 
@@ -693,6 +697,9 @@ fun NewHomeScreen(
         }
 
         // Bottom navigation is now handled at app-level in MainActivity
+        if (isInitialLoading && trips.isEmpty()) {
+            FullScreenLoading(message = "Chargement des trajets...")
+        }
     }
 
     // Dialog pour rediriger vers Planning quand Pro est sélectionné sans horaires

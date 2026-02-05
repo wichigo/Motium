@@ -38,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.application.motium.data.supabase.ProAccountDto
 import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.ProSettingsRepository
+import com.application.motium.data.supabase.LicenseRemoteDataSource
 import com.application.motium.domain.model.CompanyLink
 import com.application.motium.domain.model.CompanyLinkPreferences
 import com.application.motium.domain.model.LegalForm
@@ -68,6 +69,7 @@ import com.application.motium.presentation.theme.*
 import com.application.motium.utils.DeepLinkHandler
 import com.application.motium.utils.ThemeManager
 import com.application.motium.utils.LogcatCapture
+import com.application.motium.service.AutoTrackingDiagnostics
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.service.TripSimulator
 import com.application.motium.MotiumApplication
@@ -226,7 +228,8 @@ fun SettingsScreen(
     var isLoadingDepartments by remember { mutableStateOf(false) }
 
     // Pro License state (for ENTERPRISE users)
-    val offlineFirstLicenseRepo = remember { com.application.motium.data.repository.OfflineFirstLicenseRepository.getInstance(context) }
+    val licenseRemoteDataSource = remember { LicenseRemoteDataSource.getInstance(context) }
+    val subscriptionManager = remember { SubscriptionManager.getInstance(context) }
     // offlineFirstProAccountRepo already declared above
     val licenseCacheManager = remember { com.application.motium.data.repository.LicenseCacheManager.getInstance(context) }
     var ownerLicense by remember { mutableStateOf<License?>(null) }
@@ -610,7 +613,6 @@ fun SettingsScreen(
 
     // Subscription management dialog (for premium users)
     if (showSubscriptionManagementDialog) {
-        val subscriptionManager = remember { SubscriptionManager.getInstance(context) }
         SubscriptionManagementDialog(
             currentUser = currentUser,
             subscriptionManager = subscriptionManager,
@@ -656,17 +658,73 @@ fun SettingsScreen(
             isAssigning = isAssigningLicense,
             onDismiss = { showLicenseSelectionDialog = false },
             onSelectLicense = { license ->
-                // Assign the selected license to the owner - offline-first with sync
+                // Assign the selected license to the owner with server validation
                 isAssigningLicense = true
                 scope.launch {
                     try {
                         cachedProAccountId?.let { proAccountId ->
                             currentUser?.id?.let { userId ->
-                                offlineFirstLicenseRepo.assignLicenseToOwner(proAccountId, userId)
-                                // Reload from local DB to get updated state
-                                ownerLicense = licenseCacheManager.getLicenseForAccount(proAccountId, userId).first()
-                                availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proAccountId)
-                                Toast.makeText(context, "Licence attribuée avec succès", Toast.LENGTH_SHORT).show()
+                                when (val result = licenseRemoteDataSource.assignLicenseWithValidation(
+                                    licenseId = license.id,
+                                    proAccountId = proAccountId,
+                                    collaboratorId = userId
+                                )) {
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.Success -> {
+                                        licenseCacheManager.forceRefresh(proAccountId)
+                                        // Reload from local DB to get updated state
+                                        ownerLicense = licenseCacheManager.getLicenseForAccount(proAccountId, userId).first()
+                                        availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proAccountId)
+                                        Toast.makeText(context, "Licence attribuée avec succès", Toast.LENGTH_SHORT).show()
+                                    }
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.NeedsCancelExisting -> {
+                                        val cancelResult = subscriptionManager.cancelSubscription(
+                                            userId = userId,
+                                            cancelImmediately = true
+                                        )
+                                        if (cancelResult.isFailure) {
+                                            Toast.makeText(
+                                                context,
+                                                cancelResult.exceptionOrNull()?.message
+                                                    ?: "Erreur lors de la résiliation de l'abonnement",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@let
+                                        }
+                                        val assignAfterCancel = licenseRemoteDataSource.assignLicenseToAccount(
+                                            licenseId = license.id,
+                                            proAccountId = proAccountId,
+                                            linkedAccountId = userId
+                                        )
+                                        if (assignAfterCancel.isSuccess) {
+                                            licenseCacheManager.forceRefresh(proAccountId)
+                                            ownerLicense = licenseCacheManager.getLicenseForAccount(proAccountId, userId).first()
+                                            availableLicenses = licenseCacheManager.getAvailableLicensesOnce(proAccountId)
+                                            Toast.makeText(context, "Abonnement résilié et licence assignée", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(
+                                                context,
+                                                assignAfterCancel.exceptionOrNull()?.message
+                                                    ?: "Erreur lors de l'attribution de la licence",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.AlreadyLifetime -> {
+                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    }
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.AlreadyLicensed -> {
+                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    }
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.LicenseNotAvailable -> {
+                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    }
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.CollaboratorNotFound -> {
+                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    }
+                                    is com.application.motium.data.supabase.LicenseAssignmentResult.Error -> {
+                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    }
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -3562,7 +3620,7 @@ fun DeveloperOptionsSection(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Export Logs",
+                            text = "Export Full Diagnostics",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
@@ -3571,7 +3629,7 @@ fun DeveloperOptionsSection(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Export app logs for debugging",
+                            text = "App logs + logcat (best effort)",
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 12.sp,
                             color = textSecondaryColor
@@ -3582,30 +3640,32 @@ fun DeveloperOptionsSection(
                 Button(
                     onClick = {
                         try {
-                            val logFile = MotiumApplication.logger.getLogFile()
+                            CoroutineScope(Dispatchers.Main).launch {
+                                val logFile = LogcatCapture.captureFullDiagnostics(context)
 
-                            if (!logFile.exists() || logFile.length() == 0L) {
-                                Toast.makeText(context, "No logs available", Toast.LENGTH_SHORT).show()
-                                return@Button
+                                if (logFile == null || !logFile.exists() || logFile.length() == 0L) {
+                                    Toast.makeText(context, "No diagnostic logs available", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    logFile
+                                )
+
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    putExtra(Intent.EXTRA_SUBJECT, "Motium Full Diagnostics")
+                                    putExtra(Intent.EXTRA_TEXT, "Motium full diagnostics - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+
+                                context.startActivity(Intent.createChooser(shareIntent, "Export Full Diagnostics"))
+
+                                MotiumApplication.logger.i("Full diagnostics exported successfully", "Settings")
                             }
-
-                            val uri = FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.fileprovider",
-                                logFile
-                            )
-
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                putExtra(Intent.EXTRA_SUBJECT, "Motium App Logs")
-                                putExtra(Intent.EXTRA_TEXT, "Motium app logs - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-
-                            context.startActivity(Intent.createChooser(shareIntent, "Export Logs"))
-
-                            MotiumApplication.logger.i("Logs exported successfully", "Settings")
                         } catch (e: Exception) {
                             MotiumApplication.logger.e("Failed to export logs: ${e.message}", "Settings", e)
                             Toast.makeText(context, "Failed to export logs: ${e.message}", Toast.LENGTH_LONG).show()
@@ -3621,9 +3681,44 @@ fun DeveloperOptionsSection(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "📤 Export Logs",
+                        "📤 Export Full Diagnostics",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+                        try {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                LogcatCapture.markLogCaptureStart(context)
+                                MotiumApplication.logger.clearAllLogs()
+                                AutoTrackingDiagnostics.clearDiagnostics(context)
+
+                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, "Logs cleared. New capture started.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            MotiumApplication.logger.e("Failed to reset logs: ${e.message}", "Settings", e)
+                            Toast.makeText(context, "Failed to reset logs: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF94A3B8),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        "🧹 Reset Logs (Start Fresh)",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
                     )
                 }
 

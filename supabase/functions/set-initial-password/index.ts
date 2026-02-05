@@ -176,12 +176,12 @@ serve(async (req) => {
         name: name || email.split('@')[0],
         phone_number: phone || '',
         role: 'INDIVIDUAL',
-        subscription_type: 'FREE', // Will be upgraded to LICENSED after link activation
+        subscription_type: 'TRIAL', // Will be upgraded to LICENSED after link activation
         trial_started_at: now,
         trial_ends_at: trialEndsAt.toISOString(),
         address: '',
         consider_full_distance: false,
-        favorite_colors: '[]',
+        favorite_colors: [],
         created_at: now,
         updated_at: now
       })

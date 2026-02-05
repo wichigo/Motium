@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic">
+
+        <service
+            android:name=".service.ActivityRecognitionService"
+            android:exported="true"
+            tools:replace="android:exported">
+            <intent-filter>
+                <action android:name="com.application.motium.ACTION_DEBUG_TRANSITION" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".service.LocationTrackingService"
+            android:exported="true"
+            tools:replace="android:exported">
+            <intent-filter>
+                <action android:name="com.application.motium.ACTION_DEBUG_LOCATION" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>

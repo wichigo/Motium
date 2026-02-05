@@ -153,7 +153,7 @@ object ChangeEntityMapper {
                 name = data.getString("name") ?: "",
                 email = data.getString("email") ?: "",
                 role = data.getString("role") ?: "INDIVIDUAL",
-                subscriptionType = data.getString("subscription_type") ?: "FREE",
+                subscriptionType = data.getString("subscription_type") ?: "TRIAL",
                 subscriptionExpiresAt = data.getString("subscription_expires_at"),
                 trialStartedAt = data.getString("trial_started_at"),
                 trialEndsAt = data.getString("trial_ends_at"),
