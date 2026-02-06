@@ -953,6 +953,9 @@ fun MotiumNavHost(
                 onNavigateToUserVehicles = { userId ->
                     navController.navigate("pro_user_vehicles/$userId")
                 },
+                onNavigateToUserExpenses = { userId ->
+                    navController.navigate("pro_user_expenses/$userId")
+                },
                 authViewModel = authViewModel
             )
         }
@@ -982,6 +985,18 @@ fun MotiumNavHost(
                     // Pass the linked user's ID to allow viewing their trips
                     navController.navigate("pro_trip_details/$tripId/$linkedUserId")
                 }
+            )
+        }
+
+        // Linked User Expenses Screen - View expenses for a specific linked user
+        composable(
+            route = "pro_user_expenses/{userId}",
+            arguments = listOf(navArgument("userId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val linkedUserId = backStackEntry.arguments?.getString("userId") ?: ""
+            com.application.motium.presentation.pro.accounts.LinkedUserExpensesScreen(
+                userId = linkedUserId,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

@@ -440,6 +440,105 @@ COMMENT ON COLUMN licenses.stripe_subscription_id IS
     'DEPRECATED: Utiliser stripe_subscription_ref à la place.';
 
 -- ========================================
+-- PHASE 6B: SYNC SUBSCRIPTION TOTALS ON LICENSE DELETE
+-- ========================================
+-- Quand une licence mensuelle est supprimée, on recalcule immédiatement
+-- stripe_subscriptions.quantity et unit_amount_cents (montant total).
+
+CREATE OR REPLACE FUNCTION sync_subscription_totals_on_license_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_subscription_ref UUID;
+    v_subscription_id TEXT;
+    v_remaining_monthly_qty INTEGER := 0;
+    v_prev_quantity INTEGER := 0;
+    v_prev_amount_cents INTEGER := 0;
+    v_price_per_license_cents INTEGER := 0;
+BEGIN
+    -- Seules les licences mensuelles impactent la quantité de subscription.
+    IF OLD.is_lifetime THEN
+        RETURN OLD;
+    END IF;
+
+    -- Résolution de la subscription: FK d'abord, puis fallback legacy.
+    v_subscription_ref := OLD.stripe_subscription_ref;
+
+    IF v_subscription_ref IS NULL AND OLD.stripe_subscription_id IS NOT NULL THEN
+        SELECT id, stripe_subscription_id
+          INTO v_subscription_ref, v_subscription_id
+          FROM stripe_subscriptions
+         WHERE stripe_subscription_id = OLD.stripe_subscription_id
+         LIMIT 1;
+    END IF;
+
+    IF v_subscription_ref IS NULL THEN
+        RETURN OLD;
+    END IF;
+
+    -- Fallback pour compter les licences legacy sans stripe_subscription_ref.
+    IF v_subscription_id IS NULL THEN
+        SELECT stripe_subscription_id
+          INTO v_subscription_id
+          FROM stripe_subscriptions
+         WHERE id = v_subscription_ref;
+    END IF;
+
+    -- Recalcul de la quantité résiduelle de licences mensuelles.
+    SELECT COUNT(*)
+      INTO v_remaining_monthly_qty
+      FROM licenses l
+     WHERE l.is_lifetime = false
+       AND (
+            l.stripe_subscription_ref = v_subscription_ref
+            OR (
+                l.stripe_subscription_ref IS NULL
+                AND v_subscription_id IS NOT NULL
+                AND l.stripe_subscription_id = v_subscription_id
+            )
+       );
+
+    -- Récupère les montants précédents pour dériver le prix unitaire.
+    SELECT COALESCE(quantity, 0), COALESCE(unit_amount_cents, 0)
+      INTO v_prev_quantity, v_prev_amount_cents
+      FROM stripe_subscriptions
+     WHERE id = v_subscription_ref;
+
+    -- Compatibilité legacy:
+    -- - Si la valeur ressemble à un montant unitaire (499/600) avec qty>1, on la garde.
+    -- - Sinon, on dérive le prix unitaire depuis le total / quantité.
+    IF v_prev_quantity > 1 AND v_prev_amount_cents <= 1000 THEN
+        v_price_per_license_cents := v_prev_amount_cents;
+    ELSIF v_prev_quantity > 0 THEN
+        v_price_per_license_cents := v_prev_amount_cents / v_prev_quantity;
+    ELSE
+        v_price_per_license_cents := v_prev_amount_cents;
+    END IF;
+
+    UPDATE stripe_subscriptions
+       SET quantity = v_remaining_monthly_qty,
+           unit_amount_cents = GREATEST(v_price_per_license_cents, 0) * GREATEST(v_remaining_monthly_qty, 0),
+           updated_at = NOW()
+     WHERE id = v_subscription_ref
+       AND subscription_type = 'pro_license_monthly';
+
+    RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_license_delete_sync_subscription_totals ON licenses;
+CREATE TRIGGER on_license_delete_sync_subscription_totals
+AFTER DELETE ON licenses
+FOR EACH ROW
+EXECUTE FUNCTION sync_subscription_totals_on_license_delete();
+
+GRANT EXECUTE ON FUNCTION sync_subscription_totals_on_license_delete() TO service_role;
+GRANT EXECUTE ON FUNCTION sync_subscription_totals_on_license_delete() TO authenticated;
+
+-- ========================================
 -- PHASE 7: FONCTION UTILITAIRE
 -- ========================================
 -- Récupère le statut d'abonnement actif d'un utilisateur

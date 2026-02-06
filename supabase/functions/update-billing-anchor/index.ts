@@ -213,7 +213,6 @@ serve(async (req) => {
           if (!schedule) {
             const created = await stripe.subscriptionSchedules.create({
               from_subscription: stripeSubscriptionId,
-              end_behavior: "release",
             })
             schedule = created
             stripeScheduleId = created.id
@@ -242,7 +241,6 @@ serve(async (req) => {
                 start_date: newAnchorUnix,
                 items: phaseItems,
                 proration_behavior: "none",
-                billing_cycle_anchor: "phase_start",
                 iterations: 1,
               }
             ],

@@ -458,6 +458,9 @@ fun SettingsScreen(
                         onPreferencesChange = { linkId, prefs ->
                             companyLinkViewModel.updateSharingPreferences(linkId, prefs)
                         },
+                        onLinkDirectlyClick = { link ->
+                            companyLinkViewModel.handlePendingToken(link.invitationToken)
+                        },
                         onUnlinkClick = { link ->
                             companyLinkViewModel.requestUnlink(link)
                         }
@@ -1208,6 +1211,7 @@ fun CompanyLinkSectionNew(
     textColor: Color,
     textSecondaryColor: Color,
     onPreferencesChange: (String, CompanyLinkPreferences) -> Unit,
+    onLinkDirectlyClick: (CompanyLink) -> Unit,
     onUnlinkClick: (CompanyLink) -> Unit
 ) {
     // Track which card is expanded
@@ -1262,6 +1266,7 @@ fun CompanyLinkSectionNew(
                     onPreferencesChange = { prefs ->
                         onPreferencesChange(link.id, prefs)
                     },
+                    onLinkDirectlyClick = { onLinkDirectlyClick(link) },
                     onUnlinkClick = { onUnlinkClick(link) },
                     surfaceColor = surfaceColor,
                     textColor = textColor,

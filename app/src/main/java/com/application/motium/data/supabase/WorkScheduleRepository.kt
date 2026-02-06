@@ -14,6 +14,7 @@ import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.WorkSchedule
 import com.application.motium.domain.model.AutoTrackingSettings
 import com.application.motium.domain.model.TrackingMode
+import com.application.motium.domain.model.toTrackingModeOrDefault
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.postgrest
@@ -344,7 +345,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                 MotiumApplication.logger.i("Auto-tracking mode: ${settings.trackingMode}", "WorkScheduleRepository")
                 // Mettre en cache
                 val entity = settings.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
-                workScheduleDao.insertAutoTrackingSettings(entity)
+                workScheduleDao.replaceAutoTrackingSettingsForUser(userId, entity)
                 MotiumApplication.logger.i("Cached auto-tracking settings in Room", "WorkScheduleRepository")
             } else {
                 MotiumApplication.logger.i("No auto-tracking settings found, using default", "WorkScheduleRepository")
@@ -375,7 +376,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
 
             // Sauvegarder localement d'abord (offline-first)
             val entity = settings.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.PENDING_UPLOAD.name)
-            workScheduleDao.insertAutoTrackingSettings(entity)
+            workScheduleDao.replaceAutoTrackingSettingsForUser(settings.userId, entity)
             MotiumApplication.logger.i("✅ Auto-tracking settings saved locally", "WorkScheduleRepository")
 
             // Build payload for server sync (matches sync_changes RPC structure)
@@ -463,6 +464,14 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                 calculateIsInWorkHoursLocally(userId)
             }
         )
+    }
+
+    /**
+     * Local-only version of isInWorkHours.
+     * Uses cached Room schedules and never hits the network.
+     */
+    suspend fun isInWorkHoursLocalOnly(userId: String): Boolean = withContext(Dispatchers.IO) {
+        calculateIsInWorkHoursLocally(userId)
     }
 
     /**
@@ -556,22 +565,19 @@ class WorkScheduleRepository private constructor(private val context: Context) {
                 return false
             }
 
-            val shouldTrack = when (settings.trackingMode) {
-                "ALWAYS" -> {
+            val mode = settings.trackingMode.toTrackingModeOrDefault()
+            val shouldTrack = when (mode) {
+                TrackingMode.ALWAYS -> {
                     MotiumApplication.logger.d("Local: ALWAYS mode, should track", "WorkScheduleRepository")
                     true
                 }
-                "WORK_HOURS_ONLY" -> {
+                TrackingMode.WORK_HOURS_ONLY -> {
                     val inWorkHours = calculateIsInWorkHoursLocally(userId)
                     MotiumApplication.logger.d("Local: WORK_HOURS_ONLY mode, in work hours=$inWorkHours", "WorkScheduleRepository")
                     inWorkHours
                 }
-                "DISABLED" -> {
+                TrackingMode.DISABLED -> {
                     MotiumApplication.logger.d("Local: DISABLED mode, should not track", "WorkScheduleRepository")
-                    false
-                }
-                else -> {
-                    MotiumApplication.logger.w("Unknown tracking mode: ${settings.trackingMode}, defaulting to false", "WorkScheduleRepository")
                     false
                 }
             }
@@ -636,7 +642,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
         return AutoTrackingSettings(
             id = id ?: "",
             userId = user_id,
-            trackingMode = TrackingMode.valueOf(tracking_mode),
+            trackingMode = tracking_mode.toTrackingModeOrDefault(),
             minTripDistanceMeters = min_trip_distance_meters,
             minTripDurationSeconds = min_trip_duration_seconds,
             createdAt = created_at?.let { Instant.parse(it) } ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
@@ -672,7 +678,7 @@ class WorkScheduleRepository private constructor(private val context: Context) {
 
                 response?.toAutoTrackingSettings()?.let { settings ->
                     val entity = settings.toEntity(syncStatus = com.application.motium.data.local.entities.SyncStatus.SYNCED.name, serverUpdatedAt = System.currentTimeMillis())
-                    workScheduleDao.insertAutoTrackingSettings(entity)
+                    workScheduleDao.replaceAutoTrackingSettingsForUser(userId, entity)
                     MotiumApplication.logger.i("Synced auto-tracking settings from Supabase", "WorkScheduleRepository")
                 }
             } catch (e: Exception) {

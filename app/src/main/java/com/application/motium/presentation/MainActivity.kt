@@ -49,7 +49,11 @@ import com.application.motium.service.DozeModeFix
 import com.application.motium.service.ActivityRecognitionService
 import com.application.motium.data.TripRepository
 import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.supabase.WorkScheduleRepository
 import com.application.motium.data.sync.OfflineFirstSyncManager
+import com.application.motium.data.sync.AutoTrackingScheduleWorker
+import com.application.motium.domain.model.TrackingMode
+import com.application.motium.worker.ActivityRecognitionHealthWorker
 import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
@@ -129,6 +133,7 @@ class MainActivity : ComponentActivity() {
 
                     val tripRepository = TripRepository.getInstance(this@MainActivity)
                     val localUserRepository = LocalUserRepository.getInstance(this@MainActivity)
+                    val workScheduleRepository = WorkScheduleRepository.getInstance(this@MainActivity)
 
                     // CRITICAL: Sync auto-tracking cache from Room BEFORE checking isAutoTrackingEnabled()
                     // This fixes the issue where settings saved in Room are not reflected in SharedPreferences
@@ -136,6 +141,32 @@ class MainActivity : ComponentActivity() {
                     val userId = localUserRepository.getLoggedInUser()?.id
                     if (userId != null) {
                         tripRepository.syncAutoTrackingCacheFromRoom(userId)
+                    }
+
+                    // Ensure workers are scheduled based on tracking mode
+                    when (tripRepository.getTrackingMode()) {
+                        TrackingMode.ALWAYS -> {
+                            ActivityRecognitionHealthWorker.schedule(this@MainActivity)
+                        }
+                        TrackingMode.WORK_HOURS_ONLY -> {
+                            AutoTrackingScheduleWorker.schedule(this@MainActivity)
+                            ActivityRecognitionHealthWorker.schedule(this@MainActivity)
+                            AutoTrackingScheduleWorker.runNow(this@MainActivity)
+
+                            if (userId != null) {
+                                val shouldTrack = workScheduleRepository.shouldAutotrackOfflineFirst(userId)
+                                tripRepository.setAutoTrackingEnabled(shouldTrack)
+                                if (!shouldTrack) {
+                                    ActivityRecognitionService.stopService(this@MainActivity)
+                                }
+                            }
+                        }
+                        TrackingMode.DISABLED -> {
+                            AutoTrackingScheduleWorker.cancel(this@MainActivity)
+                            ActivityRecognitionHealthWorker.cancel(this@MainActivity)
+                            tripRepository.setAutoTrackingEnabled(false)
+                            ActivityRecognitionService.stopService(this@MainActivity)
+                        }
                     }
 
                     // NOW check the synced cache value
@@ -225,7 +256,7 @@ private val proRoutes = setOf(
     "enterprise_home", "pro_home", "pro_calendar", "pro_vehicles", "pro_export", "pro_settings",
     "pro_linked_accounts", "pro_licenses", "pro_export_advanced",
     "pro_trip_details", "pro_edit_trip", "pro_add_trip", "pro_add_expense", "pro_expense_details",
-    "pro_account_details", "pro_invite_person", "pro_user_trips"
+    "pro_account_details", "pro_invite_person", "pro_user_trips", "pro_user_vehicles", "pro_user_expenses"
 )
 
 // Map from current route to the navigation route name for highlighting
@@ -248,7 +279,7 @@ private fun getNavRouteForHighlight(currentRoute: String?): String {
         // Pro detail screens - highlight parent nav item
         baseRoute in setOf("pro_trip_details", "pro_edit_trip", "pro_add_trip") -> "pro_home"
         baseRoute in setOf("pro_add_expense", "pro_expense_details") -> "pro_home"
-        baseRoute in setOf("pro_account_details", "pro_invite_person", "pro_user_trips") -> "pro_linked_accounts"
+        baseRoute in setOf("pro_account_details", "pro_invite_person", "pro_user_trips", "pro_user_vehicles", "pro_user_expenses") -> "pro_linked_accounts"
 
         // Individual routes
         baseRoute == "home" -> "home"

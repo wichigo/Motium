@@ -55,6 +55,7 @@ fun AccountDetailsScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToUserTrips: (String) -> Unit = {},
     onNavigateToUserVehicles: (String) -> Unit = {},
+    onNavigateToUserExpenses: (String) -> Unit = {},
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -253,6 +254,8 @@ fun AccountDetailsScreen(
                 }
             }
             user != null -> {
+                val isPersonalLifetime = user?.personalSubscriptionType?.equals("LIFETIME", ignoreCase = true) == true
+                val hasProAccess = license != null || isPersonalLifetime
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -260,16 +263,17 @@ fun AccountDetailsScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxSize()
                             .padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(vertical = 16.dp)
+                        contentPadding = PaddingValues(top = 16.dp, bottom = 100.dp)
                     ) {
                         // Profile section
                         item {
                             ProfileSection(
                                 user = user!!,
                                 license = license,
+                                isPersonalLifetime = isPersonalLifetime,
                                 cardColor = cardColor,
                                 textColor = textColor,
                                 textSecondaryColor = textSecondaryColor
@@ -314,6 +318,7 @@ fun AccountDetailsScreen(
                         item {
                             LicenseSection(
                                 license = license,
+                                isPersonalLifetime = isPersonalLifetime,
                                 availableLicensesCount = availableLicensesCount,
                                 cardColor = cardColor,
                                 textColor = textColor,
@@ -337,69 +342,20 @@ fun AccountDetailsScreen(
                                 }
                             )
                         }
-                    }
 
-                    // Bottom buttons - View Trips and View Vehicles (with padding for bottom nav bar)
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(backgroundColor)
-                            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // View Trips button
-                        Button(
-                            onClick = { onNavigateToUserTrips(accountId) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MotiumPrimary
-                            ),
-                            shape = RoundedCornerShape(28.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Route,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Voir les trajets",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
-                            )
-                        }
-
-                        // View Vehicles button
-                        OutlinedButton(
-                            onClick = { onNavigateToUserVehicles(accountId) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MotiumPrimary
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, MotiumPrimary),
-                            shape = RoundedCornerShape(28.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.DirectionsCar,
-                                contentDescription = null,
-                                tint = MotiumPrimary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Voir les véhicules ($associatedVehicles)",
-                                color = MotiumPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
-                            )
+                        if (hasProAccess) {
+                            item {
+                                AccessActionsSection(
+                                    associatedVehicles = associatedVehicles,
+                                    backgroundColor = backgroundColor,
+                                    onViewTrips = { onNavigateToUserTrips(accountId) },
+                                    onViewVehicles = { onNavigateToUserVehicles(accountId) },
+                                    onViewExpenses = { onNavigateToUserExpenses(accountId) }
+                                )
+                            }
                         }
                     }
+
                 }
             }
         }
@@ -575,6 +531,7 @@ fun AccountDetailsScreen(
 private fun ProfileSection(
     user: LinkedUserDto,
     license: License?,
+    isPersonalLifetime: Boolean,
     cardColor: Color,
     textColor: Color,
     textSecondaryColor: Color
@@ -628,9 +585,10 @@ private fun ProfileSection(
 
         // Status badge based on license assignment
         val (statusColor, statusText) = when {
-            license == null -> Pair(TextSecondaryDark, "Sans licence")
-            license.isPendingUnlink -> Pair(PendingOrange, "Déliaison en cours")
-            else -> Pair(MotiumPrimary, "Licencié")
+            license?.isPendingUnlink == true -> Pair(PendingOrange, "Déliaison en cours")
+            license != null -> Pair(MotiumPrimary, "Licencié")
+            isPersonalLifetime -> Pair(MotiumPrimary, "Abonné")
+            else -> Pair(TextSecondaryDark, "Sans licence")
         }
 
         Surface(
@@ -826,12 +784,100 @@ private fun ActivityStatItem(
     }
 }
 
+@Composable
+private fun AccessActionsSection(
+    associatedVehicles: Int,
+    backgroundColor: Color,
+    onViewTrips: () -> Unit,
+    onViewVehicles: () -> Unit,
+    onViewExpenses: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(backgroundColor),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Button(
+            onClick = onViewTrips,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MotiumPrimary),
+            shape = RoundedCornerShape(28.dp)
+        ) {
+            Icon(
+                Icons.Default.Route,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "Voir les trajets",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+        }
+
+        OutlinedButton(
+            onClick = onViewVehicles,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MotiumPrimary),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, MotiumPrimary),
+            shape = RoundedCornerShape(28.dp)
+        ) {
+            Icon(
+                Icons.Default.DirectionsCar,
+                contentDescription = null,
+                tint = MotiumPrimary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "Voir les véhicules ($associatedVehicles)",
+                color = MotiumPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+        }
+
+        OutlinedButton(
+            onClick = onViewExpenses,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MotiumPrimary),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, MotiumPrimary),
+            shape = RoundedCornerShape(28.dp)
+        ) {
+            Icon(
+                Icons.Default.Receipt,
+                contentDescription = null,
+                tint = MotiumPrimary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "Voir les dépenses",
+                color = MotiumPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+        }
+    }
+}
+
 /**
  * Section displaying license status and actions
  */
 @Composable
 private fun LicenseSection(
     license: License?,
+    isPersonalLifetime: Boolean,
     availableLicensesCount: Int,
     cardColor: Color,
     textColor: Color,
@@ -860,6 +906,43 @@ private fun LicenseSection(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 when {
+                    // Personal lifetime subscription (no pro license assigned)
+                    license == null && isPersonalLifetime -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MotiumPrimary.copy(alpha = 0.1f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.AllInclusive,
+                                    contentDescription = null,
+                                    tint = MotiumPrimary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Abonnement personnel actif",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MotiumPrimary
+                                )
+                                Text(
+                                    "Ce compte est abonné à vie et garde l'accès Pro",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = textSecondaryColor
+                                )
+                            }
+                        }
+                    }
+
                     // No license assigned
                     license == null -> {
                         Row(

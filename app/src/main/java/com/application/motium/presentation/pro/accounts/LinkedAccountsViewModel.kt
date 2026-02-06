@@ -53,6 +53,7 @@ data class LinkedAccountsUiState(
     val isLoading: Boolean = true,
     val linkedUsers: List<LinkedUserDto> = emptyList(),
     val userLicenses: Map<String, License?> = emptyMap(), // userId -> License
+    val personalSubscriptionTypes: Map<String, String> = emptyMap(), // userId -> users.subscription_type
     val availableDepartments: List<String> = emptyList(),
     val selectedDepartments: Set<String> = emptySet(),
     val error: String? = null,
@@ -84,6 +85,11 @@ data class LinkedAccountsUiState(
             license.isPendingUnlink -> AccountLicenseStatus.PENDING_UNLINK
             else -> AccountLicenseStatus.LICENSED
         }
+    }
+
+    fun isPersonalLifetime(userId: String?): Boolean {
+        if (userId.isNullOrBlank()) return false
+        return personalSubscriptionTypes[userId]?.equals("LIFETIME", ignoreCase = true) == true
     }
 }
 
@@ -117,6 +123,7 @@ class LinkedAccountsViewModel(
 
     // Loading state for initial data load
     private val _isInitialLoading = MutableStateFlow(true)
+    private val _personalSubscriptionTypes = MutableStateFlow<Map<String, String>>(emptyMap())
 
     // Reactive linked users flow from offline-first repository (cache-first)
     private val linkedUsersFlow = _proAccountId.flatMapLatest { proAccountId ->
@@ -136,14 +143,24 @@ class LinkedAccountsViewModel(
         }
     }
 
+    private val dialogAndSubscriptionFlow = combine(
+        _dialogState,
+        _personalSubscriptionTypes
+    ) { dialogState, personalSubscriptionTypes ->
+        dialogState to personalSubscriptionTypes
+    }
+
     // Combined UI state
     val uiState: StateFlow<LinkedAccountsUiState> = combine(
         linkedUsersFlow,
         licensesFlow,
-        _dialogState,
+        dialogAndSubscriptionFlow,
         _proAccountId,
         _isInitialLoading
-    ) { linkedUsers, licenses, dialogState, proAccountId, isInitialLoading ->
+    ) { linkedUsers, licenses, dialogAndSubscription, proAccountId, isInitialLoading ->
+        val dialogState = dialogAndSubscription.first
+        val personalSubscriptionTypes = dialogAndSubscription.second
+
         // Build userLicenses map from licenses
         val userLicenses = licenses
             .filter { it.isAssigned && it.linkedAccountId != null }
@@ -167,6 +184,7 @@ class LinkedAccountsViewModel(
             isLoading = proAccountId == null && isInitialLoading,
             linkedUsers = linkedUsers,
             userLicenses = userLicenses,
+            personalSubscriptionTypes = personalSubscriptionTypes,
             availableDepartments = departments,
             selectedDepartments = selectedDepts,
             error = dialogState.error,
@@ -205,6 +223,7 @@ class LinkedAccountsViewModel(
                 if (localProAccount != null) {
                     MotiumApplication.logger.d("Found ProAccount in local cache: ${localProAccount.id}", TAG)
                     _proAccountId.value = localProAccount.id
+                    refreshPersonalSubscriptionTypes(localProAccount.id)
                     _isInitialLoading.value = false
                     return@launch
                 }
@@ -213,6 +232,7 @@ class LinkedAccountsViewModel(
                 val proAccountId = authRepository.getCurrentProAccountId()
                 if (proAccountId != null) {
                     _proAccountId.value = proAccountId
+                    refreshPersonalSubscriptionTypes(proAccountId)
                 } else {
                     _dialogState.update { it.copy(
                         error = "Compte Pro non trouvé. Veuillez configurer votre compte professionnel."
@@ -241,6 +261,7 @@ class LinkedAccountsViewModel(
                 val result = offlineFirstLinkedUserRepo.forceRefresh(proAccountId)
                 result.fold(
                     onSuccess = { users ->
+                        updatePersonalSubscriptionTypes(users)
                         MotiumApplication.logger.d("Refreshed ${users.size} linked users", TAG)
                     },
                     onFailure = { e ->
@@ -252,6 +273,30 @@ class LinkedAccountsViewModel(
                 MotiumApplication.logger.e("Error refreshing linked users: ${e.message}", TAG, e)
             }
         }
+    }
+
+    private fun refreshPersonalSubscriptionTypes(proAccountId: String) {
+        viewModelScope.launch {
+            linkedAccountRemoteDataSource.getLinkedUsers(proAccountId).onSuccess { users ->
+                updatePersonalSubscriptionTypes(users)
+            }
+        }
+    }
+
+    private fun updatePersonalSubscriptionTypes(users: List<LinkedUserDto>) {
+        val typesByUserId = users
+            .mapNotNull { user ->
+                val userId = user.userId
+                val type = user.personalSubscriptionType
+                if (!userId.isNullOrBlank() && !type.isNullOrBlank()) {
+                    userId to type
+                } else {
+                    null
+                }
+            }
+            .toMap()
+
+        _personalSubscriptionTypes.value = typesByUserId
     }
 
     /**

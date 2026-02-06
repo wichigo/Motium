@@ -107,6 +107,18 @@ serve(async (req) => {
         break
       }
 
+      case "invoice.upcoming": {
+        const invoice = event.data.object as Stripe.Invoice
+        await handleInvoiceUpcoming(supabase, stripe, invoice)
+        break
+      }
+
+      case "invoice.created": {
+        const invoice = event.data.object as Stripe.Invoice
+        await handleInvoiceUpcoming(supabase, stripe, invoice)
+        break
+      }
+
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice
         await handleInvoicePaymentFailed(supabase, invoice)
@@ -154,26 +166,14 @@ serve(async (req) => {
  * - pro_license_lifetime: Creates lifetime license(s) in the pool with status='available'
  * - pro_license_monthly: Creates monthly license(s) in the pool (via PaymentIntent for Checkout)
  *
- * DESIGN DECISIONS - PRORATA BILLING:
- * ====================================
- * The billing_anchor_day is stored on pro_accounts but NOT used to configure Stripe
- * billing_cycle_anchor. This is intentional:
- *
- * 1. CURRENT BEHAVIOR: Each subscription starts billing from purchase date.
- *    Additional licenses purchased mid-cycle are billed immediately for the full month.
- *
- * 2. FUTURE IMPROVEMENT: Implement true prorata billing via:
- *    - Stripe's billing_cycle_anchor parameter on subscription creation
- *    - Prorated charges for mid-cycle license additions
- *    - Unified monthly billing on billing_anchor_day
- *
- * 3. WHY DEFERRED: Prorata adds significant complexity:
- *    - Requires Stripe Customer Portal setup
- *    - Needs careful handling of upgrades/downgrades
- *    - Edge cases with cancellations mid-cycle
- *
- * Current approach is simpler and acceptable for MVP.
- * ====================================
+ * BILLING ANCHOR NOTE:
+ * ====================
+ * - For Pro monthly subscriptions, billing anchor can be configured:
+ *   1) On subscription creation (billing_cycle_anchor in create-payment/confirm-payment flows)
+ *   2) After creation via the dedicated update-billing-anchor function
+ *      (implemented with Stripe Subscription Schedules)
+ * - Mid-cycle license additions are still handled with proration logic where applicable.
+ * ====================
  */
 async function handlePaymentIntentSucceeded(
   supabase: any,
@@ -619,6 +619,7 @@ async function handleInvoicePaid(
     supabase_user_id,
     supabase_pro_account_id,
     price_type,
+    quantity,
   } = metadata
 
   console.log(`   Extracted: user_id=${supabase_user_id || 'null'}, price_type=${price_type || 'null'}`)
@@ -717,6 +718,131 @@ async function handleInvoicePaid(
   if (supabase_user_id && price_type?.includes("individual")) {
     console.log(`ℹ️ Individual subscription ${subscriptionId} renewed - users.subscription_type synced via trigger`)
   }
+}
+
+/**
+ * Handle upcoming invoice before final payment.
+ *
+ * Goal:
+ * - Ensure Stripe subscription quantity reflects billable monthly licenses
+ *   BEFORE Stripe charges the renewal invoice.
+ *
+ * This prevents overbilling when licenses were canceled/unlinked before renewal.
+ */
+async function handleInvoiceUpcoming(
+  supabase: any,
+  stripe: Stripe,
+  invoice: Stripe.Invoice
+) {
+  const subscriptionId = invoice.subscription as string
+  if (!subscriptionId) {
+    return
+  }
+
+  // Retrieve latest subscription state from Stripe.
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+  const metadata = subscription.metadata || {}
+  const priceType = metadata.price_type
+
+  // Only relevant for Pro monthly license subscriptions.
+  if (priceType !== "pro_license_monthly") {
+    return
+  }
+
+  const subscriptionItem = subscription.items?.data?.[0]
+  if (!subscriptionItem?.id) {
+    console.warn(`⚠️ invoice.upcoming ${invoice.id}: missing subscription item for ${subscriptionId}`)
+    return
+  }
+
+  // Resolve pro account id (metadata first, DB fallback for legacy rows).
+  let proAccountId = metadata.supabase_pro_account_id || null
+  if (!proAccountId) {
+    const { data: subRow } = await supabase
+      .from("stripe_subscriptions")
+      .select("pro_account_id")
+      .eq("stripe_subscription_id", subscriptionId)
+      .maybeSingle()
+    proAccountId = subRow?.pro_account_id || null
+  }
+
+  if (!proAccountId) {
+    console.warn(`⚠️ invoice.upcoming ${invoice.id}: no pro_account_id for subscription ${subscriptionId}`)
+    return
+  }
+
+  // Renewal boundary: licenses unlinked/canceled effective at or before this date
+  // must not be billed for the upcoming period.
+  const renewalStartIso = invoice.period_start
+    ? new Date(invoice.period_start * 1000).toISOString()
+    : new Date().toISOString()
+
+  // Load monthly licenses and compute billable count in JS for robust filtering.
+  const { data: monthlyLicenses, error: licensesError } = await supabase
+    .from("licenses")
+    .select("id, status, unlink_effective_at")
+    .eq("pro_account_id", proAccountId)
+    .eq("is_lifetime", false)
+
+  if (licensesError) {
+    console.error(`❌ invoice.upcoming ${invoice.id}: failed to load licenses for ${proAccountId}`, licensesError)
+    return
+  }
+
+  // Source of truth: total remaining monthly licenses for the Pro account.
+  // We keep legacy exclusions for rows that are explicitly not billable.
+  const targetQuantity = (monthlyLicenses || []).filter((l: any) => {
+    if (!l) return false
+    // Backward compatibility with historical "canceled" rows.
+    if (l.status === "canceled") return false
+    // If unlink becomes effective at/before renewal start, do not bill it.
+    if (l.unlink_effective_at && l.unlink_effective_at <= renewalStartIso) return false
+    return true
+  }).length
+
+  const currentQuantity = subscriptionItem.quantity || 0
+  if (targetQuantity === currentQuantity) {
+    console.log(`ℹ️ invoice.upcoming ${invoice.id}: quantity already aligned (${currentQuantity})`)
+    return
+  }
+
+  // Stripe subscription quantities should stay >= 1.
+  // If no billable licenses remain, keep quantity unchanged and rely on existing
+  // cancellation lifecycle (status='canceled' + renewal cleanup) to terminate flow.
+  if (targetQuantity <= 0) {
+    console.warn(`⚠️ invoice.upcoming ${invoice.id}: computed quantity=0 for ${subscriptionId}, skipping Stripe update`)
+    return
+  }
+
+  // Update Stripe before invoice finalization so renewal charges the correct quantity.
+  await stripe.subscriptions.update(subscriptionId, {
+    items: [{
+      id: subscriptionItem.id,
+      quantity: targetQuantity,
+    }],
+    proration_behavior: "none",
+    metadata: {
+      ...metadata,
+      quantity: targetQuantity.toString(),
+      quantity_synced_at: new Date().toISOString(),
+    },
+  })
+
+  // Keep DB cache aligned with Stripe quantity.
+  const unitPrice = subscriptionItem?.price?.unit_amount || null
+  const totalAmountCents = unitPrice !== null ? unitPrice * targetQuantity : null
+
+  await supabase.from("stripe_subscriptions")
+    .update({
+      quantity: targetQuantity,
+      unit_amount_cents: totalAmountCents,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("stripe_subscription_id", subscriptionId)
+
+  console.log(
+    `✅ invoice.upcoming ${invoice.id}: synced subscription ${subscriptionId} quantity ${currentQuantity} -> ${targetQuantity}`
+  )
 }
 
 /**
@@ -993,6 +1119,11 @@ async function handleSubscriptionUpdate(
   const stripeQuantity = (typeof subscriptionItem?.quantity === "number" && subscriptionItem.quantity > 0)
     ? subscriptionItem.quantity
     : (metadataQuantity > 0 ? metadataQuantity : 1)
+  const resolvedSubscriptionType = price_type || "individual_monthly"
+  const stripeUnitAmountCents = subscriptionItem?.price?.unit_amount || null
+  const storedAmountCents = (resolvedSubscriptionType === "pro_license_monthly" && stripeUnitAmountCents !== null)
+    ? stripeUnitAmountCents * stripeQuantity
+    : stripeUnitAmountCents
 
   // FIX BUG-003: In newer Stripe API versions (2025+), current_period_start/end
   // are in subscription.items.data[0], not at the subscription level.
@@ -1011,11 +1142,11 @@ async function handleSubscriptionUpdate(
     stripe_customer_id: subscription.customer as string,
     stripe_product_id: product_id || subscriptionItem?.price?.product || null,
     stripe_price_id: stripePriceId,
-    subscription_type: price_type || "individual_monthly",
+    subscription_type: resolvedSubscriptionType,
     status: subscription.status,
     quantity: stripeQuantity,
     currency: subscription.currency,
-    unit_amount_cents: subscriptionItem?.price?.unit_amount || null,
+    unit_amount_cents: storedAmountCents,
     current_period_start: periodStart
       ? new Date(periodStart * 1000).toISOString()
       : null,

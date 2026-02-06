@@ -100,7 +100,7 @@ fun LinkedAccountsScreen(
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            "Comptes liés",
+                            "Collaborateurs",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -474,6 +474,7 @@ fun LinkedAccountsScreen(
                                 LinkedUserRow(
                                     user = user,
                                     licenseStatus = user.userId?.let { uiState.getLicenseStatus(it) } ?: AccountLicenseStatus.UNLICENSED,
+                                    isPersonalLifetime = uiState.isPersonalLifetime(user.userId),
                                     onClick = {
                                         // If PENDING, show dialog instead of navigating
                                         if (user.status == LinkStatus.PENDING) {
@@ -678,6 +679,7 @@ private fun StatItem(
 private fun LinkedUserRow(
     user: LinkedUserDto,
     licenseStatus: AccountLicenseStatus,
+    isPersonalLifetime: Boolean,
     onClick: () -> Unit,
     onResendInvitation: () -> Unit,
     onDelete: () -> Unit,
@@ -736,7 +738,10 @@ private fun LinkedUserRow(
         if (isPending) {
             StatusBadge(status = LinkStatus.PENDING)
         } else {
-            LicenseStatusBadge(licenseStatus = licenseStatus)
+            LicenseStatusBadge(
+                licenseStatus = licenseStatus,
+                isPersonalLifetime = isPersonalLifetime
+            )
         }
 
         // More options
@@ -814,7 +819,10 @@ private fun LinkedUserRow(
  * Badge showing license status (whether a license is assigned)
  */
 @Composable
-private fun LicenseStatusBadge(licenseStatus: AccountLicenseStatus) {
+private fun LicenseStatusBadge(
+    licenseStatus: AccountLicenseStatus,
+    isPersonalLifetime: Boolean = false
+) {
     val (backgroundColor, textColor, text) = when (licenseStatus) {
         AccountLicenseStatus.LICENSED -> Triple(
             MotiumPrimary.copy(alpha = 0.15f),
@@ -824,7 +832,7 @@ private fun LicenseStatusBadge(licenseStatus: AccountLicenseStatus) {
         AccountLicenseStatus.UNLICENSED -> Triple(
             TextSecondaryDark.copy(alpha = 0.15f),
             TextSecondaryDark,
-            "Sans licence"
+            if (isPersonalLifetime) "Abonné" else "Sans licence"
         )
         AccountLicenseStatus.PENDING_UNLINK -> Triple(
             PendingOrange.copy(alpha = 0.15f),

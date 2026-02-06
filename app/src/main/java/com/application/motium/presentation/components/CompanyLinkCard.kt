@@ -36,6 +36,7 @@ fun CompanyLinkCard(
     isExpanded: Boolean,
     onExpandChange: (Boolean) -> Unit,
     onPreferencesChange: (CompanyLinkPreferences) -> Unit,
+    onLinkDirectlyClick: () -> Unit,
     onUnlinkClick: () -> Unit,
     surfaceColor: Color,
     textColor: Color,
@@ -79,6 +80,14 @@ fun CompanyLinkCard(
                         textColor = textColor,
                         textSecondaryColor = textSecondaryColor
                     )
+
+                    // Direct activation button for pending links (same flow as email deep link)
+                    if (companyLink.status == LinkStatus.PENDING && !companyLink.invitationToken.isNullOrBlank()) {
+                        HorizontalDivider(color = textSecondaryColor.copy(alpha = 0.1f))
+                        LinkDirectlyButtonRow(
+                            onLinkDirectlyClick = onLinkDirectlyClick
+                        )
+                    }
 
                     // Unlink button
                     if (companyLink.status == LinkStatus.ACTIVE) {
@@ -296,6 +305,27 @@ private fun SharingCheckbox(
             color = if (enabled) textColor else textColor.copy(alpha = 0.5f),
             fontSize = 14.sp
         )
+    }
+}
+
+@Composable
+private fun LinkDirectlyButtonRow(
+    onLinkDirectlyClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Button(
+            onClick = onLinkDirectlyClick,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MotiumPrimary
+            )
+        ) {
+            Text("Lier directement", color = Color.White)
+        }
     }
 }
 

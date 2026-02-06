@@ -30,6 +30,17 @@ enum class TrackingMode {
 }
 
 /**
+ * Safe parsing for TrackingMode strings.
+ */
+fun String?.toTrackingModeOrDefault(default: TrackingMode = TrackingMode.DISABLED): TrackingMode {
+    return try {
+        if (this.isNullOrBlank()) default else TrackingMode.valueOf(this)
+    } catch (e: Exception) {
+        default
+    }
+}
+
+/**
  * Paramètres d'auto-tracking pour un utilisateur
  */
 data class AutoTrackingSettings(

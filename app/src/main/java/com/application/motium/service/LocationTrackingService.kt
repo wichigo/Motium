@@ -303,6 +303,8 @@ class LocationTrackingService : Service() {
     // Données pour l'assignation automatique du véhicule et du type de trajet
     private var currentUserId: String? = null
     private var defaultVehicleId: String? = null
+    private var minTripDistanceMetersOverride: Int? = null
+    private var minTripDurationSecondsOverride: Int? = null
 
     // CRASH FIX: Add exception handler to catch all uncaught exceptions in coroutines
     private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
@@ -2247,10 +2249,12 @@ class LocationTrackingService : Service() {
 
                 saveTripToDatabase(trip)
             } else {
+                val minDistanceMeters = (minTripDistanceMetersOverride ?: MIN_TRIP_DISTANCE_METERS.toInt()).toDouble()
+                val minDurationMs = (minTripDurationSecondsOverride?.toLong()?.times(1000L) ?: MIN_TRIP_DURATION_MS)
                 MotiumApplication.logger.w(
                     "TRIP REJECTED - validation failed: " +
-                    "distance=${String.format("%.0f", trip.totalDistance)}m (min: ${MIN_TRIP_DISTANCE_METERS}), " +
-                    "duration=${duration/1000}s (min: ${MIN_TRIP_DURATION_MS/1000}), " +
+                    "distance=${String.format("%.0f", trip.totalDistance)}m (min: ${minDistanceMeters}), " +
+                    "duration=${duration/1000}s (min: ${minDurationMs/1000}), " +
                     "avgSpeed=${String.format("%.1f", (trip.totalDistance / (duration / 1000.0)) * 3.6)} km/h (min: ${MIN_AVERAGE_SPEED_MPS * 3.6}), " +
                     "points=${trip.locations.size} (min: 3)",
                     "TripTracker"
@@ -2289,15 +2293,17 @@ class LocationTrackingService : Service() {
         val duration = trip.endTime!! - trip.startTime
         val averageSpeed = if (duration > 0) trip.totalDistance / (duration / 1000.0) else 0.0
 
-        // Critères de validation des trajets
-        val validDistance = trip.totalDistance >= MIN_TRIP_DISTANCE_METERS
-        val validDuration = duration >= MIN_TRIP_DURATION_MS
+        // Trip validation criteria (configurable via AutoTrackingSettings)
+        val minDistanceMeters = (minTripDistanceMetersOverride ?: MIN_TRIP_DISTANCE_METERS.toInt()).toDouble()
+        val minDurationMs = (minTripDurationSecondsOverride?.toLong()?.times(1000L) ?: MIN_TRIP_DURATION_MS)
+        val validDistance = trip.totalDistance >= minDistanceMeters
+        val validDuration = duration >= minDurationMs
         val validSpeed = averageSpeed >= MIN_AVERAGE_SPEED_MPS
         val hasEnoughPoints = trip.locations.size >= 2
 
         MotiumApplication.logger.i(
-            "Trip validation - Distance: ${validDistance} (${String.format("%.0f", trip.totalDistance)}m), " +
-            "Duration: ${validDuration} (${duration/1000}s), " +
+            "Trip validation - Distance: ${validDistance} (${String.format("%.0f", trip.totalDistance)}m, min=${minDistanceMeters}m), " +
+            "Duration: ${validDuration} (${duration/1000}s, min=${minDurationMs/1000}s), " +
             "Speed: ${validSpeed} (${String.format("%.1f", averageSpeed * 3.6)} km/h), " +
             "Points: ${hasEnoughPoints} (${trip.locations.size})",
             "TripValidator"
@@ -2434,6 +2440,18 @@ class LocationTrackingService : Service() {
                             "AutoTracking"
                         )
                     }
+
+                    // Charger les paramètres d'auto-tracking (min distance/duration)
+                    val settings = workScheduleRepository.getAutoTrackingSettings(user.id)
+                    if (settings != null) {
+                        minTripDistanceMetersOverride = settings.minTripDistanceMeters
+                        minTripDurationSecondsOverride = settings.minTripDurationSeconds
+                        MotiumApplication.logger.i(
+                            "Auto-tracking settings loaded: minDistance=${settings.minTripDistanceMeters}m, " +
+                            "minDuration=${settings.minTripDurationSeconds}s",
+                            "AutoTracking"
+                        )
+                    }
                 } else {
                     MotiumApplication.logger.w("⚠️ No user authenticated - trips won't have vehicle/type assigned", "AutoTracking")
                 }
@@ -2485,7 +2503,7 @@ class LocationTrackingService : Service() {
                     "DatabaseSave"
                 )
 
-                // Determine trip type synchronously (fast, local operation)
+                // Determine trip type locally (Room-only, no network)
                 val tripType = determineTripTypeSync()
 
                 // Get current default vehicle (cached, fast)
@@ -2542,24 +2560,23 @@ class LocationTrackingService : Service() {
     }
 
     /**
-     * Synchronous trip type determination using cached work schedules.
-     * Falls back to PERSONAL if anything fails - never blocks.
+     * Local-only trip type determination using cached work schedules.
+     * Falls back to PERSONAL if anything fails - no network calls.
      */
-    private fun determineTripTypeSync(): String {
+    private suspend fun determineTripTypeSync(): String {
         return try {
             // Use cached tracking mode if available
             val trackingMode = tripRepository.getTrackingMode()
             when (trackingMode) {
                 com.application.motium.domain.model.TrackingMode.ALWAYS -> "PROFESSIONAL"
                 com.application.motium.domain.model.TrackingMode.WORK_HOURS_ONLY -> {
-                    // Check cached work hours (fast, no DB call)
-                    val calendar = java.util.Calendar.getInstance()
-                    val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-                    // Simple heuristic: 8h-19h weekdays = PRO
-                    val dayOfWeek = calendar.get(java.util.Calendar.DAY_OF_WEEK)
-                    val isWeekday = dayOfWeek != java.util.Calendar.SATURDAY && dayOfWeek != java.util.Calendar.SUNDAY
-                    val isWorkHours = hour in 8..18
-                    if (isWeekday && isWorkHours) "PROFESSIONAL" else "PERSONAL"
+                    val userId = currentUserId
+                    val inWorkHours = if (userId != null) {
+                        workScheduleRepository.isInWorkHoursLocalOnly(userId)
+                    } else {
+                        false
+                    }
+                    if (inWorkHours) "PROFESSIONAL" else "PERSONAL"
                 }
                 else -> "PERSONAL"
             }

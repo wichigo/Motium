@@ -3,6 +3,7 @@ package com.application.motium.data.supabase
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripLocation
 import com.application.motium.data.local.entities.*
+import com.application.motium.domain.model.toTrackingModeOrDefault
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.*
 
@@ -350,11 +351,12 @@ object ChangeEntityMapper {
         return try {
             val id = data.getString("id") ?: return null
             val updatedAt = data.getString("updated_at") ?: return null
+            val mode = data.getString("tracking_mode").toTrackingModeOrDefault()
 
             AutoTrackingSettingsEntity(
                 id = id,
                 userId = userId,
-                trackingMode = data.getString("tracking_mode") ?: "MANUAL",
+                trackingMode = mode.name,
                 minTripDistanceMeters = data.getInt("min_trip_distance_meters") ?: 500,
                 minTripDurationSeconds = data.getInt("min_trip_duration_seconds") ?: 120,
                 createdAt = data.getString("created_at") ?: updatedAt,

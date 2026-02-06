@@ -245,6 +245,7 @@ class ActivityRecognitionService : Service() {
         instance = this
 
         MotiumApplication.logger.i("🚀 ActivityRecognitionService created", TAG)
+        AutoTrackingDiagnostics.logServiceStart(this)
 
         createNotificationChannel()
         activityRecognitionClient = ActivityRecognition.getClient(this)
@@ -262,6 +263,13 @@ class ActivityRecognitionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         MotiumApplication.logger.i("📨 onStartCommand - action: $action", TAG)
+
+        // Ensure foreground + registration when started via PendingIntent (keep-alive or transition)
+        if (!isActivityRecognitionActive) {
+            startForegroundService()
+            startActivityRecognition()
+            isActivityRecognitionActive = true
+        }
 
         // ==================== TRAITEMENT DES TRANSITIONS ====================
         // Si l'intent contient une transition d'activité (via PendingIntent.getForegroundService)
@@ -476,6 +484,14 @@ class ActivityRecognitionService : Service() {
             val timestamp = dateFormat.format(Date(event.elapsedRealTimeNanos / 1_000_000))
             val eventTimestampMs = event.elapsedRealTimeNanos / 1_000_000
             val eventAgeMs = currentTimeMs - eventTimestampMs
+
+            if (!shouldProcessEvent(event.activityType, event.transitionType)) {
+                AutoTrackingDiagnostics.logFailedTransition(
+                    this,
+                    "Debounced: $activityName $transitionType"
+                )
+                return@forEach
+            }
 
             MotiumApplication.logger.i(
                 "🎯 Transition: $activityName $transitionType at $timestamp (age: ${eventAgeMs / 1000}s)",

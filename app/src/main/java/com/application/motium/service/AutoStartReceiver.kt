@@ -6,6 +6,11 @@ import android.content.Intent
 import android.os.Build
 import com.application.motium.MotiumApplication
 import com.application.motium.data.TripRepository
+import com.application.motium.data.local.LocalUserRepository
+import com.application.motium.data.supabase.WorkScheduleRepository
+import com.application.motium.data.sync.AutoTrackingScheduleWorker
+import com.application.motium.domain.model.TrackingMode
+import com.application.motium.worker.ActivityRecognitionHealthWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -57,20 +62,55 @@ class AutoStartReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val tripRepository = TripRepository.getInstance(context)
-                val isAutoTrackingEnabled = tripRepository.isAutoTrackingEnabled()
+                val localUserRepository = LocalUserRepository.getInstance(context)
+                val workScheduleRepository = WorkScheduleRepository.getInstance(context)
+                val userId = localUserRepository.getLoggedInUser()?.id
 
-                MotiumApplication.logger.i(
-                    "Auto-tracking enabled: $isAutoTrackingEnabled",
-                    TAG
-                )
+                // Sync cache from Room first (if possible) to avoid stale prefs
+                if (userId != null) {
+                    tripRepository.syncAutoTrackingCacheFromRoom(userId)
+                }
 
-                if (isAutoTrackingEnabled) {
-                    startAutoTracking(context)
-                } else {
-                    MotiumApplication.logger.i(
-                        "Auto-tracking is disabled, not starting service",
-                        TAG
-                    )
+                val trackingMode = tripRepository.getTrackingMode()
+                MotiumApplication.logger.i("Tracking mode at boot: $trackingMode (userId=$userId)", TAG)
+
+                when (trackingMode) {
+                    TrackingMode.ALWAYS -> {
+                        tripRepository.setAutoTrackingEnabled(true)
+                        ActivityRecognitionHealthWorker.schedule(context)
+                        startAutoTracking(context)
+                    }
+                    TrackingMode.WORK_HOURS_ONLY -> {
+                        AutoTrackingScheduleWorker.schedule(context)
+                        ActivityRecognitionHealthWorker.schedule(context)
+
+                        val shouldTrack = if (userId != null) {
+                            workScheduleRepository.shouldAutotrackOfflineFirst(userId)
+                        } else {
+                            false
+                        }
+                        tripRepository.setAutoTrackingEnabled(shouldTrack)
+
+                        if (shouldTrack) {
+                            startAutoTracking(context)
+                        } else {
+                            ActivityRecognitionService.stopService(context)
+                            MotiumApplication.logger.i(
+                                "Auto-tracking is disabled (outside work hours), not starting service",
+                                TAG
+                            )
+                        }
+
+                        // Force immediate evaluation (best effort)
+                        AutoTrackingScheduleWorker.runNow(context)
+                    }
+                    TrackingMode.DISABLED -> {
+                        tripRepository.setAutoTrackingEnabled(false)
+                        AutoTrackingScheduleWorker.cancel(context)
+                        ActivityRecognitionHealthWorker.cancel(context)
+                        ActivityRecognitionService.stopService(context)
+                        MotiumApplication.logger.i("Auto-tracking disabled (mode DISABLED)", TAG)
+                    }
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e(

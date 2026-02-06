@@ -19,6 +19,7 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
+import io.github.jan.supabase.postgrest.result.PostgrestResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -63,6 +64,8 @@ class CompanyLinkRepository private constructor(private val context: Context) {
         val share_personal_info: Boolean = true,
         val share_expenses: Boolean = false,
         val invitation_token: String? = null,
+        val invitation_email: String? = null,
+        val invitation_expires_at: String? = null,
         val linked_at: String? = null,
         val linked_activated_at: String? = null,
         val unlinked_at: String? = null,
@@ -203,10 +206,11 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             MotiumApplication.logger.i("Activating company link with token for user: $userId", "CompanyLinkRepository")
 
             // Call Supabase RPC to activate the link
-            val response = postgres.rpc(
+            val rpcResult = postgres.rpc(
                 "activate_company_link",
                 ActivateLinkRequest(p_token = token, p_user_id = userId)
-            ).decodeSingleOrNull<ActivateLinkResponse>()
+            )
+            val response = parseActivateLinkResponse(rpcResult)
 
             if (response == null) {
                 return@withContext Result.failure(Exception("Invalid response from server"))
@@ -254,6 +258,60 @@ class CompanyLinkRepository private constructor(private val context: Context) {
     }
 
     /**
+     * Activate a pending company link directly by link ID.
+     * Used as a fallback when invitation token is no longer valid but the pending link
+     * is already visible to the authenticated user in settings.
+     */
+    suspend fun activatePendingLinkDirectly(linkId: String, userId: String): Result<CompanyLink> = withContext(Dispatchers.IO) {
+        try {
+            val now = java.time.Instant.now().toString()
+
+            postgres.from("company_links")
+                .update({
+                    set("status", "ACTIVE")
+                    set("linked_activated_at", now)
+                    set("invitation_token", null as String?)
+                    set("invitation_expires_at", null as String?)
+                    set("updated_at", now)
+                }) {
+                    filter {
+                        eq("id", linkId)
+                        eq("user_id", userId)
+                        eq("status", "PENDING")
+                    }
+                }
+
+            val refreshed = postgres.from("company_links")
+                .select {
+                    filter {
+                        eq("id", linkId)
+                        eq("user_id", userId)
+                    }
+                }
+                .decodeList<CompanyLinkDto>()
+                .firstOrNull()
+                ?: return@withContext Result.failure(Exception("Lien introuvable après activation"))
+
+            val companyLink = refreshed.toCompanyLink()
+
+            val entity = companyLink.toEntity(
+                syncStatus = SyncStatus.SYNCED.name,
+                serverUpdatedAt = System.currentTimeMillis()
+            )
+            companyLinkDao.insertCompanyLink(entity)
+
+            MotiumApplication.logger.i(
+                "Activated pending link directly for company: ${companyLink.companyName}",
+                "CompanyLinkRepository"
+            )
+            Result.success(companyLink)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("Error activating pending link directly: ${e.message}", "CompanyLinkRepository", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Offline-first activation of company link.
      * Saves pending state locally first, then attempts RPC.
      * If RPC fails, queues activation for retry in background sync.
@@ -289,10 +347,11 @@ class CompanyLinkRepository private constructor(private val context: Context) {
 
             // 2. Try RPC immediately
             try {
-                val response = postgres.rpc(
+                val rpcResult = postgres.rpc(
                     "activate_company_link",
                     ActivateLinkRequest(p_token = token, p_user_id = userId)
-                ).decodeSingleOrNull<ActivateLinkResponse>()
+                )
+                val response = parseActivateLinkResponse(rpcResult)
 
                 if (response != null && response.success) {
                     // RPC succeeded - create active link
@@ -708,11 +767,23 @@ class CompanyLinkRepository private constructor(private val context: Context) {
             sharePersonalTrips = share_personal_trips,
             sharePersonalInfo = share_personal_info,
             shareExpenses = share_expenses,
+            invitationToken = invitation_token,
+            invitationEmail = invitation_email,
+            invitationExpiresAt = invitation_expires_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
             linkedAt = linked_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
             linkedActivatedAt = linked_activated_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
             unlinkedAt = unlinked_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { null } },
             createdAt = created_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { now } } ?: now,
             updatedAt = updated_at?.let { try { kotlinx.datetime.Instant.parse(it) } catch (e: Exception) { now } } ?: now
         )
+    }
+
+    /**
+     * Some deployments return RPC JSON as an object, others as a single-item array.
+     * Support both to avoid surfacing JSON parsing errors in the UI.
+     */
+    private fun parseActivateLinkResponse(result: PostgrestResult): ActivateLinkResponse? {
+        return result.decodeAsOrNull<ActivateLinkResponse>()
+            ?: runCatching { result.decodeSingleOrNull<ActivateLinkResponse>() }.getOrNull()
     }
 }

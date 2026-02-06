@@ -125,7 +125,7 @@ serve(async (req) => {
       .from('users')
       .select('id, email')
       .eq('email', email.toLowerCase())
-      .single()
+      .maybeSingle()
 
     // Check if there's already a pending/active link for this email
     const { data: existingLink } = await supabase
@@ -134,7 +134,7 @@ serve(async (req) => {
       .eq('linked_pro_account_id', pro_account_id)
       .or(`user_id.eq.${existingUser?.id ?? '00000000-0000-0000-0000-000000000000'},invitation_email.eq.${email.toLowerCase()}`)
       .in('status', ['PENDING', 'ACTIVE'])
-      .single()
+      .maybeSingle()
 
     if (existingLink) {
       return new Response(

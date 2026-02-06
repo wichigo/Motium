@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.application.motium.domain.model.AutoTrackingSettings
 import com.application.motium.domain.model.TrackingMode
+import com.application.motium.domain.model.toTrackingModeOrDefault
 import com.application.motium.domain.model.WorkSchedule
 import kotlinx.datetime.Instant
 
@@ -120,7 +121,7 @@ fun AutoTrackingSettingsEntity.toDomainModel(): AutoTrackingSettings {
     return AutoTrackingSettings(
         id = id,
         userId = userId,
-        trackingMode = TrackingMode.valueOf(trackingMode),
+        trackingMode = trackingMode.toTrackingModeOrDefault(),
         minTripDistanceMeters = minTripDistanceMeters,
         minTripDurationSeconds = minTripDurationSeconds,
         createdAt = Instant.parse(createdAt),

@@ -2113,7 +2113,7 @@ class DeltaSyncWorker(
                             val localSettings = workScheduleDao.getAutoTrackingSettings(userId)
 
                             if (localSettings == null || localSettings.syncStatus == SyncStatus.SYNCED.name) {
-                                workScheduleDao.insertAutoTrackingSettings(entity)
+                                workScheduleDao.replaceAutoTrackingSettingsForUser(userId, entity)
                                 syncedCount++
                             } else {
                                 // Check for pending operations before overwriting
@@ -2125,7 +2125,7 @@ class DeltaSyncWorker(
                                         TAG
                                     )
                                 } else {
-                                    workScheduleDao.insertAutoTrackingSettings(entity)
+                                    workScheduleDao.replaceAutoTrackingSettingsForUser(userId, entity)
                                     syncedCount++
                                 }
                             }

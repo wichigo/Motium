@@ -135,15 +135,57 @@ class CompanyLinkViewModel(
                     MotiumApplication.logger.i("Successfully activated link with ${link.companyName}", TAG)
                 },
                 onFailure = { error ->
-                    _activationResult.value = LinkActivationResult.Error(error.message ?: "Unknown error")
-                    _uiState.update { it.copy(isLoading = false) }
-                    MotiumApplication.logger.e("Failed to activate link: ${error.message}", TAG)
+                    val errorMessage = error.message ?: "Unknown error"
+                    val pendingLink = _uiState.value.companyLinks.firstOrNull {
+                        it.status == LinkStatus.PENDING && it.invitationToken == token
+                    }
+
+                    // Fallback for stale/expired invitation token:
+                    // if the link is already visible to this authenticated user, activate by link ID.
+                    if (pendingLink != null && shouldFallbackToDirectActivation(errorMessage)) {
+                        val fallbackResult = companyLinkRepository.activatePendingLinkDirectly(
+                            linkId = pendingLink.id,
+                            userId = userId
+                        )
+                        fallbackResult.fold(
+                            onSuccess = { link ->
+                                _activationResult.value = LinkActivationResult.Success(link.companyName)
+                                loadCompanyLinks(userId)
+                                MotiumApplication.logger.i("Activated link via direct fallback for ${link.companyName}", TAG)
+                            },
+                            onFailure = { fallbackError ->
+                                _activationResult.value = LinkActivationResult.Error(
+                                    fallbackError.message ?: "Impossible d'activer la liaison."
+                                )
+                                _uiState.update { it.copy(isLoading = false) }
+                                MotiumApplication.logger.e("Direct activation fallback failed: ${fallbackError.message}", TAG)
+                            }
+                        )
+                    } else {
+                        val friendlyMessage = if (shouldFallbackToDirectActivation(errorMessage)) {
+                            "Invitation expirée. Demandez à votre entreprise de renvoyer l'invitation."
+                        } else {
+                            errorMessage
+                        }
+                        _activationResult.value = LinkActivationResult.Error(friendlyMessage)
+                        _uiState.update { it.copy(isLoading = false) }
+                        MotiumApplication.logger.e("Failed to activate link: $errorMessage", TAG)
+                    }
                 }
             )
 
             // Clear the activation dialog
             _showActivationDialog.value = null
         }
+    }
+
+    private fun shouldFallbackToDirectActivation(message: String): Boolean {
+        val normalized = message.lowercase()
+        return normalized.contains("token invalide") ||
+            normalized.contains("token invalid") ||
+            normalized.contains("invalid token") ||
+            normalized.contains("already used") ||
+            normalized.contains("expire")
     }
 
     /**

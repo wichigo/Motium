@@ -469,13 +469,15 @@ fun NewHomeScreen(
                                     // Mettre à jour le mode de tracking
                                     currentUser?.let { user ->
                                         coroutineScope.launch(Dispatchers.IO) {
+                                            val existingSettings = workScheduleRepository.getAutoTrackingSettings(user.id)
                                             val settings = AutoTrackingSettings(
-                                                id = java.util.UUID.randomUUID().toString(),
+                                                id = existingSettings?.id ?: java.util.UUID.randomUUID().toString(),
                                                 userId = user.id,
                                                 trackingMode = newMode,
-                                                minTripDistanceMeters = 100,
-                                                minTripDurationSeconds = 60,
-                                                createdAt = Instant.fromEpochMilliseconds(System.currentTimeMillis()),
+                                                minTripDistanceMeters = existingSettings?.minTripDistanceMeters ?: 100,
+                                                minTripDurationSeconds = existingSettings?.minTripDurationSeconds ?: 60,
+                                                createdAt = existingSettings?.createdAt
+                                                    ?: Instant.fromEpochMilliseconds(System.currentTimeMillis()),
                                                 updatedAt = Instant.fromEpochMilliseconds(System.currentTimeMillis())
                                             )
                                             workScheduleRepository.saveAutoTrackingSettings(settings)

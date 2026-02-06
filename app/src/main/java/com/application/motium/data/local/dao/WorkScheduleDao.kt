@@ -107,6 +107,15 @@ interface WorkScheduleDao {
     suspend fun insertAutoTrackingSettings(settings: AutoTrackingSettingsEntity)
 
     /**
+     * Replace auto-tracking settings for a user (ensures single row per user).
+     */
+    @Transaction
+    suspend fun replaceAutoTrackingSettingsForUser(userId: String, settings: AutoTrackingSettingsEntity) {
+        deleteAutoTrackingSettingsForUser(userId)
+        insertAutoTrackingSettings(settings)
+    }
+
+    /**
      * Get auto-tracking settings for a user.
      */
     @Query("SELECT * FROM auto_tracking_settings WHERE userId = :userId LIMIT 1")

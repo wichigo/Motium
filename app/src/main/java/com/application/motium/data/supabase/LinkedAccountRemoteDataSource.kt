@@ -67,7 +67,7 @@ class LinkedAccountRemoteDataSource private constructor(
             // Query company_links with embedded user data
             // Using simple join syntax - PostgREST auto-detects the FK relationship
             val response = supabaseClient.from("company_links")
-                .select(Columns.raw("*, users(id, name, email, phone_number)")) {
+                .select(Columns.raw("*, users(id, name, email, phone_number, subscription_type)")) {
                     filter {
                         eq("linked_pro_account_id", proAccountId)
                     }
@@ -85,7 +85,7 @@ class LinkedAccountRemoteDataSource private constructor(
                 if (refreshed) {
                     return@withContext try {
                         val response = supabaseClient.from("company_links")
-                            .select(Columns.raw("*, users(id, name, email, phone_number)")) {
+                            .select(Columns.raw("*, users(id, name, email, phone_number, subscription_type)")) {
                                 filter {
                                     eq("linked_pro_account_id", proAccountId)
                                 }
@@ -114,7 +114,7 @@ class LinkedAccountRemoteDataSource private constructor(
     suspend fun getLinkedUserById(userId: String): Result<LinkedUserDto> = withContext(Dispatchers.IO) {
         try {
             val response = supabaseClient.from("company_links")
-                .select(Columns.raw("*, users(id, name, email, phone_number)")) {
+                .select(Columns.raw("*, users(id, name, email, phone_number, subscription_type)")) {
                     filter {
                         eq("user_id", userId)
                     }
@@ -134,7 +134,7 @@ class LinkedAccountRemoteDataSource private constructor(
     suspend fun getLinkedUserByLinkId(linkId: String): Result<LinkedUserDto> = withContext(Dispatchers.IO) {
         try {
             val response = supabaseClient.from("company_links")
-                .select(Columns.raw("*, users(id, name, email, phone_number)")) {
+                .select(Columns.raw("*, users(id, name, email, phone_number, subscription_type)")) {
                     filter {
                         eq("id", linkId)
                     }
@@ -455,22 +455,66 @@ class LinkedAccountRemoteDataSource private constructor(
             val accessToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
                 ?: return@withContext Result.failure(Exception("Not authenticated"))
 
-            // Generate new invitation token
-            val newToken = java.util.UUID.randomUUID().toString()
-            val expiresAt = java.time.Instant.now().plusSeconds(7 * 24 * 60 * 60).toString() // 7 days
-
-            // Update the invitation token in the database
-            supabaseClient.from("company_links")
-                .update({
-                    set("invitation_token", newToken)
-                    set("invitation_expires_at", expiresAt)
-                    set("updated_at", java.time.Instant.now().toString())
-                }) {
-                    filter {
-                        eq("id", companyLinkId)
-                        eq("status", "PENDING")
-                    }
+            val currentInvite = supabaseClient.from("company_links")
+                .select(Columns.raw("id, status, invitation_token, invitation_expires_at, created_at, updated_at")) {
+                    filter { eq("id", companyLinkId) }
                 }
+                .decodeSingle<ResendInvitationStateDto>()
+
+            if (currentInvite.status != "PENDING") {
+                return@withContext Result.failure(Exception("Cette invitation n'est plus en attente"))
+            }
+
+            val now = java.time.Instant.now()
+            val parsedExpiresAt = currentInvite.invitation_expires_at?.let {
+                runCatching { java.time.Instant.parse(it) }.getOrNull()
+            }
+            val parsedUpdatedAt = currentInvite.updated_at?.let {
+                runCatching { java.time.Instant.parse(it) }.getOrNull()
+            }
+            val parsedCreatedAt = currentInvite.created_at?.let {
+                runCatching { java.time.Instant.parse(it) }.getOrNull()
+            }
+
+            // Approximate original send time from expiry (expiry is set to now + 7 days when invite is sent).
+            val derivedSentAt = parsedExpiresAt?.minusSeconds(7L * 24 * 60 * 60)
+            val lastSentAt = listOfNotNull(parsedUpdatedAt, derivedSentAt, parsedCreatedAt).maxOrNull()
+
+            if (lastSentAt != null) {
+                val nextAllowedAt = lastSentAt.plusSeconds(60L * 60)
+                if (now.isBefore(nextAllowedAt)) {
+                    val remainingMinutes = java.time.Duration.between(now, nextAllowedAt).toMinutes().coerceAtLeast(1)
+                    return@withContext Result.failure(
+                        Exception("Invitation deja envoyee recemment. Reessayez dans $remainingMinutes min.")
+                    )
+                }
+            }
+
+            val hasValidToken = !currentInvite.invitation_token.isNullOrBlank() &&
+                parsedExpiresAt != null &&
+                parsedExpiresAt.isAfter(now)
+
+            val tokenToSend = if (hasValidToken) {
+                currentInvite.invitation_token!!
+            } else {
+                java.util.UUID.randomUUID().toString()
+            }
+
+            // Only rotate token when it's missing/expired. Otherwise keep it to avoid invalidating old links.
+            if (!hasValidToken) {
+                val refreshedExpiresAt = now.plusSeconds(7L * 24 * 60 * 60).toString()
+                supabaseClient.from("company_links")
+                    .update({
+                        set("invitation_token", tokenToSend)
+                        set("invitation_expires_at", refreshedExpiresAt)
+                        set("updated_at", now.toString())
+                    }) {
+                        filter {
+                            eq("id", companyLinkId)
+                            eq("status", "PENDING")
+                        }
+                    }
+            }
 
             // Send the invitation email via send-gdpr-email Edge Function
             // (same as what send-invitation does internally)
@@ -483,7 +527,7 @@ class LinkedAccountRemoteDataSource private constructor(
                 append("\"data\":{")
                 append("\"employee_name\":\"$escapedUserName\",")
                 append("\"company_name\":\"$escapedCompanyName\",")
-                append("\"invitation_token\":\"$newToken\"")
+                append("\"invitation_token\":\"$tokenToSend\"")
                 append("}")
                 append("}")
             }.toRequestBody("application/json".toMediaType())
@@ -500,6 +544,16 @@ class LinkedAccountRemoteDataSource private constructor(
             val responseBody = response.body?.string() ?: ""
 
             if (response.isSuccessful) {
+                // Track the last successful send timestamp for cooldown enforcement.
+                supabaseClient.from("company_links")
+                    .update({
+                        set("updated_at", now.toString())
+                    }) {
+                        filter {
+                            eq("id", companyLinkId)
+                            eq("status", "PENDING")
+                        }
+                    }
                 MotiumApplication.logger.i("Invitation resent to $email", "LinkedAccountRepo")
                 Result.success(Unit)
             } else {
@@ -680,6 +734,7 @@ data class CompanyLinkWithUserDto(
         userName = users?.name,
         userEmail = users?.email ?: invitation_email ?: "",  // Fallback to invitation_email for pending
         userPhone = users?.phone_number,
+        personalSubscriptionType = users?.subscription_type,
         department = department,
         linkStatus = status,
         invitedAt = linked_at,
@@ -699,7 +754,8 @@ data class EmbeddedUserDto(
     val id: String,
     val name: String? = null,
     val email: String,
-    val phone_number: String? = null
+    val phone_number: String? = null,
+    val subscription_type: String? = null
 )
 
 /**
@@ -732,6 +788,16 @@ data class MinimalUserDto(
     val name: String? = null
 )
 
+@Serializable
+data class ResendInvitationStateDto(
+    val id: String,
+    val status: String,
+    val invitation_token: String? = null,
+    val invitation_expires_at: String? = null,
+    val created_at: String? = null,
+    val updated_at: String? = null
+)
+
 /**
  * DTO representing a linked user with their link info
  */
@@ -747,6 +813,7 @@ data class LinkedUserDto(
     val userEmail: String,
     @SerialName("user_phone")
     val userPhone: String? = null,
+    val personalSubscriptionType: String? = null, // Individual subscription type from users.subscription_type
     val department: String? = null,
     @SerialName("link_status")
     val linkStatus: String?,
