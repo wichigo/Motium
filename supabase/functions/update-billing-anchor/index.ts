@@ -17,6 +17,8 @@ interface RequestBody {
 }
 
 const MAX_BILLING_ANCHOR_DAY = 15
+const LICENSE_STATUSES_TO_REANCHOR = ["active", "available", "suspended", "pending"]
+const LINKED_LICENSE_STATUSES_TO_REANCHOR = ["active", "suspended", "pending"]
 
 const clampAnchorDay = (day: number): number => {
   const safe = Math.trunc(day)
@@ -185,6 +187,30 @@ serve(async (req) => {
         )
       }
 
+      // Do not re-anchor subscriptions already scheduled for cancellation.
+      // Rewriting the schedule phases in this state can shift the planned end date.
+      const existingSchedule = typeof subscription.schedule === "object" && subscription.schedule
+        ? subscription.schedule
+        : null
+      if (subscription.cancel_at_period_end) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Cannot update billing anchor while subscription cancellation is scheduled"
+          }),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        )
+      }
+      if (existingSchedule?.end_behavior === "cancel") {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Cannot update billing anchor while subscription schedule ends with cancellation"
+          }),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        )
+      }
+
       const baseDate = new Date(Math.max(periodEnd * 1000, Date.now()))
       const newAnchorDate = shiftToAnchorDay(baseDate, anchorDay)
       const newAnchorUnix = Math.floor(newAnchorDate.getTime() / 1000)
@@ -241,7 +267,8 @@ serve(async (req) => {
                 start_date: newAnchorUnix,
                 items: phaseItems,
                 proration_behavior: "none",
-                iterations: 1,
+                // Keep the new billing anchor for subsequent cycles.
+                billing_cycle_anchor: "phase_start",
               }
             ],
           })
@@ -333,6 +360,7 @@ serve(async (req) => {
       .eq("pro_account_id", pro_account_id)
       .eq("is_lifetime", false)
       .not("end_date", "is", null)
+      .in("status", LICENSE_STATUSES_TO_REANCHOR)
       .select("id")
 
     if (licenseUpdateError) {
@@ -345,7 +373,7 @@ serve(async (req) => {
       .eq("pro_account_id", pro_account_id)
       .eq("is_lifetime", false)
       .not("linked_account_id", "is", null)
-      .in("status", ["active", "canceled"])
+      .in("status", LINKED_LICENSE_STATUSES_TO_REANCHOR)
 
     if (linkedUsersError) {
       throw new Error("Failed to load linked users")

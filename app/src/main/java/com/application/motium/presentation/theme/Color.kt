@@ -1,4 +1,4 @@
-package com.application.motium.presentation.theme
+﻿package com.application.motium.presentation.theme
 
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors

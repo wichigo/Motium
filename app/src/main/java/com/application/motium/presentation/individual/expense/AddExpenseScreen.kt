@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.expense
+﻿package com.application.motium.presentation.individual.expense
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -113,13 +113,13 @@ fun AddExpenseScreen(
                 if (result.amountHT != null) detected.add("HT")
 
                 if (detected.isNotEmpty()) {
-                    Toast.makeText(context, "${detected.joinToString(" & ")} detected automatically", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "${detected.joinToString(" & ")} détecté(s) automatiquement", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, "No amounts detected, enter manually", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Aucun montant détecté, saisissez-le manuellement", Toast.LENGTH_SHORT).show()
                 }
             }.onFailure { error ->
                 MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "AddExpenseScreen", error)
-                Toast.makeText(context, "OCR failed, enter amounts manually", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Échec de l'analyse OCR, saisissez les montants manuellement", Toast.LENGTH_SHORT).show()
             }
 
             // Then upload the photo to Supabase Storage
@@ -128,7 +128,7 @@ fun AddExpenseScreen(
                 MotiumApplication.logger.i("Receipt photo uploaded: $publicUrl", "AddExpenseScreen")
             }.onFailure { error ->
                 MotiumApplication.logger.e("Failed to upload receipt photo: ${error.message}", "AddExpenseScreen", error)
-                Toast.makeText(context, "Photo upload failed: ${error.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Échec de l'envoi de la photo : ${error.message}", Toast.LENGTH_LONG).show()
                 // Garder la preview locale même si l'upload échoue
             }
 
@@ -161,7 +161,7 @@ fun AddExpenseScreen(
             tempCameraUri = createTempPhotoUri()
             takePictureLauncher.launch(tempCameraUri!!)
         } else {
-            Toast.makeText(context, "Camera permission required", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Autorisation caméra requise", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -183,7 +183,7 @@ fun AddExpenseScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Add Expense",
+                        "Ajouter une dépense",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -193,7 +193,7 @@ fun AddExpenseScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             Icons.Default.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Retour"
                         )
                     }
                 },
@@ -201,7 +201,7 @@ fun AddExpenseScreen(
                     IconButton(
                         onClick = {
                             if (amountTTC.isBlank()) {
-                                Toast.makeText(context, "Please enter TTC amount", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Veuillez saisir le montant TTC", Toast.LENGTH_SHORT).show()
                                 return@IconButton
                             }
 
@@ -225,22 +225,22 @@ fun AddExpenseScreen(
                                     val result = expenseRepository.saveExpense(expense)
                                     if (result.isSuccess) {
                                         MotiumApplication.logger.i("Expense saved: ${expense.id}", "AddExpenseScreen")
-                                        Toast.makeText(context, "Expense saved successfully", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Dépense enregistrée avec succès", Toast.LENGTH_SHORT).show()
                                         onExpenseSaved()
                                     } else {
                                         val error = result.exceptionOrNull()
                                         MotiumApplication.logger.e("Failed to save expense: ${error?.message}", "AddExpenseScreen", error)
-                                        Toast.makeText(context, "Error: ${error?.message}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Erreur : ${error?.message}", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             } catch (e: Exception) {
-                                Toast.makeText(context, "Invalid amount format", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Format de montant invalide", Toast.LENGTH_SHORT).show()
                             }
                         }
                     ) {
                         Icon(
                             Icons.Default.Check,
-                            contentDescription = "Save"
+                            contentDescription = "Enregistrer"
                         )
                     }
                 },
@@ -289,7 +289,7 @@ fun AddExpenseScreen(
             // Amount HT
             item {
                 AmountField(
-                    label = "Amount HT (Optional)",
+                    label = "Montant HT (optionnel)",
                     value = amountHT,
                     onValueChange = {
                         amountHT = it
@@ -303,7 +303,7 @@ fun AddExpenseScreen(
             // Amount TTC
             item {
                 AmountField(
-                    label = "Amount TTC",
+                    label = "Montant TTC",
                     value = amountTTC,
                     onValueChange = {
                         amountTTC = it
@@ -320,7 +320,7 @@ fun AddExpenseScreen(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("Note") },
-                    placeholder = { Text("Add a note for this expense...") },
+                    placeholder = { Text("Ajoutez une note pour cette dépense...") },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 3,
                     maxLines = 5,
@@ -373,23 +373,23 @@ fun ExpenseTypeField(
     onTypeSelected: (ExpenseType) -> Unit
 ) {
     val expenseTypes = listOf(
-        ExpenseType.FUEL to "Fuel",
-        ExpenseType.HOTEL to "Hotel",
-        ExpenseType.TOLL to "Tolls",
-        ExpenseType.PARKING to "Parking",
+        ExpenseType.FUEL to "Carburant",
+        ExpenseType.HOTEL to "Hôtel",
+        ExpenseType.TOLL to "Péages",
+        ExpenseType.PARKING to "Stationnement",
         ExpenseType.RESTAURANT to "Restaurant",
-        ExpenseType.MEAL_OUT to "Meals (out)",
-        ExpenseType.OTHER to "Other"
+        ExpenseType.MEAL_OUT to "Repas (extérieur)",
+        ExpenseType.OTHER to "Autre"
     )
 
     var expanded by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
-            value = expenseTypes.find { it.first == selectedType }?.second ?: "Fuel",
+            value = expenseTypes.find { it.first == selectedType }?.second ?: "Carburant",
             onValueChange = {},
             readOnly = true,
-            label = { Text("Expense Type") },
+            label = { Text("Type de dépense") },
             trailingIcon = {
                 Icon(
                     if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -467,7 +467,7 @@ fun AmountField(
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         Icons.Default.CheckCircle,
-                        contentDescription = "Auto-detected",
+                        contentDescription = "Détecté automatiquement",
                         tint = MotiumPrimary,
                         modifier = Modifier.size(14.dp)
                     )
@@ -484,7 +484,7 @@ fun AmountField(
         trailingIcon = if (isMandatory) {
             {
                 Text(
-                    "Required",
+                    "Requis",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Red.copy(alpha = 0.7f),
                     modifier = Modifier.padding(end = 8.dp)
@@ -543,7 +543,7 @@ fun PhotoSection(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    "Receipt Photo",
+                    "Photo du justificatif",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -566,7 +566,7 @@ fun PhotoSection(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        "Analyzing receipt...",
+                        "Analyse du justificatif...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -599,12 +599,12 @@ fun PhotoSection(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                "Camera",
+                                "Caméra",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                "Take photo",
+                                "Prendre une photo",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
@@ -633,12 +633,12 @@ fun PhotoSection(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                "Gallery",
+                                "Galerie",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                "Choose photo",
+                                "Choisir une photo",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
@@ -665,7 +665,7 @@ fun PhotoSection(
                             // Thumbnail
                             AsyncImage(
                                 model = uri,
-                                contentDescription = "Receipt preview",
+                                contentDescription = "Aperçu du justificatif",
                                 modifier = Modifier
                                     .size(56.dp)
                                     .clip(RoundedCornerShape(8.dp)),
@@ -683,7 +683,7 @@ fun PhotoSection(
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            "Photo saved",
+                                            "Photo enregistrée",
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = MotiumPrimary
@@ -696,7 +696,7 @@ fun PhotoSection(
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            "Uploading...",
+                                            "Envoi...",
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = Color(0xFFD97706)
@@ -704,7 +704,7 @@ fun PhotoSection(
                                     }
                                 }
                                 Text(
-                                    if (isUploaded) "Receipt photo uploaded to cloud" else "Saving photo to cloud...",
+                                    if (isUploaded) "Photo du justificatif envoyée dans le cloud" else "Enregistrement de la photo dans le cloud...",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                 )
@@ -728,7 +728,7 @@ fun PhotoSection(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            "Amounts will be auto-detected from receipt",
+                            "Les montants seront détectés automatiquement depuis le justificatif",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                         )
@@ -738,3 +738,5 @@ fun PhotoSection(
         }
     }
 }
+
+

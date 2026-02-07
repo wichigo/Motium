@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.licenses
+﻿package com.application.motium.presentation.pro.licenses
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -223,3 +223,4 @@ fun PurchaseLicenseDialog(
         }
     )
 }
+

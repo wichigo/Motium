@@ -14,7 +14,7 @@ import kotlinx.serialization.Serializable
  *
  * Résiliation/Déliaison:
  * - Licences mensuelles: résiliation effective à la date de renouvellement (endDate)
- * - Licences lifetime: déliaison immédiate
+ * - Licences lifetime: déliaison effective à la prochaine date de renouvellement du compte Pro
  */
 @Serializable
 data class License(
@@ -47,7 +47,7 @@ data class License(
     @SerialName("end_date")
     val endDate: Instant? = null,
 
-    // Déliaison (effective à endDate pour mensuelle, immédiate pour lifetime)
+    // Déliaison (effective à la date de renouvellement)
     @SerialName("unlink_requested_at")
     val unlinkRequestedAt: Instant? = null,
     @SerialName("unlink_effective_at")
@@ -89,7 +89,7 @@ data class License(
 
     /**
      * Vérifie si une demande de déliaison/résiliation est en cours.
-     * La licence reste active jusqu'à unlinkEffectiveAt (= endDate pour mensuelle, now pour lifetime).
+     * La licence reste active jusqu'à unlinkEffectiveAt (date de renouvellement).
      *
      * ⚠️ SECURITY WARNING: Uses System.currentTimeMillis() for UI display purposes.
      * For security-critical checks, use [isPendingUnlinkWithTrustedTime].

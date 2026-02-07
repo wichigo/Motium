@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
@@ -614,3 +614,4 @@ private fun SimpleRoutePreview(
         drawCircle(Color(0xFFF44336), 5f, endPoint)
     }
 }
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.splash
+﻿package com.application.motium.presentation.splash
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -52,7 +52,7 @@ fun SplashScreen() {
 
             // Loading text
             Text(
-                text = "Loading...",
+                text = "Chargement...",
                 style = MaterialTheme.typography.bodyMedium,
                 color = textColor.copy(alpha = 0.7f),
                 fontSize = 14.sp

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.calendar
+﻿package com.application.motium.presentation.calendar
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -179,10 +179,10 @@ class WorkScheduleViewModel(
                 if (success) {
                     // Recharger les créneaux
                     loadWorkSchedules(userId)
-                    MotiumApplication.logger.i("✅ Work schedule added successfully", "WorkScheduleViewModel")
+                    MotiumApplication.logger.i("âœ… Work schedule added successfully", "WorkScheduleViewModel")
                 } else {
                     _error.value = "Failed to add work schedule"
-                    MotiumApplication.logger.e("❌ Failed to add work schedule", "WorkScheduleViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to add work schedule", "WorkScheduleViewModel")
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error adding work schedule: ${e.message}", "WorkScheduleViewModel", e)
@@ -222,10 +222,10 @@ class WorkScheduleViewModel(
                 if (success) {
                     // Recharger les créneaux
                     loadWorkSchedules(userId)
-                    MotiumApplication.logger.i("✅ Work schedule updated successfully", "WorkScheduleViewModel")
+                    MotiumApplication.logger.i("âœ… Work schedule updated successfully", "WorkScheduleViewModel")
                 } else {
                     _error.value = "Failed to update work schedule"
-                    MotiumApplication.logger.e("❌ Failed to update work schedule", "WorkScheduleViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to update work schedule", "WorkScheduleViewModel")
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error updating work schedule: ${e.message}", "WorkScheduleViewModel", e)
@@ -252,13 +252,13 @@ class WorkScheduleViewModel(
                 if (success) {
                     // Recharger les créneaux
                     loadWorkSchedules(userId)
-                    MotiumApplication.logger.i("✅ Work schedule deleted successfully", "WorkScheduleViewModel")
+                    MotiumApplication.logger.i("âœ… Work schedule deleted successfully", "WorkScheduleViewModel")
 
                     // Vérifier si tous les horaires ont été supprimés
                     checkAndDisableWorkHoursMode(userId)
                 } else {
                     _error.value = "Failed to delete work schedule"
-                    MotiumApplication.logger.e("❌ Failed to delete work schedule", "WorkScheduleViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to delete work schedule", "WorkScheduleViewModel")
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error deleting work schedule: ${e.message}", "WorkScheduleViewModel", e)
@@ -278,7 +278,7 @@ class WorkScheduleViewModel(
                 val hasSchedules = _schedules.value.values.any { it.isNotEmpty() }
 
                 if (!hasSchedules && _trackingMode.value == TrackingMode.WORK_HOURS_ONLY) {
-                    MotiumApplication.logger.w("⚠️ No schedules remaining, disabling WORK_HOURS_ONLY mode", "WorkScheduleViewModel")
+                    MotiumApplication.logger.w("âš ï¸ No schedules remaining, disabling WORK_HOURS_ONLY mode", "WorkScheduleViewModel")
                     updateTrackingMode(userId, TrackingMode.DISABLED)
                 }
             } catch (e: Exception) {
@@ -303,7 +303,7 @@ class WorkScheduleViewModel(
                     val hasSchedules = _schedules.value.values.any { it.isNotEmpty() }
                     if (!hasSchedules) {
                         _error.value = "Cannot enable work hours tracking: no work schedules defined"
-                        MotiumApplication.logger.w("⚠️ Cannot enable WORK_HOURS_ONLY mode without schedules", "WorkScheduleViewModel")
+                        MotiumApplication.logger.w("âš ï¸ Cannot enable WORK_HOURS_ONLY mode without schedules", "WorkScheduleViewModel")
                         _isLoading.value = false
                         return@launch
                     }
@@ -332,10 +332,10 @@ class WorkScheduleViewModel(
                     // Synchroniser avec TripRepository pour compatibilité
                     syncWithTripRepository(newMode)
 
-                    MotiumApplication.logger.i("✅ Tracking mode updated successfully", "WorkScheduleViewModel")
+                    MotiumApplication.logger.i("âœ… Tracking mode updated successfully", "WorkScheduleViewModel")
                 } else {
                     _error.value = "Failed to update tracking mode"
-                    MotiumApplication.logger.e("❌ Failed to update tracking mode", "WorkScheduleViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to update tracking mode", "WorkScheduleViewModel")
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Error updating tracking mode: ${e.message}", "WorkScheduleViewModel", e)
@@ -430,3 +430,4 @@ class WorkScheduleViewModel(
         _error.value = null
     }
 }
+

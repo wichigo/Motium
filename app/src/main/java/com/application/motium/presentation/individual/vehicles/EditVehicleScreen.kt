@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+﻿package com.application.motium.presentation.individual.vehicles
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -93,7 +93,7 @@ fun EditVehicleScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        "Edit Vehicle",
+                        "Modifier le véhicule",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -103,7 +103,7 @@ fun EditVehicleScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Retour"
                         )
                     }
                 },
@@ -128,7 +128,7 @@ fun EditVehicleScreen(
                     ) {
                         Icon(
                             Icons.Default.Check,
-                            contentDescription = "Save"
+                            contentDescription = "Enregistrer"
                         )
                     }
                 },
@@ -186,13 +186,13 @@ fun EditVehicleScreen(
                             )
                             Column {
                                 Text(
-                                    text = "Default Vehicle",
+                                    text = "Véhicule par défaut",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isDefault) MotiumGreen else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = if (isDefault) "Used for auto-tracked trips" else "Set as default for auto-tracking",
+                                    text = if (isDefault) "Utilisé pour les trajets auto-suivis" else "Définir comme véhicule par défaut pour l'auto-suivi",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                 )
@@ -213,7 +213,7 @@ fun EditVehicleScreen(
 
                 if (isDefault && !originalIsDefault) {
                     Text(
-                        text = "The previous default vehicle will be unset automatically.",
+                        text = "Le précédent véhicule par défaut sera retiré automatiquement.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         modifier = Modifier.padding(horizontal = 4.dp)
@@ -224,8 +224,8 @@ fun EditVehicleScreen(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Name") },
-                    placeholder = { Text("e.g. My awesome car") },
+                    label = { Text("Nom") },
+                    placeholder = { Text("ex. Ma super voiture") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(nameFocusRequester),
@@ -309,8 +309,8 @@ fun EditVehicleScreen(
                 OutlinedTextField(
                     value = licensePlate,
                     onValueChange = { licensePlate = it },
-                    label = { Text("License Plate") },
-                    placeholder = { Text("e.g. AB-123-CD") },
+                    label = { Text("Plaque d'immatriculation") },
+                    placeholder = { Text("ex. AB-123-CD") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(plateFocusRequester),
@@ -334,10 +334,10 @@ fun EditVehicleScreen(
                 // Power dropdown
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
-                        value = selectedPower?.displayName ?: "Select power",
+                        value = selectedPower?.displayName ?: "Sélectionner la puissance",
                         onValueChange = { },
                         readOnly = true,
-                        label = { Text("Power (in CV)") },
+                        label = { Text("Puissance (en CV)") },
                         trailingIcon = {
                             Icon(
                                 if (showPowerDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -375,7 +375,7 @@ fun EditVehicleScreen(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    "None",
+                                    "Aucun",
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                             },
@@ -406,10 +406,10 @@ fun EditVehicleScreen(
                 // Fuel type dropdown
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
-                        value = selectedFuelType?.displayName ?: "Select fuel type",
+                        value = selectedFuelType?.displayName ?: "Sélectionner le type de carburant",
                         onValueChange = { },
                         readOnly = true,
-                        label = { Text("Fuel Type") },
+                        label = { Text("Type de carburant") },
                         trailingIcon = {
                             Icon(
                                 if (showFuelTypeDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -447,7 +447,7 @@ fun EditVehicleScreen(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    "None",
+                                    "Aucun",
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                             },
@@ -491,7 +491,7 @@ fun EditVehicleScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Mileage Rate (2025)",
+                            text = "Barème kilométrique (2025)",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
@@ -539,7 +539,7 @@ fun EditVehicleScreen(
                         )
                     } else {
                         Text(
-                            "Save Changes",
+                            "Enregistrer les modifications",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyLarge
                         )
@@ -551,3 +551,5 @@ fun EditVehicleScreen(
         }
     }
 }
+
+

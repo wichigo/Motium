@@ -368,7 +368,7 @@ class LicensesViewModel(
         val proAccountId = state.proAccountId ?: _proAccountId.value
             ?: return Result.failure(Exception("Compte Pro non trouvé"))
         val deferredState = state.deferredPaymentReady
-            ?: return Result.failure(Exception("Payment not initialized"))
+            ?: return Result.failure(Exception("Paiement non initialisé"))
 
         return subscriptionManager.confirmPaymentWithMethod(
             paymentMethodId = paymentMethodId,
@@ -682,7 +682,7 @@ class LicensesViewModel(
     }
 
     // ========================================
-    // Unlink/Cancel Methods (effective at renewal date or immediate for lifetime)
+    // Unlink/Cancel Methods (effective at renewal date)
     // ========================================
 
     /**
@@ -707,7 +707,7 @@ class LicensesViewModel(
 
     /**
      * Request to unlink/cancel a license - offline-first with sync
-     * - Lifetime: déliaison immédiate
+     * - Lifetime: déliaison à la prochaine date de renouvellement
      * - Mensuelle: effective à la date de renouvellement
      */
     fun confirmUnlinkRequest() {
@@ -727,7 +727,7 @@ class LicensesViewModel(
                 }
 
                 // DEBUG: Log action for tracing
-                val effectiveType = if (license.isLifetime) "immédiat (lifetime)" else "date de renouvellement"
+                val effectiveType = if (license.isLifetime) "prochaine date de renouvellement (lifetime)" else "date de renouvellement"
                 MotiumApplication.logger.w(
                     "🟠 DEBUG confirmUnlinkRequest() called - licenseId: ${license.id}, linkedAccountId: ${license.linkedAccountId} - Type: $effectiveType",
                     TAG
@@ -740,7 +740,7 @@ class LicensesViewModel(
 
                 // Message différent selon le type de licence
                 val successMsg = if (license.isLifetime) {
-                    "Licence déliée avec succès."
+                    "Déliaison planifiée. La licence sera libérée à la prochaine date de renouvellement."
                 } else {
                     "Résiliation enregistrée. La licence sera libérée à la date de renouvellement."
                 }

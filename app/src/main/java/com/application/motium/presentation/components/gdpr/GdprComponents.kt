@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components.gdpr
+﻿package com.application.motium.presentation.components.gdpr
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -647,3 +647,5 @@ fun DeleteAccountDialog(
         }
     )
 }
+
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.expense
+﻿package com.application.motium.presentation.individual.expense
 
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -97,7 +97,7 @@ fun ExpenseDetailsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "Receipt Photo",
+                            "Photo du justificatif",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -106,7 +106,7 @@ fun ExpenseDetailsScreen(
                         IconButton(onClick = { selectedPhotoUri = null }) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = "Close",
+                                contentDescription = "Fermer",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -115,7 +115,7 @@ fun ExpenseDetailsScreen(
                     // Photo
                     AsyncImage(
                         model = Uri.parse(photoUri),
-                        contentDescription = "Receipt photo",
+                        contentDescription = "Photo du justificatif",
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 500.dp)
@@ -153,7 +153,7 @@ fun ExpenseDetailsScreen(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            "Expenses",
+                            "Dépenses",
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             fontSize = 18.sp
                         )
@@ -169,7 +169,7 @@ fun ExpenseDetailsScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             Icons.Default.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = "Retour",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -208,7 +208,7 @@ fun ExpenseDetailsScreen(
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             Text(
-                                "Daily Summary",
+                                "Résumé quotidien",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = textColor,
                                 modifier = Modifier.padding(bottom = 16.dp)
@@ -225,7 +225,7 @@ fun ExpenseDetailsScreen(
                                         color = MotiumPrimary
                                     )
                                     Text(
-                                        "Expenses",
+                                        "Dépenses",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = subTextColor
                                     )
@@ -285,7 +285,7 @@ fun ExpenseDetailsScreen(
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        "No expenses for this day",
+                                        "Aucune dépense pour cette journée",
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = subTextColor
                                     )
@@ -351,7 +351,7 @@ fun ExpenseCard(
                     // Show receipt photo
                     AsyncImage(
                         model = Uri.parse(expense.photoUri),
-                        contentDescription = "Receipt photo",
+                        contentDescription = "Photo du justificatif",
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(RoundedCornerShape(12.dp))
@@ -410,7 +410,7 @@ fun ExpenseCard(
                                 tint = MotiumPrimary
                             )
                             Text(
-                                "Expense",
+                                "Dépense",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                 fontSize = 11.sp,
                                 color = MotiumPrimary
@@ -467,3 +467,4 @@ fun ExpenseCard(
         }
     }
 }
+

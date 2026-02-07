@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -394,3 +394,4 @@ private fun SyncStatusIndicatorSyncedPreview() {
         )
     }
 }
+

@@ -24,7 +24,8 @@ data class User(
     val version: Int = 1,
 
     val createdAt: Instant,
-    val updatedAt: Instant
+    val updatedAt: Instant,
+    val profilePhotoUrl: String? = null
 )
 // Note: Les champs de liaison Pro (linkedProAccountId, linkStatus, préférences de partage, etc.)
 // sont maintenant gérés dans la table company_links et le modèle CompanyLink

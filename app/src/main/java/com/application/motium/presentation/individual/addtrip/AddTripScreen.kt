@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.addtrip
+﻿package com.application.motium.presentation.individual.addtrip
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -209,7 +209,7 @@ fun AddTripScreen(
                         val endTimeDate = Date(startTimeDate.time + (estimatedDurationMin * 60 * 1000).toLong())
                         endTime = timeFormat.format(endTimeDate)
 
-                        Toast.makeText(context, "Route server unavailable - using estimated distance", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Serveur d'itinéraire indisponible - distance estimée utilisée", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     MotiumApplication.logger.e("❌ Route error: ${e.message}", "AddTripScreen", e)
@@ -228,7 +228,7 @@ fun AddTripScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Add Trip",
+                        "Ajouter un trajet",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -238,7 +238,7 @@ fun AddTripScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             Icons.Default.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Retour"
                         )
                     }
                 },
@@ -250,13 +250,13 @@ fun AddTripScreen(
                             MotiumApplication.logger.d("End location: '$endLocation'", "AddTripScreen")
 
                             if (startLocation.isBlank()) {
-                                Toast.makeText(context, "Please select a departure location", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Veuillez sélectionner un lieu de départ", Toast.LENGTH_SHORT).show()
                                 MotiumApplication.logger.w("Start location is blank", "AddTripScreen")
                                 return@IconButton
                             }
 
                             if (endLocation.isBlank()) {
-                                Toast.makeText(context, "Please select an arrival location", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Veuillez sélectionner un lieu d'arrivée", Toast.LENGTH_SHORT).show()
                                 MotiumApplication.logger.w("End location is blank", "AddTripScreen")
                                 return@IconButton
                             }
@@ -349,17 +349,17 @@ fun AddTripScreen(
                                 )
 
                                 MotiumApplication.logger.d("Trip created: ${trip.id}", "AddTripScreen")
-                                Toast.makeText(context, "Trip saved successfully", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Trajet enregistré avec succès", Toast.LENGTH_SHORT).show()
                                 onTripSaved(trip)
                             } catch (e: Exception) {
                                 MotiumApplication.logger.e("Error creating trip: ${e.message}", "AddTripScreen", e)
-                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Erreur : ${e.message}", Toast.LENGTH_LONG).show()
                             }
                         }
                     ) {
                         Icon(
                             Icons.Default.Check,
-                            contentDescription = "Save"
+                            contentDescription = "Enregistrer"
                         )
                     }
                 },
@@ -552,7 +552,7 @@ fun AddTripScreen(
             // Location fields
             item {
                 LocationField(
-                    label = "Departure Location",
+                    label = "Lieu de départ",
                     value = startLocation,
                     iconColor = MotiumPrimary,
                     onValueChange = { startLocation = it },
@@ -569,7 +569,7 @@ fun AddTripScreen(
 
             item {
                 LocationField(
-                    label = "Arrival Location",
+                    label = "Lieu d'arrivée",
                     value = endLocation,
                     iconColor = Color(0xFFEF4444),
                     onValueChange = { endLocation = it },
@@ -611,7 +611,7 @@ fun AddTripScreen(
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        "Calculating route...",
+                                        "Calcul de l'itinéraire...",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -668,7 +668,7 @@ fun AddTripScreen(
                         modifier = Modifier.weight(1f)
                     )
                     ReadOnlyField(
-                        label = "Duration",
+                        label = "Durée",
                         value = if (duration.isNotBlank()) "$duration min" else "",
                         icon = Icons.Default.Schedule,
                         modifier = Modifier.weight(1f)
@@ -693,7 +693,7 @@ fun AddTripScreen(
                     label = { Text("Notes") },
                     placeholder = {
                         if (notes.isEmpty()) {
-                            Text("Add any notes for this trip...")
+                            Text("Ajoutez des notes pour ce trajet...")
                         }
                     },
                     leadingIcon = {
@@ -807,7 +807,7 @@ fun LocationField(
         value = value,
         onValueChange = onValueChange,
         onAddressSelected = onAddressSelected,
-        placeholder = "Enter address",
+        placeholder = "Entrez une adresse",
         leadingIcon = {
             Icon(
                 Icons.Default.LocationOn,
@@ -839,7 +839,7 @@ fun ProfessionalTripToggle(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Professional Trip",
+                "Trajet professionnel",
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontWeight = FontWeight.Medium
                 )
@@ -958,8 +958,8 @@ fun VehicleSelectionField(
             onValueChange = {},
             readOnly = true,
             enabled = false,
-            label = { Text("Vehicle") },
-            placeholder = { Text("No vehicles available") },
+            label = { Text("Véhicule") },
+            placeholder = { Text("Aucun véhicule disponible") },
             leadingIcon = {
                 Icon(
                     Icons.Default.DirectionsCar,
@@ -981,10 +981,10 @@ fun VehicleSelectionField(
                 value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "",
                 onValueChange = {},
                 readOnly = true,
-                label = { Text("Vehicle") },
+                label = { Text("Véhicule") },
                 placeholder = {
                     if (selectedVehicleId == null) {
-                        Text("Select a vehicle")
+                        Text("Sélectionner un véhicule")
                     }
                 },
                 trailingIcon = {
@@ -1049,13 +1049,13 @@ fun ExpenseItemRow(
     onRemove: () -> Unit
 ) {
     val expenseTypes = listOf(
-        ExpenseType.FUEL to "Fuel",
-        ExpenseType.HOTEL to "Hotel",
-        ExpenseType.TOLL to "Tolls",
-        ExpenseType.PARKING to "Parking",
+        ExpenseType.FUEL to "Carburant",
+        ExpenseType.HOTEL to "Hôtel",
+        ExpenseType.TOLL to "Péages",
+        ExpenseType.PARKING to "Stationnement",
         ExpenseType.RESTAURANT to "Restaurant",
-        ExpenseType.MEAL_OUT to "Meals (out)",
-        ExpenseType.OTHER to "Other"
+        ExpenseType.MEAL_OUT to "Repas (extérieur)",
+        ExpenseType.OTHER to "Autre"
     )
 
     var expanded by remember { mutableStateOf(false) }
@@ -1082,7 +1082,7 @@ fun ExpenseItemRow(
                 // Type dropdown
                 Box(modifier = Modifier.weight(1f)) {
                     OutlinedTextField(
-                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
+                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Carburant",
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Type") },
@@ -1135,7 +1135,7 @@ fun ExpenseItemRow(
                 // Amount field
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Amount",
+                        text = "Montant",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
@@ -1167,7 +1167,7 @@ fun ExpenseItemRow(
             // Note field
             Column {
                 Text(
-                    text = "Note (Optional)",
+                    text = "Note (optionnelle)",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
@@ -1177,7 +1177,7 @@ fun ExpenseItemRow(
                     value = expense.note,
                     onValueChange = { onExpenseChange(expense.copy(note = it)) },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("e.g., Gas station receipt") },
+                    placeholder = { Text("ex. Ticket de station-service") },
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
@@ -1198,7 +1198,7 @@ fun ExpenseItemRow(
                         contentColor = Color(0xFFEF4444)
                     )
                 ) {
-                    Text("Remove", style = MaterialTheme.typography.bodySmall)
+                    Text("Supprimer", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -1303,3 +1303,5 @@ private fun SingleDateCalendarGrid(
         }
     }
 }
+
+

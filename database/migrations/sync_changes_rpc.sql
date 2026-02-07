@@ -863,6 +863,10 @@ BEGIN
         name = COALESCE(p_payload->>'name', name),
         phone_number = COALESCE(p_payload->>'phone_number', phone_number),
         address = COALESCE(p_payload->>'address', address),
+        profile_photo_url = CASE
+            WHEN p_payload ? 'profile_photo_url' THEN NULLIF(TRIM(p_payload->>'profile_photo_url'), '')
+            ELSE profile_photo_url
+        END,
         favorite_colors = COALESCE(normalize_favorite_colors(p_payload->'favorite_colors'), favorite_colors),
         consider_full_distance = COALESCE((p_payload->>'consider_full_distance')::BOOLEAN, consider_full_distance),
         version = p_client_version,

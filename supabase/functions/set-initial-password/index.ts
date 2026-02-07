@@ -180,6 +180,7 @@ serve(async (req) => {
         trial_started_at: now,
         trial_ends_at: trialEndsAt.toISOString(),
         address: '',
+        profile_photo_url: null,
         consider_full_distance: false,
         favorite_colors: [],
         created_at: now,

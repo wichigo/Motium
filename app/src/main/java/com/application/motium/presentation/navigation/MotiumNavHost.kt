@@ -1,4 +1,4 @@
-package com.application.motium.presentation.navigation
+﻿package com.application.motium.presentation.navigation
 
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -66,7 +66,7 @@ fun MotiumNavHost(
 
     // Navigation automatique basée sur l'état d'authentification
     LaunchedEffect(authState.isLoading, authState.isAuthenticated, authState.user?.role, authState.user?.subscription?.type, authState.initialSyncDone, registerState.isLoading, registerState.error, loginState.emailNotVerified) {
-        MotiumApplication.logger.i("🧭 Navigation LaunchedEffect triggered", "Navigation")
+        MotiumApplication.logger.i("ðŸ§­ Navigation LaunchedEffect triggered", "Navigation")
         MotiumApplication.logger.i("   - isLoading: ${authState.isLoading}", "Navigation")
         MotiumApplication.logger.i("   - isAuthenticated: ${authState.isAuthenticated}", "Navigation")
         MotiumApplication.logger.i("   - userPresent: ${authState.user != null}", "Navigation")
@@ -78,7 +78,7 @@ fun MotiumNavHost(
             // Chargement terminé, naviguer vers la destination appropriée
             if (authState.isAuthenticated && authState.user != null) {
                 if (!authState.initialSyncDone) {
-                    MotiumApplication.logger.d("⏳ Waiting for initial sync before navigation...", "Navigation")
+                    MotiumApplication.logger.d("â³ Waiting for initial sync before navigation...", "Navigation")
                     return@LaunchedEffect
                 }
 
@@ -89,9 +89,9 @@ fun MotiumNavHost(
 
                 // PRO USERS: Trigger license check in ViewModel (non-blocking)
                 // Navigation will be handled by the separate proLicenseState LaunchedEffect
-                MotiumApplication.logger.i("🔍 Checking if Pro user: isProUser=$isProUser, userId=$userId", "Navigation")
+                MotiumApplication.logger.i("ðŸ” Checking if Pro user: isProUser=$isProUser, userId=$userId", "Navigation")
                 if (isProUser && userId != null) {
-                    MotiumApplication.logger.i("✅ Pro user detected - triggering license check", "Navigation")
+                    MotiumApplication.logger.i("âœ… Pro user detected - triggering license check", "Navigation")
                     authViewModel.checkProLicense(userId)
                     return@LaunchedEffect  // Wait for proLicenseState to update
                 }
@@ -100,13 +100,13 @@ fun MotiumNavHost(
                 // avec des données Room obsolètes (ex: user a payé mais Room pas encore mis à jour)
                 else if (subscriptionType == SubscriptionType.EXPIRED || !hasValidAccess) {
                     if (!authState.initialSyncDone) {
-                        MotiumApplication.logger.d("⏳ Waiting for initial sync before expired decision...", "Navigation")
+                        MotiumApplication.logger.d("â³ Waiting for initial sync before expired decision...", "Navigation")
                         return@LaunchedEffect  // Attendre que la sync soit terminée
                     }
 
                     // EXPIRED = forced logout (no expired screen, direct logout)
                     // This ensures users cannot use the app with expired status
-                    MotiumApplication.logger.i("🔴 EXPIRED detected in navigation (sync done) - forcing logout", "Navigation")
+                    MotiumApplication.logger.i("ðŸ”´ EXPIRED detected in navigation (sync done) - forcing logout", "Navigation")
                     authViewModel.signOut()
                     return@LaunchedEffect
                 }
@@ -116,7 +116,7 @@ fun MotiumNavHost(
                     val isEnterprise = authState.user?.role?.name == "ENTERPRISE"
                     val settingsRoute = if (isEnterprise) "pro_settings" else "settings"
 
-                    MotiumApplication.logger.i("🔗 Pending deep link detected - navigating to $settingsRoute", "Navigation")
+                    MotiumApplication.logger.i("ðŸ”— Pending deep link detected - navigating to $settingsRoute", "Navigation")
 
                     navController.navigate(settingsRoute) {
                         popUpTo("splash") { inclusive = true }
@@ -126,7 +126,7 @@ fun MotiumNavHost(
                     }
                 } else {
                     // Individual user - navigate to home
-                    MotiumApplication.logger.i("🧭 Navigating to: home (individual user)", "Navigation")
+                    MotiumApplication.logger.i("ðŸ§­ Navigating to: home (individual user)", "Navigation")
                     navController.navigate("home") {
                         popUpTo("splash") { inclusive = true }
                         popUpTo("login") { inclusive = true }
@@ -148,7 +148,7 @@ fun MotiumNavHost(
                 if (DeepLinkHandler.hasPendingReset()) {
                     val resetToken = DeepLinkHandler.consumePendingResetToken()
                     if (resetToken != null) {
-                        MotiumApplication.logger.i("🔗 Pending password reset detected - navigating to reset_password", "Navigation")
+                        MotiumApplication.logger.i("ðŸ”— Pending password reset detected - navigating to reset_password", "Navigation")
                         val encodedToken = URLEncoder.encode(resetToken, StandardCharsets.UTF_8.toString())
                         navController.navigate("reset_password/$encodedToken") {
                             popUpTo("splash") { inclusive = true }
@@ -162,7 +162,7 @@ fun MotiumNavHost(
                 if (DeepLinkHandler.hasPendingLink()) {
                     val invitationToken = DeepLinkHandler.pendingLinkToken
                     if (invitationToken != null) {
-                        MotiumApplication.logger.i("🔗 Pending invitation detected (not logged in) - navigating to accept_invitation", "Navigation")
+                        MotiumApplication.logger.i("ðŸ”— Pending invitation detected (not logged in) - navigating to accept_invitation", "Navigation")
                         val encodedToken = URLEncoder.encode(invitationToken, StandardCharsets.UTF_8.toString())
                         navController.navigate("accept_invitation/$encodedToken") {
                             popUpTo("splash") { inclusive = true }
@@ -180,17 +180,17 @@ fun MotiumNavHost(
                 // - There's a registration error (let user read it)
                 if (currentRoute == "register") {
                     if (registerState.isLoading) {
-                        MotiumApplication.logger.i("⏳ Registration in progress - staying on register screen", "Navigation")
+                        MotiumApplication.logger.i("â³ Registration in progress - staying on register screen", "Navigation")
                         return@LaunchedEffect
                     }
                     if (registerState.error != null) {
-                        MotiumApplication.logger.i("❌ Registration error visible - staying on register screen: ${registerState.error}", "Navigation")
+                        MotiumApplication.logger.i("âŒ Registration error visible - staying on register screen: ${registerState.error}", "Navigation")
                         return@LaunchedEffect
                     }
                 }
 
                 if (currentRoute != "login" && currentRoute?.startsWith("accept_invitation") != true && currentRoute != "register") {
-                    MotiumApplication.logger.i("🧭 Navigating to: login (not authenticated)", "Navigation")
+                    MotiumApplication.logger.i("ðŸ§­ Navigating to: login (not authenticated)", "Navigation")
                     // Si l'utilisateur n'est pas connecté, aller à la connexion
                     navController.navigate("login") {
                         popUpTo("splash") { inclusive = true }
@@ -204,12 +204,12 @@ fun MotiumNavHost(
     // Separate LaunchedEffect for Pro user license state navigation
     // This ensures network calls in ViewModel survive recomposition
     LaunchedEffect(proLicenseState) {
-        MotiumApplication.logger.i("🔐 ProLicenseState changed: $proLicenseState", "Navigation")
+        MotiumApplication.logger.i("ðŸ” ProLicenseState changed: $proLicenseState", "Navigation")
         when (proLicenseState) {
             is ProLicenseState.Licensed -> {
                 // Check for pending deep link first
                 if (DeepLinkHandler.hasPendingLink()) {
-                    MotiumApplication.logger.i("🔗 Pro user with pending deep link - navigating to pro_settings", "Navigation")
+                    MotiumApplication.logger.i("ðŸ”— Pro user with pending deep link - navigating to pro_settings", "Navigation")
                     navController.navigate("pro_settings") {
                         popUpTo("splash") { inclusive = true }
                         popUpTo("login") { inclusive = true }
@@ -217,7 +217,7 @@ fun MotiumNavHost(
                         launchSingleTop = true
                     }
                 } else {
-                    MotiumApplication.logger.i("🧭 Pro user licensed - navigating to enterprise_home", "Navigation")
+                    MotiumApplication.logger.i("ðŸ§­ Pro user licensed - navigating to enterprise_home", "Navigation")
                     navController.navigate("enterprise_home") {
                         popUpTo("splash") { inclusive = true }
                         popUpTo("login") { inclusive = true }
@@ -227,7 +227,7 @@ fun MotiumNavHost(
                 }
             }
             is ProLicenseState.NotLicensed, is ProLicenseState.NoProAccount -> {
-                MotiumApplication.logger.i("🚫 Pro user not licensed - navigating to pro_trial_expired", "Navigation")
+                MotiumApplication.logger.i("ðŸš« Pro user not licensed - navigating to pro_trial_expired", "Navigation")
                 navController.navigate("pro_trial_expired") {
                     popUpTo(0) { inclusive = true }  // Clear entire back stack safely
                     launchSingleTop = true
@@ -364,7 +364,7 @@ fun MotiumNavHost(
                 authViewModel = authViewModel,
                 onSubscribe = { subscriptionType ->
                     // After successful payment, navigate to home
-                    MotiumApplication.logger.i("✅ Subscription activated: $subscriptionType, navigating to home", "Navigation")
+                    MotiumApplication.logger.i("âœ… Subscription activated: $subscriptionType, navigating to home", "Navigation")
                     navController.navigate("home") {
                         popUpTo(0) { inclusive = true }
                     }
@@ -389,7 +389,7 @@ fun MotiumNavHost(
                 authViewModel = authViewModel,
                 onSubscribe = { subscriptionType ->
                     // After successful payment, navigate to home
-                    MotiumApplication.logger.i("✅ Subscription renewed: $subscriptionType, navigating to home", "Navigation")
+                    MotiumApplication.logger.i("âœ… Subscription renewed: $subscriptionType, navigating to home", "Navigation")
                     navController.navigate("home") {
                         popUpTo(0) { inclusive = true }
                     }
@@ -414,7 +414,7 @@ fun MotiumNavHost(
                 authViewModel = authViewModel,
                 onLicenseActivated = {
                     // After successful license assignment, navigate to enterprise home
-                    MotiumApplication.logger.i("✅ Pro license activated, navigating to enterprise_home", "Navigation")
+                    MotiumApplication.logger.i("âœ… Pro license activated, navigating to enterprise_home", "Navigation")
                     navController.navigate("enterprise_home") {
                         popUpTo(0) { inclusive = true }
                     }
@@ -466,16 +466,16 @@ fun MotiumNavHost(
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
                             // Save trip (this also syncs to Supabase)
-                            MotiumApplication.logger.i("💾 Saving trip: ${trip.id}, distance=${trip.totalDistance}m, vehicle=${trip.vehicleId}, type=${trip.tripType}", "MotiumNavHost")
+                            MotiumApplication.logger.i("ðŸ’¾ Saving trip: ${trip.id}, distance=${trip.totalDistance}m, vehicle=${trip.vehicleId}, type=${trip.tripType}", "MotiumNavHost")
                             tripRepository.saveTrip(trip)
-                            MotiumApplication.logger.i("✅ Trip saved: ${trip.id}", "MotiumNavHost")
+                            MotiumApplication.logger.i("âœ… Trip saved: ${trip.id}", "MotiumNavHost")
 
                             // Navigate back on main thread
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
                                 navController.popBackStack()
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("❌ Failed to save trip: ${e.message}", "MotiumNavHost", e)
+                            MotiumApplication.logger.e("âŒ Failed to save trip: ${e.message}", "MotiumNavHost", e)
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
                                 android.widget.Toast.makeText(
                                     context,
@@ -807,15 +807,15 @@ fun MotiumNavHost(
                 onTripSaved = { trip ->
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
-                            MotiumApplication.logger.i("💾 Saving pro trip: ${trip.id}", "MotiumNavHost")
+                            MotiumApplication.logger.i("ðŸ’¾ Saving pro trip: ${trip.id}", "MotiumNavHost")
                             tripRepository.saveTrip(trip)
-                            MotiumApplication.logger.i("✅ Pro trip saved: ${trip.id}", "MotiumNavHost")
+                            MotiumApplication.logger.i("âœ… Pro trip saved: ${trip.id}", "MotiumNavHost")
 
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
                                 navController.popBackStack()
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("❌ Failed to save pro trip: ${e.message}", "MotiumNavHost", e)
+                            MotiumApplication.logger.e("âŒ Failed to save pro trip: ${e.message}", "MotiumNavHost", e)
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
                                 android.widget.Toast.makeText(
                                     context,
@@ -1031,3 +1031,4 @@ fun MotiumNavHost(
         }
     }
 }
+

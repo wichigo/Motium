@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.accounts
+﻿package com.application.motium.presentation.pro.accounts
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -830,8 +830,8 @@ private fun LicenseStatusBadge(
             "Licencié"
         )
         AccountLicenseStatus.UNLICENSED -> Triple(
-            TextSecondaryDark.copy(alpha = 0.15f),
-            TextSecondaryDark,
+            if (isPersonalLifetime) MotiumPrimary.copy(alpha = 0.15f) else TextSecondaryDark.copy(alpha = 0.15f),
+            if (isPersonalLifetime) MotiumPrimary else TextSecondaryDark,
             if (isPersonalLifetime) "Abonné" else "Sans licence"
         )
         AccountLicenseStatus.PENDING_UNLINK -> Triple(
@@ -903,3 +903,4 @@ private fun StatusBadge(status: LinkStatus) {
         )
     }
 }
+

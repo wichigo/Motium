@@ -1,4 +1,4 @@
-package com.application.motium.presentation.auth
+﻿package com.application.motium.presentation.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -461,3 +461,4 @@ fun ResetPasswordScreen(
         }
     }
 }
+

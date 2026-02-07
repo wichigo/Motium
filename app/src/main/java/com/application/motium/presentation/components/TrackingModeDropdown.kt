@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -78,7 +78,7 @@ fun TrackingModeDropdown(
             value = selectedOption.label,
             onValueChange = {},
             readOnly = true,
-            label = { Text("Auto Tracking") },
+            label = { Text("Suivi automatique") },
             trailingIcon = {
                 Icon(
                     if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.export
+﻿package com.application.motium.presentation.individual.export
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
@@ -97,7 +97,7 @@ fun ExportScreen(
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            "Export",
+                            "Exports",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -109,7 +109,7 @@ fun ExportScreen(
                         IconButton(onClick = onNavigateBack) {
                             Icon(
                                 imageVector = Icons.Default.ArrowBack,
-                                contentDescription = "Back",
+                                contentDescription = "Retour",
                                 tint = textColor
                             )
                         }
@@ -144,7 +144,7 @@ fun ExportScreen(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Period",
+                        "Période",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold
                         ),
@@ -175,7 +175,7 @@ fun ExportScreen(
                                 value = viewModel.formatDate(filters.startDate),
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("From") },
+                                label = { Text("Du") },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Default.CalendarToday,
@@ -214,7 +214,7 @@ fun ExportScreen(
                                 value = viewModel.formatDate(filters.endDate),
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("To") },
+                                label = { Text("Au") },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Default.CalendarToday,
@@ -263,13 +263,13 @@ fun ExportScreen(
                                     }) {
                                         Icon(
                                             imageVector = Icons.Default.KeyboardArrowLeft,
-                                            contentDescription = "Previous month",
+                                            contentDescription = "Mois précédent",
                                             tint = textSecondaryColor
                                         )
                                     }
 
                                     Text(
-                                        SimpleDateFormat("MMMM yyyy", Locale.ENGLISH).format(currentMonth.time),
+                                        SimpleDateFormat("MMMM yyyy", Locale.FRENCH).format(currentMonth.time),
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.Bold
                                         ),
@@ -283,7 +283,7 @@ fun ExportScreen(
                                     }) {
                                         Icon(
                                             imageVector = Icons.Default.KeyboardArrowRight,
-                                            contentDescription = "Next month",
+                                            contentDescription = "Mois suivant",
                                             tint = textSecondaryColor
                                         )
                                     }
@@ -296,7 +296,7 @@ fun ExportScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceEvenly
                                 ) {
-                                    listOf("S", "M", "T", "W", "T", "F", "S").forEach { day ->
+                                    listOf("L", "M", "M", "J", "V", "S", "D").forEach { day ->
                                         Text(
                                             day,
                                             modifier = Modifier.weight(1f),
@@ -358,7 +358,7 @@ fun ExportScreen(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Filters",
+                        "Filtres",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold
                         ),
@@ -372,10 +372,10 @@ fun ExportScreen(
 
                         Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
-                                value = selectedVehicle?.name ?: "All Vehicles",
+                                value = selectedVehicle?.name ?: "Tous les véhicules",
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Vehicle") },
+                                label = { Text("Véhicule") },
                                 modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = {
                                     Icon(
@@ -425,7 +425,7 @@ fun ExportScreen(
                                     )
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("All Vehicles", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Tous les véhicules", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setVehicleFilter(null)
                                         vehicleExpanded = false
@@ -454,10 +454,10 @@ fun ExportScreen(
 
                         Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
-                                value = filters.tripType ?: "All Types",
+                                value = filters.tripType ?: "Tous les types",
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Trip Type") },
+                                label = { Text("Type de trajet") },
                                 modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = {
                                     Icon(
@@ -507,7 +507,7 @@ fun ExportScreen(
                                     )
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("All Types", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Tous les types", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setTripTypeFilter(null)
                                         tripTypeExpanded = false
@@ -516,18 +516,18 @@ fun ExportScreen(
                                     modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Professional", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Professionnel", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
-                                        viewModel.setTripTypeFilter("Professional")
+                                        viewModel.setTripTypeFilter("Professionnel")
                                         tripTypeExpanded = false
                                         selectedField = null
                                     },
                                     modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Personal", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Personnel", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
-                                        viewModel.setTripTypeFilter("Personal")
+                                        viewModel.setTripTypeFilter("Personnel")
                                         tripTypeExpanded = false
                                         selectedField = null
                                     },
@@ -544,14 +544,14 @@ fun ExportScreen(
                         Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
                                 value = when (filters.expenseMode) {
-                                    "trips_only" -> "Trips only"
-                                    "trips_with_expenses" -> "Trips with expenses"
-                                    "expenses_only" -> "Expenses only"
-                                    else -> "Trips only"
+                                    "trips_only" -> "Trajets uniquement"
+                                    "trips_with_expenses" -> "Trajets avec dépenses"
+                                    "expenses_only" -> "Dépenses uniquement"
+                                    else -> "Trajets uniquement"
                                 },
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Export Content") },
+                                label = { Text("Contenu de l'export") },
                                 modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = {
                                     Icon(
@@ -601,7 +601,7 @@ fun ExportScreen(
                                     )
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Trips only", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Trajets uniquement", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setExpenseModeFilter("trips_only")
                                         expenseModeExpanded = false
@@ -610,7 +610,7 @@ fun ExportScreen(
                                     modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Trips with expenses", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Trajets avec dépenses", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setExpenseModeFilter("trips_with_expenses")
                                         expenseModeExpanded = false
@@ -619,7 +619,7 @@ fun ExportScreen(
                                     modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Expenses only", color = MaterialTheme.colorScheme.onSurface) },
+                                    text = { Text("Dépenses uniquement", color = MaterialTheme.colorScheme.onSurface) },
                                     onClick = {
                                         viewModel.setExpenseModeFilter("expenses_only")
                                         expenseModeExpanded = false
@@ -691,7 +691,7 @@ fun ExportScreen(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Summary",
+                        "Résumé",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold
                         ),
@@ -715,7 +715,7 @@ fun ExportScreen(
                                 modifier = Modifier.padding(16.dp)
                             ) {
                                 Text(
-                                    "Trips",
+                                    "Trajets",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = textSecondaryColor,
                                     fontSize = 12.sp
@@ -775,7 +775,7 @@ fun ExportScreen(
                                 modifier = Modifier.padding(16.dp)
                             ) {
                                 Text(
-                                    "Indemnities",
+                                    "Indemnités",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = textSecondaryColor,
                                     fontSize = 12.sp
@@ -799,7 +799,7 @@ fun ExportScreen(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Export Options",
+                        "Options d'export",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold
                         ),
@@ -841,7 +841,7 @@ fun ExportScreen(
                             if (hasAccess) {
                                 viewModel.exportToCSV(
                                     onSuccess = { file ->
-                                        snackbarMessage = "CSV exported successfully: ${file.name}"
+                                        snackbarMessage = "CSV exporté avec succès : ${file.name}"
                                         showSnackbar = true
                                     },
                                     onError = { error ->
@@ -877,7 +877,7 @@ fun ExportScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Export as CSV",
+                            "Exporter en CSV",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
@@ -890,7 +890,7 @@ fun ExportScreen(
                             if (hasAccess) {
                                 viewModel.exportToPDF(
                                     onSuccess = { file ->
-                                        snackbarMessage = "PDF exported successfully: ${file.name}"
+                                        snackbarMessage = "PDF exporté avec succès : ${file.name}"
                                         showSnackbar = true
                                     },
                                     onError = { error ->
@@ -926,7 +926,7 @@ fun ExportScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Export as PDF",
+                            "Exporter en PDF",
                             color = if (isDarkMode) Color.White else Color.Black,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
@@ -939,7 +939,7 @@ fun ExportScreen(
                             if (hasAccess) {
                                 viewModel.exportToExcel(
                                     onSuccess = { file ->
-                                        snackbarMessage = "Excel exported successfully: ${file.name}"
+                                        snackbarMessage = "Excel exporté avec succès : ${file.name}"
                                         showSnackbar = true
                                     },
                                     onError = { error ->
@@ -975,7 +975,7 @@ fun ExportScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Export as Excel",
+                            "Exporter en Excel",
                             color = if (isDarkMode) Color.White else Color.Black,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
@@ -991,7 +991,7 @@ fun ExportScreen(
         }
 
         if (isLoading) {
-            FullScreenLoading(message = "Chargement des donnees d'export...")
+            FullScreenLoading(message = "Chargement des données d'export...")
         }
     }
 
@@ -1228,3 +1228,5 @@ private fun QuickExportChip(
         )
     }
 }
+
+

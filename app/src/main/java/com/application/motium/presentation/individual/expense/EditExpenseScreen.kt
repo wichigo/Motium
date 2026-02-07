@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.expense
+﻿package com.application.motium.presentation.individual.expense
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -97,12 +97,12 @@ fun EditExpenseScreen(
                     MotiumApplication.logger.i("Loaded expense: ${expense.id}", "EditExpenseScreen")
                 } else {
                     MotiumApplication.logger.e("Expense not found: $expenseId", "EditExpenseScreen")
-                    Toast.makeText(context, "Expense not found", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Dépense introuvable", Toast.LENGTH_SHORT).show()
                     onNavigateBack()
                 }
             } catch (e: Exception) {
                 MotiumApplication.logger.e("Failed to load expense: ${e.message}", "EditExpenseScreen", e)
-                Toast.makeText(context, "Error loading expense", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Erreur lors du chargement de la dépense", Toast.LENGTH_SHORT).show()
                 onNavigateBack()
             }
             isLoading = false
@@ -171,7 +171,7 @@ fun EditExpenseScreen(
                 if (result.amountHT != null) detected.add("HT")
 
                 if (detected.isNotEmpty()) {
-                    Toast.makeText(context, "${detected.joinToString(" & ")} detected automatically", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "${detected.joinToString(" & ")} détecté(s) automatiquement", Toast.LENGTH_SHORT).show()
                 }
             }.onFailure { error ->
                 MotiumApplication.logger.e("Receipt analysis failed: ${error.message}", "EditExpenseScreen", error)
@@ -181,7 +181,7 @@ fun EditExpenseScreen(
             val persistentUri = copyToInternalStorage(uri)
             if (persistentUri == null) {
                 MotiumApplication.logger.e("Failed to persist receipt photo locally", "EditExpenseScreen")
-                Toast.makeText(context, "Failed to save photo locally", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Impossible d'enregistrer la photo localement", Toast.LENGTH_SHORT).show()
                 isAnalyzingReceipt = false
                 return@launch
             }
@@ -245,7 +245,7 @@ fun EditExpenseScreen(
             tempCameraUri = createTempPhotoUri()
             takePictureLauncher.launch(tempCameraUri!!)
         } else {
-            Toast.makeText(context, "Camera permission required", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Autorisation caméra requise", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -267,30 +267,30 @@ fun EditExpenseScreen(
             onDismissRequest = { showDeleteDialog = false },
             containerColor = Color.White,
             tonalElevation = 0.dp,
-            title = { Text("Delete Expense") },
-            text = { Text("Are you sure you want to delete this expense? This action cannot be undone.") },
+            title = { Text("Supprimer la dépense") },
+            text = { Text("Voulez-vous vraiment supprimer cette dépense ? Cette action est irréversible.") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         coroutineScope.launch {
                             val result = expenseRepository.deleteExpense(expenseId)
                             if (result.isSuccess) {
-                                Toast.makeText(context, "Expense deleted", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Dépense supprimée", Toast.LENGTH_SHORT).show()
                                 onExpenseDeleted()
                             } else {
-                                Toast.makeText(context, "Error deleting expense", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Erreur lors de la suppression de la dépense", Toast.LENGTH_SHORT).show()
                             }
                         }
                         showDeleteDialog = false
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
                 ) {
-                    Text("Delete")
+                    Text("Supprimer")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Cancel")
+                    Text("Annuler")
                 }
             }
         )
@@ -301,7 +301,7 @@ fun EditExpenseScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Edit Expense",
+                        "Modifier la dépense",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -311,7 +311,7 @@ fun EditExpenseScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             Icons.Default.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Retour"
                         )
                     }
                 },
@@ -320,7 +320,7 @@ fun EditExpenseScreen(
                     IconButton(onClick = { showDeleteDialog = true }) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "Delete",
+                            contentDescription = "Supprimer",
                             tint = Color.Red
                         )
                     }
@@ -328,7 +328,7 @@ fun EditExpenseScreen(
                     IconButton(
                         onClick = {
                             if (amountTTC.isBlank()) {
-                                Toast.makeText(context, "Please enter TTC amount", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Veuillez saisir le montant TTC", Toast.LENGTH_SHORT).show()
                                 return@IconButton
                             }
 
@@ -350,23 +350,23 @@ fun EditExpenseScreen(
                                         val result = expenseRepository.saveExpense(updatedExpense)
                                         if (result.isSuccess) {
                                             MotiumApplication.logger.i("Expense updated: ${updatedExpense.id}", "EditExpenseScreen")
-                                            Toast.makeText(context, "Expense updated successfully", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Dépense mise à jour avec succès", Toast.LENGTH_SHORT).show()
                                             onExpenseSaved()
                                         } else {
                                             val error = result.exceptionOrNull()
                                             MotiumApplication.logger.e("Failed to update expense: ${error?.message}", "EditExpenseScreen", error)
-                                            Toast.makeText(context, "Error: ${error?.message}", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, "Erreur : ${error?.message}", Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 }
                             } catch (e: Exception) {
-                                Toast.makeText(context, "Invalid amount format", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Format de montant invalide", Toast.LENGTH_SHORT).show()
                             }
                         }
                     ) {
                         Icon(
                             Icons.Default.Check,
-                            contentDescription = "Save"
+                            contentDescription = "Enregistrer"
                         )
                     }
                 },
@@ -442,7 +442,7 @@ fun EditExpenseScreen(
                 // Amount HT
                 item {
                     EditAmountField(
-                        label = "Amount HT (Optional)",
+                        label = "Montant HT (optionnel)",
                         value = amountHT,
                         onValueChange = {
                             amountHT = it
@@ -456,7 +456,7 @@ fun EditExpenseScreen(
                 // Amount TTC
                 item {
                     EditAmountField(
-                        label = "Amount TTC",
+                        label = "Montant TTC",
                         value = amountTTC,
                         onValueChange = {
                             amountTTC = it
@@ -475,7 +475,7 @@ fun EditExpenseScreen(
                         label = { Text("Note") },
                         placeholder = {
                             if (note.isEmpty()) {
-                                Text("Add a note for this expense...")
+                                Text("Ajoutez une note pour cette dépense...")
                             }
                         },
                         leadingIcon = {
@@ -509,23 +509,23 @@ private fun EditExpenseTypeField(
     onTypeSelected: (ExpenseType) -> Unit
 ) {
     val expenseTypes = listOf(
-        ExpenseType.FUEL to "Fuel",
-        ExpenseType.HOTEL to "Hotel",
-        ExpenseType.TOLL to "Tolls",
-        ExpenseType.PARKING to "Parking",
+        ExpenseType.FUEL to "Carburant",
+        ExpenseType.HOTEL to "Hôtel",
+        ExpenseType.TOLL to "Péages",
+        ExpenseType.PARKING to "Stationnement",
         ExpenseType.RESTAURANT to "Restaurant",
-        ExpenseType.MEAL_OUT to "Meals (out)",
-        ExpenseType.OTHER to "Other"
+        ExpenseType.MEAL_OUT to "Repas (extérieur)",
+        ExpenseType.OTHER to "Autre"
     )
 
     var expanded by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
-            value = expenseTypes.find { it.first == selectedType }?.second ?: "Fuel",
+            value = expenseTypes.find { it.first == selectedType }?.second ?: "Carburant",
             onValueChange = {},
             readOnly = true,
-            label = { Text("Expense Type") },
+            label = { Text("Type de dépense") },
             trailingIcon = {
                 Icon(
                     if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -603,7 +603,7 @@ private fun EditAmountField(
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         Icons.Default.CheckCircle,
-                        contentDescription = "Auto-detected",
+                        contentDescription = "Détecté automatiquement",
                         tint = MotiumPrimary,
                         modifier = Modifier.size(14.dp)
                     )
@@ -620,7 +620,7 @@ private fun EditAmountField(
         trailingIcon = if (isMandatory) {
             {
                 Text(
-                    "Required",
+                    "Requis",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Red.copy(alpha = 0.7f),
                     modifier = Modifier.padding(end = 8.dp)
@@ -678,7 +678,7 @@ private fun EditPhotoSection(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    "Receipt Photo",
+                    "Photo du justificatif",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -700,7 +700,7 @@ private fun EditPhotoSection(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        "Analyzing receipt...",
+                        "Analyse du justificatif...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -731,7 +731,7 @@ private fun EditPhotoSection(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                "Camera",
+                                "Caméra",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
@@ -759,7 +759,7 @@ private fun EditPhotoSection(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                "Gallery",
+                                "Galerie",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
@@ -784,7 +784,7 @@ private fun EditPhotoSection(
                         ) {
                             AsyncImage(
                                 model = uri,
-                                contentDescription = "Receipt preview",
+                                contentDescription = "Aperçu du justificatif",
                                 modifier = Modifier
                                     .size(56.dp)
                                     .clip(RoundedCornerShape(8.dp)),
@@ -801,14 +801,14 @@ private fun EditPhotoSection(
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        "Photo attached",
+                                        "Photo jointe",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MotiumPrimary
                                     )
                                 }
                                 Text(
-                                    "Tap camera or gallery to replace",
+                                    "Appuyez sur caméra ou galerie pour remplacer",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                 )
@@ -820,3 +820,5 @@ private fun EditPhotoSection(
         }
     }
 }
+
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.edittrip
+﻿package com.application.motium.presentation.individual.edittrip
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -239,7 +239,7 @@ fun EditTripScreen(
                 }
             } else {
                 MotiumApplication.logger.e("Trip not found: $tripId", "EditTripScreen")
-                Toast.makeText(context, "Trip not found", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Trajet introuvable", Toast.LENGTH_SHORT).show()
                 onNavigateBack()
             }
 
@@ -403,7 +403,7 @@ fun EditTripScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            "Edit Trip",
+                            "Modifier le trajet",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold
                             )
@@ -413,7 +413,7 @@ fun EditTripScreen(
                         IconButton(onClick = onNavigateBack) {
                             Icon(
                                 Icons.Default.ArrowBack,
-                                contentDescription = "Back"
+                                contentDescription = "Retour"
                             )
                         }
                     },
@@ -423,12 +423,12 @@ fun EditTripScreen(
                                 MotiumApplication.logger.d("Save button clicked", "EditTripScreen")
 
                                 if (startLocation.isBlank()) {
-                                    Toast.makeText(context, "Please select a departure location", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Veuillez sélectionner un lieu de départ", Toast.LENGTH_SHORT).show()
                                     return@IconButton
                                 }
 
                                 if (endLocation.isBlank()) {
-                                    Toast.makeText(context, "Please select an arrival location", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Veuillez sélectionner un lieu d'arrivée", Toast.LENGTH_SHORT).show()
                                     return@IconButton
                                 }
 
@@ -506,18 +506,18 @@ fun EditTripScreen(
                                         MotiumApplication.logger.i("✅ Trip saved to repository", "EditTripScreen")
 
                                         MotiumApplication.logger.i("Trip updated: $tripId", "EditTripScreen")
-                                        Toast.makeText(context, "Trip updated successfully", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Trajet mis à jour avec succès", Toast.LENGTH_SHORT).show()
                                         onTripUpdated()
                                     } catch (e: Exception) {
                                         MotiumApplication.logger.e("Error updating trip: ${e.message}", "EditTripScreen", e)
-                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Erreur : ${e.message}", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             }
                         ) {
                             Icon(
                                 Icons.Default.Check,
-                                contentDescription = "Save"
+                                contentDescription = "Enregistrer"
                             )
                         }
                     },
@@ -542,13 +542,13 @@ fun EditTripScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         DateTimeField(
-                            label = "Departure Date",
+                            label = "Date de départ",
                             value = "${dateFormat.format(selectedDate)} ${selectedTime}",
                             icon = Icons.Default.CalendarToday,
                             modifier = Modifier.weight(1f)
                         )
                         DateTimeField(
-                            label = "End Date",
+                            label = "Date de fin",
                             value = "${dateFormat.format(selectedDate)} ${endTime}",
                             icon = Icons.Default.CalendarToday,
                             modifier = Modifier.weight(1f)
@@ -559,7 +559,7 @@ fun EditTripScreen(
                 // Location fields
                 item {
                     LocationField(
-                        label = "Departure Location",
+                        label = "Lieu de départ",
                         value = startLocation,
                         iconColor = MotiumPrimary,
                         onValueChange = { startLocation = it },
@@ -582,7 +582,7 @@ fun EditTripScreen(
 
                 item {
                     LocationField(
-                        label = "Arrival Location",
+                        label = "Lieu d'arrivée",
                         value = endLocation,
                         iconColor = Color.Red,
                         onValueChange = { endLocation = it },
@@ -651,7 +651,7 @@ fun EditTripScreen(
                             modifier = Modifier.weight(1f)
                         )
                         ReadOnlyField(
-                            label = "Duration",
+                            label = "Durée",
                             value = if (duration.isNotBlank()) "$duration min" else "",
                             icon = Icons.Default.Schedule,
                             modifier = Modifier.weight(1f)
@@ -665,7 +665,7 @@ fun EditTripScreen(
                         value = notes,
                         onValueChange = { notes = it },
                         label = { Text("Notes") },
-                        placeholder = { Text("Add any notes for this trip...") },
+                        placeholder = { Text("Ajoutez des notes pour ce trajet...") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 3,
                         maxLines = 5,
@@ -758,7 +758,7 @@ fun LocationField(
         value = value,
         onValueChange = onValueChange,
         onAddressSelected = onAddressSelected,
-        placeholder = "Enter address",
+        placeholder = "Entrez une adresse",
         leadingIcon = {
             Icon(
                 Icons.Default.LocationOn,
@@ -790,7 +790,7 @@ fun ProfessionalTripToggle(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Professional Trip",
+                "Trajet professionnel",
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.Medium
                 )
@@ -902,13 +902,13 @@ fun ExpenseItemRow(
     onRemove: () -> Unit
 ) {
     val expenseTypes = listOf(
-        ExpenseType.FUEL to "Fuel",
-        ExpenseType.HOTEL to "Hotel",
-        ExpenseType.TOLL to "Tolls",
-        ExpenseType.PARKING to "Parking",
+        ExpenseType.FUEL to "Carburant",
+        ExpenseType.HOTEL to "Hôtel",
+        ExpenseType.TOLL to "Péages",
+        ExpenseType.PARKING to "Stationnement",
         ExpenseType.RESTAURANT to "Restaurant",
-        ExpenseType.MEAL_OUT to "Meals (out)",
-        ExpenseType.OTHER to "Other"
+        ExpenseType.MEAL_OUT to "Repas (extérieur)",
+        ExpenseType.OTHER to "Autre"
     )
 
     var expanded by remember { mutableStateOf(false) }
@@ -943,7 +943,7 @@ fun ExpenseItemRow(
                 // Type dropdown
                 Box(modifier = Modifier.weight(1f)) {
                     OutlinedTextField(
-                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Fuel",
+                        value = expenseTypes.find { it.first == expense.type }?.second ?: "Carburant",
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Type") },
@@ -996,7 +996,7 @@ fun ExpenseItemRow(
                 // Amount field
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Amount",
+                        text = "Montant",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
@@ -1022,7 +1022,7 @@ fun ExpenseItemRow(
             // Note field
             Column {
                 Text(
-                    text = "Note (Optional)",
+                    text = "Note (optionnelle)",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
@@ -1032,7 +1032,7 @@ fun ExpenseItemRow(
                     value = expense.note,
                     onValueChange = { onExpenseChange(expense.copy(note = it)) },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("e.g., Gas station receipt") },
+                    placeholder = { Text("ex. Ticket de station-service") },
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
@@ -1059,7 +1059,7 @@ fun ExpenseItemRow(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        if (expense.photoUri != null) "Photo added" else "Add photo",
+                        if (expense.photoUri != null) "Photo ajoutée" else "Ajouter une photo",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -1070,7 +1070,7 @@ fun ExpenseItemRow(
                         contentColor = Color.Red
                     )
                 ) {
-                    Text("Remove", style = MaterialTheme.typography.bodySmall)
+                    Text("Supprimer", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -1088,9 +1088,9 @@ fun VehicleSelector(
 
     if (availableVehicles.isEmpty()) {
         OutlinedTextField(
-            value = "No vehicles available",
+            value = "Aucun véhicule disponible",
             onValueChange = {},
-            label = { Text("Vehicle") },
+            label = { Text("Véhicule") },
             enabled = false,
             modifier = modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -1104,9 +1104,9 @@ fun VehicleSelector(
 
     Box(modifier = modifier.fillMaxWidth()) {
         OutlinedTextField(
-            value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "Select vehicle",
+            value = availableVehicles.find { it.id == selectedVehicleId }?.name ?: "Sélectionner un véhicule",
             onValueChange = {},
-            label = { Text("Vehicle") },
+            label = { Text("Véhicule") },
             trailingIcon = {
                 Icon(
                     if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -1152,7 +1152,7 @@ fun VehicleSelector(
             DropdownMenuItem(
                 text = {
                     Text(
-                        "No vehicle",
+                        "Aucun véhicule",
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 },
@@ -1192,3 +1192,4 @@ fun VehicleSelector(
         }
     }
 }
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,11 +31,11 @@ data class BottomNavItem(
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem("home", Icons.Filled.Home, Icons.Outlined.Home, "Home"),
-    BottomNavItem("calendar", Icons.Filled.CalendarToday, Icons.Outlined.CalendarToday, "Calendar"),
-    BottomNavItem("vehicles", Icons.Filled.DirectionsCar, Icons.Outlined.DirectionsCar, "Vehicles"),
-    BottomNavItem("export", Icons.Filled.IosShare, Icons.Outlined.IosShare, "Export"),
-    BottomNavItem("settings", Icons.Filled.Settings, Icons.Outlined.Settings, "Settings")
+    BottomNavItem("home", Icons.Filled.Home, Icons.Outlined.Home, "Accueil"),
+    BottomNavItem("calendar", Icons.Filled.CalendarToday, Icons.Outlined.CalendarToday, "Agenda"),
+    BottomNavItem("vehicles", Icons.Filled.DirectionsCar, Icons.Outlined.DirectionsCar, "Véhicules"),
+    BottomNavItem("export", Icons.Filled.IosShare, Icons.Outlined.IosShare, "Exports"),
+    BottomNavItem("settings", Icons.Filled.Settings, Icons.Outlined.Settings, "Réglages")
 )
 
 @Composable

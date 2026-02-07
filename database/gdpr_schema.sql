@@ -530,6 +530,7 @@ BEGIN
         'name', u.name,
         'phone_number', u.phone_number,
         'address', u.address,
+        'profile_photo_url', u.profile_photo_url,
         'role', u.role,
         'subscription_type', u.subscription_type,
         'subscription_expires_at', u.subscription_expires_at,

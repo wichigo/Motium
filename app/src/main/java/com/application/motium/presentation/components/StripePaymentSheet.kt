@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import android.app.Activity
 import androidx.compose.runtime.Composable
@@ -223,7 +223,7 @@ fun StripeDeferredPaymentSheet(
             // Prevent double creation
             if (hasCreatedIntent.value) {
                 CreateIntentResult.Failure(
-                    cause = Exception("Payment already in progress"),
+                    cause = Exception("Paiement déjà en cours"),
                     displayMessage = "Paiement déjà en cours"
                 )
             } else {
@@ -292,3 +292,5 @@ fun StripeDeferredPaymentSheet(
         paymentSheet.presentWithIntentConfiguration(intentConfiguration, configuration)
     }
 }
+
+

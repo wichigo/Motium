@@ -96,10 +96,13 @@ Deno.test("stripe-webhook: should handle payment_intent.succeeded event", () => 
     "payment_intent.succeeded",
     "checkout.session.completed",
     "invoice.paid",
+    "invoice.upcoming",
+    "invoice.created",
     "invoice.payment_failed",
     "customer.subscription.created",
     "customer.subscription.updated",
     "customer.subscription.deleted",
+    "subscription_schedule.updated",
   ];
 
   const isSupported = supportedEvents.includes(eventType);
@@ -112,6 +115,14 @@ Deno.test("stripe-webhook: should handle invoice.paid event", () => {
 
   const isSupported = supportedEvents.includes(eventType);
   assertEquals(isSupported, true, "invoice.paid should be supported");
+});
+
+Deno.test("stripe-webhook: should handle subscription_schedule.updated event", () => {
+  const eventType = "subscription_schedule.updated";
+  const supportedEvents = ["subscription_schedule.updated"];
+
+  const isSupported = supportedEvents.includes(eventType);
+  assertEquals(isSupported, true, "subscription_schedule.updated should be supported");
 });
 
 Deno.test("stripe-webhook: should ignore unknown events", () => {

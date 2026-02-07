@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -46,10 +46,10 @@ data class ProBottomNavItem(
  * Menu de base Pro (4 items + bouton central)
  */
 val proBaseNavItems = listOf(
-    ProBottomNavItem("enterprise_home", Icons.Filled.Home, Icons.Outlined.Home, "Home"),
+    ProBottomNavItem("enterprise_home", Icons.Filled.Home, Icons.Outlined.Home, "Accueil"),
     ProBottomNavItem("pro_calendar", Icons.Filled.CalendarToday, Icons.Outlined.CalendarToday, "Agenda"),
     // Le bouton "+" est géré séparément (position centrale)
-    ProBottomNavItem("pro_export", Icons.Filled.IosShare, Icons.Outlined.IosShare, "Export"),
+    ProBottomNavItem("pro_export", Icons.Filled.IosShare, Icons.Outlined.IosShare, "Exports"),
     ProBottomNavItem("pro_settings", Icons.Filled.Settings, Icons.Outlined.Settings, "Réglages")
 )
 
@@ -57,10 +57,10 @@ val proBaseNavItems = listOf(
  * Items du menu étendu Pro (affiché quand "+" est cliqué)
  */
 val proExpandedMenuItems = listOf(
-    ProBottomNavItem("pro_linked_accounts", Icons.Filled.People, Icons.Outlined.People, "Comptes liés"),
+    ProBottomNavItem("pro_linked_accounts", Icons.Filled.People, Icons.Outlined.People, "Collaborateurs"),
     ProBottomNavItem("pro_licenses", Icons.Filled.CardMembership, Icons.Outlined.CardMembership, "Licences"),
     ProBottomNavItem("pro_vehicles", Icons.Filled.DirectionsCar, Icons.Outlined.DirectionsCar, "Véhicules"),
-    ProBottomNavItem("pro_export_advanced", Icons.Filled.FileDownload, Icons.Outlined.FileDownload, "Export Pro")
+    ProBottomNavItem("pro_export_advanced", Icons.Filled.FileDownload, Icons.Outlined.FileDownload, "Exports Pro")
 )
 
 /**
@@ -276,4 +276,3 @@ private fun BaseNavItem(
         )
     }
 }
-

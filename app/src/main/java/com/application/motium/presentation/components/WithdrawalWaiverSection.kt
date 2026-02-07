@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import android.content.Intent
 import android.net.Uri
@@ -141,3 +141,4 @@ private fun WaiverCheckboxRow(
         )
     }
 }
+

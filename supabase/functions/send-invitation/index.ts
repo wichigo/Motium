@@ -25,6 +25,7 @@ interface InvitationResult {
   invitation_token?: string
   company_link_id?: string
   user_exists?: boolean
+  retry_after_minutes?: number
   error?: string
 }
 
@@ -115,11 +116,6 @@ serve(async (req) => {
       )
     }
 
-    // Generate invitation token and expiration (7 days)
-    const invitationToken = crypto.randomUUID()
-    const expiresAt = new Date()
-    expiresAt.setDate(expiresAt.getDate() + 7)
-
     // Check if user already exists
     const { data: existingUser } = await supabase
       .from('users')
@@ -130,23 +126,131 @@ serve(async (req) => {
     // Check if there's already a pending/active link for this email
     const { data: existingLink } = await supabase
       .from('company_links')
-      .select('id, status')
+      .select('id, status, invitation_token, invitation_expires_at, created_at, updated_at')
       .eq('linked_pro_account_id', pro_account_id)
       .or(`user_id.eq.${existingUser?.id ?? '00000000-0000-0000-0000-000000000000'},invitation_email.eq.${email.toLowerCase()}`)
       .in('status', ['PENDING', 'ACTIVE'])
       .maybeSingle()
 
     if (existingLink) {
+      if (existingLink.status === 'ACTIVE') {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "user_already_linked"
+          } as InvitationResult),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        )
+      }
+
+      // Existing pending invitation:
+      // - keep same token when still valid (do not invalidate old link)
+      // - enforce 1-hour cooldown before resending
+      const now = new Date()
+      const existingExpiresAt = existingLink.invitation_expires_at
+        ? new Date(existingLink.invitation_expires_at)
+        : null
+      const derivedSentAt = existingExpiresAt
+        ? new Date(existingExpiresAt.getTime() - (7 * 24 * 60 * 60 * 1000))
+        : null
+      const lastSentAt = new Date(
+        Math.max(
+          existingLink.updated_at ? new Date(existingLink.updated_at).getTime() : 0,
+          derivedSentAt ? derivedSentAt.getTime() : 0,
+          existingLink.created_at ? new Date(existingLink.created_at).getTime() : 0
+        )
+      )
+      const nextAllowedAt = new Date(lastSentAt.getTime() + 60 * 60 * 1000)
+
+      if (now < nextAllowedAt) {
+        const retryAfterMinutes = Math.max(1, Math.ceil((nextAllowedAt.getTime() - now.getTime()) / 60000))
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "invitation_recently_sent",
+            retry_after_minutes: retryAfterMinutes
+          } as InvitationResult),
+          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        )
+      }
+
+      const hasValidToken = !!existingLink.invitation_token &&
+        !!existingExpiresAt &&
+        existingExpiresAt > now
+
+      const tokenToSend = hasValidToken ? existingLink.invitation_token : crypto.randomUUID()
+      const expiresAtToUse = hasValidToken ? existingExpiresAt! : new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+
+      if (!hasValidToken) {
+        const { error: refreshError } = await supabase
+          .from('company_links')
+          .update({
+            invitation_token: tokenToSend,
+            invitation_expires_at: expiresAtToUse.toISOString(),
+            updated_at: now.toISOString()
+          })
+          .eq('id', existingLink.id)
+          .eq('status', 'PENDING')
+
+        if (refreshError) {
+          console.error("Refresh invitation token error:", refreshError)
+          return new Response(
+            JSON.stringify({ success: false, error: "Failed to refresh invitation" } as InvitationResult),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          )
+        }
+      }
+
+      const emailUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/send-gdpr-email`
+      const resendResponse = await fetch(emailUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`
+        },
+        body: JSON.stringify({
+          email: email,
+          template: "collaborator_invitation",
+          data: {
+            employee_name: full_name,
+            company_name: company_name,
+            department: department,
+            invitation_token: tokenToSend
+          }
+        })
+      })
+
+      if (!resendResponse.ok) {
+        const errorBody = await resendResponse.text()
+        console.error("Resend invitation email failed:", errorBody)
+        return new Response(
+          JSON.stringify({ success: false, error: "email_send_failed" } as InvitationResult),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        )
+      }
+
+      // Keep updated_at aligned with the last successful email send time (cooldown source)
+      await supabase
+        .from('company_links')
+        .update({ updated_at: now.toISOString() })
+        .eq('id', existingLink.id)
+        .eq('status', 'PENDING')
+
       return new Response(
         JSON.stringify({
-          success: false,
-          error: existingLink.status === 'ACTIVE'
-            ? "user_already_linked"
-            : "invitation_already_pending"
+          success: true,
+          invitation_token: tokenToSend,
+          company_link_id: existingLink.id,
+          user_exists: !!existingUser
         } as InvitationResult),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       )
     }
+
+    // Generate invitation token and expiration (7 days)
+    const invitationToken = crypto.randomUUID()
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + 7)
 
     // Create company_link entry
     // If user exists, set user_id; otherwise set invitation_email

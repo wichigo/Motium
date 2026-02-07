@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.upgrade
+﻿package com.application.motium.presentation.individual.upgrade
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
@@ -433,3 +433,4 @@ private fun Double.formatPrice(): String {
         String.format("%.2f", this).replace(".", ",")
     }
 }
+

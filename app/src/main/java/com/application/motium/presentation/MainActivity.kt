@@ -1,4 +1,4 @@
-package com.application.motium.presentation
+﻿package com.application.motium.presentation
 
 import android.content.Intent
 import android.os.Bundle
@@ -117,11 +117,11 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             try {
-                MotiumApplication.logger.i("🔄 App resumed", "MainActivity")
+                MotiumApplication.logger.i("ðŸ”„ App resumed", "MainActivity")
 
                 // Démarrer le service de connexion si l'utilisateur est authentifié
                 if (authRepository.isUserAuthenticated()) {
-                    MotiumApplication.logger.i("🔗 User authenticated - starting connection service", "MainActivity")
+                    MotiumApplication.logger.i("ðŸ”— User authenticated - starting connection service", "MainActivity")
                     SupabaseConnectionService.startService(this@MainActivity)
 
                     // FIX (2026-01-24): Trigger sync when app comes to foreground (not just HomeScreen)
@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
                     // Rate-limiting in triggerImmediateSync() prevents excessive syncs (1 min minimum)
                     val syncManager = OfflineFirstSyncManager.getInstance(this@MainActivity)
                     syncManager.triggerImmediateSync()
-                    MotiumApplication.logger.i("🔄 Triggered sync on app resume", "MainActivity")
+                    MotiumApplication.logger.i("ðŸ”„ Triggered sync on app resume", "MainActivity")
 
                     val tripRepository = TripRepository.getInstance(this@MainActivity)
                     val localUserRepository = LocalUserRepository.getInstance(this@MainActivity)
@@ -173,27 +173,27 @@ class MainActivity : ComponentActivity() {
                     if (tripRepository.isAutoTrackingEnabled()) {
                         // Start ActivityRecognitionService to show notification
                         MotiumApplication.logger.i(
-                            "🚀 Auto-tracking enabled - starting ActivityRecognitionService",
+                            "ðŸš€ Auto-tracking enabled - starting ActivityRecognitionService",
                             "MainActivity"
                         )
                         ActivityRecognitionService.startService(this@MainActivity)
 
                         if (!DozeModeFix.isIgnoringBatteryOptimizations(this@MainActivity)) {
                             MotiumApplication.logger.i(
-                                "⚠️ Auto-tracking enabled but app not exempted from battery optimization - requesting exemption",
+                                "âš ï¸ Auto-tracking enabled but app not exempted from battery optimization - requesting exemption",
                                 "MainActivity"
                             )
                             DozeModeFix.requestBatteryOptimizationExemption(this@MainActivity)
                         } else {
                             MotiumApplication.logger.i(
-                                "✅ App already exempted from battery optimization",
+                                "âœ… App already exempted from battery optimization",
                                 "MainActivity"
                             )
                         }
                     }
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Erreur au resume: ${e.message}", "MainActivity", e)
+                MotiumApplication.logger.e("âŒ Erreur au resume: ${e.message}", "MainActivity", e)
             }
         }
     }
@@ -202,7 +202,7 @@ class MainActivity : ComponentActivity() {
         super.onPause()
         // Ne pas arrêter le service quand l'app passe en arrière-plan
         // Il doit continuer à maintenir la connexion
-        MotiumApplication.logger.i("⏸️ App paused - connection service continues", "MainActivity")
+        MotiumApplication.logger.i("â¸ï¸ App paused - connection service continues", "MainActivity")
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -442,3 +442,4 @@ fun MotiumApp(googleSignInHelper: GoogleSignInHelper) {
 }
 
 // Preview removed - requires GoogleSignInHelper which needs Activity initialization
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.export
+﻿package com.application.motium.presentation.pro.export
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -126,16 +126,16 @@ class ProExportAdvancedViewModel(
      * Load all active linked users
      */
     private fun loadLinkedUsers() {
-        MotiumApplication.logger.i("📋 loadLinkedUsers() called", "ProExportVM")
+        MotiumApplication.logger.i("ðŸ“‹ loadLinkedUsers() called", "ProExportVM")
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
             try {
-                MotiumApplication.logger.d("📋 Getting pro account ID...", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“‹ Getting pro account ID...", "ProExportVM")
                 val proAccountId = authRepository.getCurrentProAccountId()
-                MotiumApplication.logger.d("📋 Pro account ID: $proAccountId", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“‹ Pro account ID: $proAccountId", "ProExportVM")
                 if (proAccountId == null) {
-                    MotiumApplication.logger.w("📋 Pro account not found - cannot load linked users", "ProExportVM")
+                    MotiumApplication.logger.w("ðŸ“‹ Pro account not found - cannot load linked users", "ProExportVM")
                     _uiState.update { it.copy(
                         isLoading = false,
                         error = "Compte Pro non trouvé"
@@ -143,7 +143,7 @@ class ProExportAdvancedViewModel(
                     return@launch
                 }
 
-                MotiumApplication.logger.d("📋 Fetching linked users for pro account: $proAccountId", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“‹ Fetching linked users for pro account: $proAccountId", "ProExportVM")
                 val result = linkedAccountRemoteDataSource.getLinkedUsers(proAccountId)
                 result.fold(
                     onSuccess = { users ->
@@ -153,7 +153,7 @@ class ProExportAdvancedViewModel(
                             .map { it.department ?: "Sans département" }
                             .distinct()
                             .sorted()
-                        MotiumApplication.logger.i("📋 Loaded ${activeUsers.size} active linked users (${users.size} total), ${departments.size} departments", "ProExportVM")
+                        MotiumApplication.logger.i("ðŸ“‹ Loaded ${activeUsers.size} active linked users (${users.size} total), ${departments.size} departments", "ProExportVM")
                         _uiState.update { it.copy(
                             isLoading = false,
                             linkedUsers = activeUsers,
@@ -165,7 +165,7 @@ class ProExportAdvancedViewModel(
                         loadVehiclesForUsers(activeUsers)
                     },
                     onFailure = { e ->
-                        MotiumApplication.logger.e("📋 Failed to load linked users: ${e.message}", "ProExportVM", e)
+                        MotiumApplication.logger.e("ðŸ“‹ Failed to load linked users: ${e.message}", "ProExportVM", e)
                         _uiState.update { it.copy(
                             isLoading = false,
                             error = "Erreur: ${e.message}"
@@ -173,7 +173,7 @@ class ProExportAdvancedViewModel(
                     }
                 )
             } catch (e: Exception) {
-                MotiumApplication.logger.e("📋 Exception loading linked users: ${e.message}", "ProExportVM", e)
+                MotiumApplication.logger.e("ðŸ“‹ Exception loading linked users: ${e.message}", "ProExportVM", e)
                 _uiState.update { it.copy(
                     isLoading = false,
                     error = "Erreur: ${e.message}"
@@ -271,7 +271,7 @@ class ProExportAdvancedViewModel(
                     }
                 }
 
-                MotiumApplication.logger.i("🚗 Loaded ${allVehicles.size} vehicles for ${users.size} users from Room cache", "ProExportVM")
+                MotiumApplication.logger.i("ðŸš— Loaded ${allVehicles.size} vehicles for ${users.size} users from Room cache", "ProExportVM")
 
                 _uiState.update { state ->
                     state.copy(
@@ -367,17 +367,17 @@ class ProExportAdvancedViewModel(
      * Export data - Real implementation with company legal format
      */
     fun exportData() {
-        MotiumApplication.logger.i("📤 exportData() called - starting export process", "ProExportVM")
+        MotiumApplication.logger.i("ðŸ“¤ exportData() called - starting export process", "ProExportVM")
         viewModelScope.launch {
-            MotiumApplication.logger.d("📤 viewModelScope.launch started", "ProExportVM")
+            MotiumApplication.logger.d("ðŸ“¤ viewModelScope.launch started", "ProExportVM")
             _uiState.update { it.copy(isExporting = true, error = null) }
 
             try {
                 val state = _uiState.value
-                MotiumApplication.logger.d("📤 Current state: selectedUserIds=${state.selectedUserIds.size}, format=${state.exportFormat}", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Current state: selectedUserIds=${state.selectedUserIds.size}, format=${state.exportFormat}", "ProExportVM")
 
                 if (state.selectedUserIds.isEmpty()) {
-                    MotiumApplication.logger.w("📤 No users selected - aborting export", "ProExportVM")
+                    MotiumApplication.logger.w("ðŸ“¤ No users selected - aborting export", "ProExportVM")
                     _uiState.update { it.copy(
                         isExporting = false,
                         error = "Sélectionnez au moins un compte"
@@ -386,41 +386,41 @@ class ProExportAdvancedViewModel(
                 }
 
                 // 1. Get Pro account data for company legal info - OFFLINE-FIRST
-                MotiumApplication.logger.d("📤 Step 1: Getting pro account ID...", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Step 1: Getting pro account ID...", "ProExportVM")
                 val proAccountId = authRepository.getCurrentProAccountId()
-                MotiumApplication.logger.d("📤 Pro account ID: $proAccountId", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Pro account ID: $proAccountId", "ProExportVM")
                 if (proAccountId == null) {
-                    MotiumApplication.logger.e("📤 No pro account ID found", "ProExportVM")
+                    MotiumApplication.logger.e("ðŸ“¤ No pro account ID found", "ProExportVM")
                     _uiState.update { it.copy(isExporting = false, error = "Compte Pro non trouvé") }
                     return@launch
                 }
 
-                MotiumApplication.logger.d("📤 Step 2: Getting pro account from offline-first repository...", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Step 2: Getting pro account from offline-first repository...", "ProExportVM")
                 // OFFLINE-FIRST: Use OfflineFirstProAccountRepository
                 val proAccount = offlineFirstProAccountRepo.getProAccountForUserOnce(proAccountId)
-                MotiumApplication.logger.d("📤 Pro account: ${proAccount?.companyName}", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Pro account: ${proAccount?.companyName}", "ProExportVM")
                 if (proAccount == null) {
-                    MotiumApplication.logger.e("📤 Pro account not found for ID $proAccountId", "ProExportVM")
+                    MotiumApplication.logger.e("ðŸ“¤ Pro account not found for ID $proAccountId", "ProExportVM")
                     _uiState.update { it.copy(isExporting = false, error = "Compte Pro non trouvé") }
                     return@launch
                 }
 
                 // 2. Build trip types filter
-                MotiumApplication.logger.d("📤 Step 3: Building trip filters...", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Step 3: Building trip filters...", "ProExportVM")
                 val tripTypes = buildList {
                     if (state.includeProTrips) add("PROFESSIONAL")
                     if (state.includePersoTrips) add("PERSONAL")
                 }
-                MotiumApplication.logger.d("📤 Trip types: $tripTypes", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Trip types: $tripTypes", "ProExportVM")
 
                 if (tripTypes.isEmpty()) {
-                    MotiumApplication.logger.w("📤 No trip types selected", "ProExportVM")
+                    MotiumApplication.logger.w("ðŸ“¤ No trip types selected", "ProExportVM")
                     _uiState.update { it.copy(isExporting = false, error = "Sélectionnez au moins un type de trajet") }
                     return@launch
                 }
 
                 // 3. Fetch trips for all selected users - OFFLINE-FIRST from Room
-                MotiumApplication.logger.d("📤 Step 4: Fetching trips for ${state.selectedUserIds.size} users from Room...", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Step 4: Fetching trips for ${state.selectedUserIds.size} users from Room...", "ProExportVM")
                 // OFFLINE-FIRST: Use TripRepository to read from Room
                 val tripsByUser = tripRepository.getTripsForUsers(
                     userIds = state.selectedUserIds.toList(),
@@ -428,7 +428,7 @@ class ProExportAdvancedViewModel(
                     endDate = state.endDate,
                     tripTypes = tripTypes
                 )
-                MotiumApplication.logger.d("📤 Trips fetched from Room: ${tripsByUser.values.sumOf { it.size }} total", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Trips fetched from Room: ${tripsByUser.values.sumOf { it.size }} total", "ProExportVM")
 
                 // 4. Build employee export data with vehicle info
                 val employees = state.linkedUsers
@@ -473,7 +473,7 @@ class ProExportAdvancedViewModel(
                     }
 
                 // 5. Build ProExportData
-                MotiumApplication.logger.d("📤 Step 5: Building export data with ${employees.size} employees", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Step 5: Building export data with ${employees.size} employees", "ProExportVM")
                 val exportData = ProExportData(
                     companyName = proAccount.companyName,
                     siret = proAccount.siret,
@@ -486,12 +486,12 @@ class ProExportAdvancedViewModel(
                     includeExpenses = state.includeExpenses,
                     includePhotos = state.includePhotos
                 )
-                MotiumApplication.logger.d("📤 Export data built: company=${exportData.companyName}", "ProExportVM")
+                MotiumApplication.logger.d("ðŸ“¤ Export data built: company=${exportData.companyName}", "ProExportVM")
 
                 // 6. Export in selected format
-                MotiumApplication.logger.i("📤 Step 6: Starting ${state.exportFormat} export...", "ProExportVM")
+                MotiumApplication.logger.i("ðŸ“¤ Step 6: Starting ${state.exportFormat} export...", "ProExportVM")
                 val onSuccess: (java.io.File) -> Unit = { file ->
-                    MotiumApplication.logger.i("📤 ✅ Export SUCCESS: ${file.absolutePath}", "ProExportVM")
+                    MotiumApplication.logger.i("ðŸ“¤ âœ… Export SUCCESS: ${file.absolutePath}", "ProExportVM")
                     val totalTrips = employees.sumOf { it.trips.size }
                     _uiState.update { it.copy(
                         isExporting = false,
@@ -502,7 +502,7 @@ class ProExportAdvancedViewModel(
                 }
 
                 val onError: (String) -> Unit = { error ->
-                    MotiumApplication.logger.e("📤 ❌ Export ERROR: $error", "ProExportVM")
+                    MotiumApplication.logger.e("ðŸ“¤ âŒ Export ERROR: $error", "ProExportVM")
                     _uiState.update { it.copy(
                         isExporting = false,
                         error = error
@@ -511,20 +511,20 @@ class ProExportAdvancedViewModel(
 
                 when (state.exportFormat) {
                     ExportFormatOption.CSV -> {
-                        MotiumApplication.logger.d("📤 Calling exportProToCSV...", "ProExportVM")
+                        MotiumApplication.logger.d("ðŸ“¤ Calling exportProToCSV...", "ProExportVM")
                         exportManager.exportProToCSV(exportData, onSuccess, onError)
                     }
                     ExportFormatOption.PDF -> {
-                        MotiumApplication.logger.d("📤 Calling exportProToPDF...", "ProExportVM")
+                        MotiumApplication.logger.d("ðŸ“¤ Calling exportProToPDF...", "ProExportVM")
                         exportManager.exportProToPDF(exportData, onSuccess, onError)
                     }
                     ExportFormatOption.EXCEL -> {
-                        MotiumApplication.logger.d("📤 Calling exportProToExcel...", "ProExportVM")
+                        MotiumApplication.logger.d("ðŸ“¤ Calling exportProToExcel...", "ProExportVM")
                         exportManager.exportProToExcel(exportData, onSuccess, onError)
                     }
                 }
 
-                MotiumApplication.logger.i("📤 Export function called, waiting for callback...", "ProExportVM")
+                MotiumApplication.logger.i("ðŸ“¤ Export function called, waiting for callback...", "ProExportVM")
             } catch (e: Exception) {
                 _uiState.update { it.copy(
                     isExporting = false,
@@ -803,3 +803,4 @@ class ProExportAdvancedViewModelFactory(
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }
 }
+

@@ -125,11 +125,12 @@ class LocalUserRepository(context: Context) {
         val syncManager = OfflineFirstSyncManager.getInstance(appContext)
 
         // Build payload with user fields allowed by push_user_change()
-        // Allowed: name, phone_number, address, favorite_colors, consider_full_distance
+        // Allowed: name, phone_number, address, profile_photo_url, favorite_colors, consider_full_distance
         val userPayload = buildJsonObject {
             put("name", user.name)
             put("phone_number", user.phoneNumber ?: "")
             put("address", user.address ?: "")
+            put("profile_photo_url", user.profilePhotoUrl ?: "")
             put("consider_full_distance", user.considerFullDistance)
             // favorite_colors is a list - build as JSON array
             if (user.favoriteColors.isNotEmpty()) {
@@ -142,7 +143,7 @@ class LocalUserRepository(context: Context) {
         }.toString()
 
         MotiumApplication.logger.i(
-            "Queueing USER update with payload: consider_full_distance=${user.considerFullDistance}, version=$version",
+            "Queueing USER update with payload: consider_full_distance=${user.considerFullDistance}, has_profile_photo=${!user.profilePhotoUrl.isNullOrBlank()}, version=$version",
             "LocalUserRepository"
         )
 

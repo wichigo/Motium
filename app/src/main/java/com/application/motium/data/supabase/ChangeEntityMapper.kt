@@ -162,6 +162,7 @@ object ChangeEntityMapper {
                 stripeSubscriptionId = data.getString("stripe_subscription_id"),
                 phoneNumber = data.getString("phone_number") ?: "",
                 address = data.getString("address") ?: "",
+                profilePhotoUrl = data.getString("profile_photo_url"),
                 deviceFingerprintId = data.getString("device_fingerprint_id"),
                 considerFullDistance = data.getBoolean("consider_full_distance") ?: false,
                 favoriteColors = data["favorite_colors"]?.toString() ?: "[]",

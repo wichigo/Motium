@@ -1,6 +1,7 @@
 package com.application.motium.data.supabase
 
 import android.content.Context
+import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.data.sync.TokenRefreshCoordinator
 import com.application.motium.domain.model.License
@@ -8,13 +9,20 @@ import com.application.motium.domain.model.LicenseStatus
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
+import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /**
  * Résultat d'une tentative d'attribution de licence.
@@ -48,6 +56,12 @@ class LicenseRemoteDataSource private constructor(
 ) {
     private val supabaseClient = SupabaseClient.client
     private val tokenRefreshCoordinator by lazy { TokenRefreshCoordinator.getInstance(context) }
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .build()
+    private val jsonParser = Json { ignoreUnknownKeys = true }
 
     companion object {
         @Volatile
@@ -180,6 +194,7 @@ class LicenseRemoteDataSource private constructor(
      */
     suspend fun cancelLicense(licenseId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            val license = getLicenseById(licenseId).getOrNull()
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
             supabaseClient.from("licenses")
                 .update({
@@ -197,6 +212,9 @@ class LicenseRemoteDataSource private constructor(
                 "License $licenseId canceled (user keeps access until end_date)",
                 "LicenseRepo"
             )
+            license?.proAccountId?.let { proId ->
+                syncProLicenseQuantityBestEffort(proId)
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error canceling license: ${e.message}", "LicenseRepo", e)
@@ -241,6 +259,12 @@ class LicenseRemoteDataSource private constructor(
         try {
             // Get license to retrieve end_date and is_lifetime info
             val license = getLicenseById(licenseId).getOrNull()
+                ?: return@withContext Result.failure(Exception("Licence introuvable"))
+
+            // If collaborator was previously unlinked, reactivate company_link before assignment.
+            ensureActiveCompanyLinkForAssignment(license.proAccountId, linkedAccountId).getOrElse { error ->
+                return@withContext Result.failure(error)
+            }
 
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
             supabaseClient.from("licenses")
@@ -391,7 +415,7 @@ class LicenseRemoteDataSource private constructor(
 
     /**
      * Request to unlink/cancel a license.
-     * - Lifetime: déliaison immédiate
+     * - Lifetime: déliaison à la prochaine date de renouvellement
      * - Mensuelle: effective à la date de renouvellement (endDate)
      */
     suspend fun requestUnlink(licenseId: String, proAccountId: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -409,10 +433,14 @@ class LicenseRemoteDataSource private constructor(
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
 
             // Effective date:
-            // - Lifetime: déliaison immédiate (now)
+            // - Lifetime: prochaine date de renouvellement (anti-abus)
             // - Mensuelle: date de renouvellement (endDate), ou immédiat si endDate est null/passé
             val effectiveDate = when {
-                license.isLifetime -> now  // Lifetime = immédiat
+                license.isLifetime -> resolveLifetimeUnlinkEffectiveDate(
+                    license = license,
+                    proAccountId = proAccountId,
+                    now = now
+                )
                 license.endDate != null && license.endDate.toEpochMilliseconds() > now.toEpochMilliseconds() -> license.endDate  // Mensuelle = endDate
                 else -> now  // Pas de endDate ou dans le passé = immédiat
             }
@@ -429,7 +457,7 @@ class LicenseRemoteDataSource private constructor(
                     }
                 }
 
-            val effectiveType = if (license.isLifetime) "immédiat (lifetime)" else "date de renouvellement"
+            val effectiveType = if (license.isLifetime) "prochaine date de renouvellement (lifetime)" else "date de renouvellement"
             MotiumApplication.logger.i(
                 "Unlink requested for license $licenseId ($effectiveType), effective at $effectiveDate",
                 "LicenseRepo"
@@ -474,6 +502,47 @@ class LicenseRemoteDataSource private constructor(
             MotiumApplication.logger.e("Error cancelling unlink request: ${e.message}", "LicenseRepo", e)
             Result.failure(e)
         }
+    }
+
+    private suspend fun resolveLifetimeUnlinkEffectiveDate(
+        license: License,
+        proAccountId: String,
+        now: Instant
+    ): Instant {
+        val defaultAnchorDay = 5
+        try {
+            val proRows = supabaseClient.from("pro_accounts")
+                .select(columns = Columns.list("billing_anchor_day")) {
+                    filter {
+                        eq("id", proAccountId)
+                    }
+                }
+                .decodeList<ProAccountRenewalConfigDto>()
+
+            val billingAnchorDay = proRows.firstOrNull()?.billingAnchorDay ?: defaultAnchorDay
+            return computeNextMonthBillingAnchorDate(now, billingAnchorDay)
+        } catch (e: Exception) {
+            MotiumApplication.logger.w(
+                "Failed to resolve renewal anchor for lifetime unlink ${license.id}: ${e.message}",
+                "LicenseRepo"
+            )
+        }
+
+        return computeNextMonthBillingAnchorDate(now, defaultAnchorDay)
+    }
+
+    private fun computeNextMonthBillingAnchorDate(now: Instant, billingAnchorDay: Int): Instant {
+        val safeAnchorDay = billingAnchorDay.coerceIn(1, 28)
+        val nowInstant = java.time.Instant.ofEpochMilli(now.toEpochMilliseconds())
+        val nowUtc = java.time.ZonedDateTime.ofInstant(nowInstant, java.time.ZoneOffset.UTC)
+        val currentMonth = java.time.YearMonth.from(nowUtc)
+
+        val candidate = currentMonth
+            .plusMonths(1)
+            .atDay(safeAnchorDay)
+            .atStartOfDay(java.time.ZoneOffset.UTC)
+
+        return Instant.fromEpochMilliseconds(candidate.toInstant().toEpochMilli())
     }
 
     /**
@@ -594,6 +663,10 @@ class LicenseRemoteDataSource private constructor(
                 return@withContext Result.failure(Exception("Cette licence n'est pas disponible"))
             }
 
+            ensureActiveCompanyLinkForAssignment(proAccountId, linkedAccountId).getOrElse { error ->
+                return@withContext Result.failure(error)
+            }
+
             // Note: We already verified the license is available above (license.isAssigned check)
             // If there's a race condition, the worst case is a double assignment which
             // can be handled by database constraints
@@ -635,6 +708,10 @@ class LicenseRemoteDataSource private constructor(
                         }
                         if (license.status != LicenseStatus.ACTIVE && license.status != LicenseStatus.AVAILABLE) {
                             return@withContext Result.failure(Exception("Cette licence n'est pas disponible"))
+                        }
+
+                        ensureActiveCompanyLinkForAssignment(proAccountId, linkedAccountId).getOrElse { error ->
+                            return@withContext Result.failure(error)
                         }
 
                         val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
@@ -737,147 +814,57 @@ class LicenseRemoteDataSource private constructor(
 
     /**
      * Process all expired license unlinks (called by background worker).
-     * Handles two cases:
-     * 1. Licenses with expired unlink_effective_at (from requestUnlink - effective at renewal date or immediate for lifetime)
-     * 2. Licenses with status='canceled' and expired end_date (from cancelLicense - end of paid period)
-     *
-     * Returns the number of licenses that were unlinked
+     * This delegates to the Edge Function so business logic is shared with web.
      */
     suspend fun processExpiredUnlinks(): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
-
-            // Fetch all licenses and filter in Kotlin
-            val allLicenses = supabaseClient.from("licenses")
-                .select()
-                .decodeList<LicenseDto>()
-
-            // Case 1: Licenses with expired unlink_effective_at (requestUnlink flow)
-            val expiredUnlinkRequests = allLicenses.filter { license ->
-                license.unlinkEffectiveAt != null &&
-                license.linkedAccountId != null &&
-                try {
-                    val effectiveAt = Instant.parse(license.unlinkEffectiveAt)
-                    effectiveAt <= now
-                } catch (e: Exception) {
-                    false
-                }
+            var accessToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
+            if (accessToken == null) {
+                tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                accessToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
             }
 
-            // Case 2: Canceled licenses with expired end_date (cancelLicense flow)
-            val expiredCanceledLicenses = allLicenses.filter { license ->
-                license.status == "canceled" &&
-                license.linkedAccountId != null &&
-                license.endDate != null &&
-                try {
-                    val endDate = Instant.parse(license.endDate)
-                    endDate <= now
-                } catch (e: Exception) {
-                    false
-                }
+            if (accessToken == null) {
+                return@withContext Result.failure(Exception("Session expired - please re-login"))
             }
 
-            // Combine both lists (avoid duplicates)
-            val licensesToUnlink = (expiredUnlinkRequests + expiredCanceledLicenses)
-                .distinctBy { it.id }
+            val request = Request.Builder()
+                .url("${BuildConfig.SUPABASE_URL}/functions/v1/process-expired-license-unlinks")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
 
-            if (licensesToUnlink.isEmpty()) {
-                return@withContext Result.success(0)
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string().orEmpty()
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    Exception("process-expired-license-unlinks failed (HTTP ${response.code}): $responseBody")
+                )
             }
 
-            // Unlink each expired license
-            var count = 0
-            for (license in licensesToUnlink) {
-                try {
-                    val unlinkedUserId = license.linkedAccountId
-                    val isCanceled = license.status == "canceled"
-
-                    // ARBRE 6 FIX: Deactivate company_link FIRST (before modifying license)
-                    if (unlinkedUserId != null && license.proAccountId != null) {
-                        try {
-                            supabaseClient.from("company_links")
-                                .update({
-                                    set("status", "INACTIVE")
-                                    set("unlinked_at", now.toString())
-                                    set("updated_at", now.toString())
-                                }) {
-                                    filter {
-                                        eq("user_id", unlinkedUserId)
-                                        eq("linked_pro_account_id", license.proAccountId)
-                                        eq("status", "ACTIVE")
-                                    }
-                                }
-                            MotiumApplication.logger.i(
-                                "Deactivated company_link for user $unlinkedUserId (license ${license.id})",
-                                "LicenseRepo"
-                            )
-                        } catch (e: Exception) {
-                            // Log but continue - company_link deactivation is not critical
-                            MotiumApplication.logger.w(
-                                "Failed to deactivate company_link for user $unlinkedUserId: ${e.message}",
-                                "LicenseRepo"
-                            )
-                        }
-                    }
-
-                    supabaseClient.from("licenses")
-                        .update({
-                            set("linked_account_id", null as String?)
-                            set("linked_at", null as String?)
-                            set("unlink_requested_at", null as String?)
-                            set("unlink_effective_at", null as String?)
-                            // For canceled licenses, also set status to 'available' to return to pool
-                            if (isCanceled) {
-                                set("status", "available")
-                            }
-                            set("updated_at", now.toString())
-                        }) {
-                            filter {
-                                eq("id", license.id)
-                            }
-                        }
-
-                    // ARBRE 5 FIX: Update user's subscription_type - BUT check for other active licenses first!
-                    // A user may have licenses from multiple pro_accounts
-                    if (unlinkedUserId != null) {
-                        // Check if user has any OTHER active licenses
-                        val otherActiveLicenses = allLicenses.filter { otherLicense ->
-                            otherLicense.linkedAccountId == unlinkedUserId &&
-                            otherLicense.id != license.id &&
-                            otherLicense.status == "active"
-                        }
-
-                        if (otherActiveLicenses.isEmpty()) {
-                            updateUserSubscriptionType(unlinkedUserId, "EXPIRED")
-                            MotiumApplication.logger.i(
-                                "User $unlinkedUserId set to EXPIRED (no other active licenses)",
-                                "LicenseRepo"
-                            )
-                        } else {
-                            MotiumApplication.logger.i(
-                                "User $unlinkedUserId keeps LICENSED (has ${otherActiveLicenses.size} other active licenses)",
-                                "LicenseRepo"
-                            )
-                        }
-                    }
-
-                    val reason = if (isCanceled) "canceled license expired" else "unlink request expired"
-                    MotiumApplication.logger.i(
-                        "License ${license.id} unlinked ($reason)",
-                        "LicenseRepo"
-                    )
-                    count++
-                } catch (e: Exception) {
-                    MotiumApplication.logger.e(
-                        "Failed to process expired unlink for license ${license.id}: ${e.message}",
-                        "LicenseRepo",
-                        e
-                    )
-                }
+            val parsed = runCatching {
+                jsonParser.decodeFromString(ProcessExpiredLicenseUnlinksResponse.serializer(), responseBody)
+            }.getOrElse {
+                return@withContext Result.failure(
+                    Exception("Invalid process-expired-license-unlinks response: $responseBody")
+                )
             }
 
-            MotiumApplication.logger.i("Processed $count expired unlinks", "LicenseRepo")
-            Result.success(count)
+            if (!parsed.success) {
+                return@withContext Result.failure(
+                    Exception(parsed.error ?: "process-expired-license-unlinks returned failure")
+                )
+            }
+
+            MotiumApplication.logger.i(
+                "Processed ${parsed.processedCount} expired unlinks via edge function " +
+                    "(deleted=${parsed.deletedCount}, returned=${parsed.returnedToPoolCount})",
+                "LicenseRepo"
+            )
+            Result.success(parsed.processedCount)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error processing expired unlinks: ${e.message}", "LicenseRepo", e)
             Result.failure(e)
@@ -1291,6 +1278,10 @@ class LicenseRemoteDataSource private constructor(
                 // TRIAL, EXPIRED -> OK to assign directly
             }
 
+            ensureActiveCompanyLinkForAssignment(proAccountId, collaboratorId).getOrElse { error ->
+                return@withContext LicenseAssignmentResult.Error(error.message ?: "Collaborateur non lié au compte Pro")
+            }
+
             // 4. Assign the license
             val now = Instant.fromEpochMilliseconds(System.currentTimeMillis())
             supabaseClient.from("licenses")
@@ -1324,6 +1315,75 @@ class LicenseRemoteDataSource private constructor(
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error assigning license with validation: ${e.message}", "LicenseRepo", e)
             LicenseAssignmentResult.Error(e.message ?: "Erreur inconnue")
+        }
+    }
+
+    /**
+     * Ensure collaborator is an ACTIVE member of the pro account before license assignment.
+     * If a matching INACTIVE link exists, reactivate it automatically.
+     */
+    private suspend fun ensureActiveCompanyLinkForAssignment(
+        proAccountId: String,
+        linkedAccountId: String
+    ): Result<Unit> {
+        return try {
+            // Owner assignment is always allowed by DB trigger, no company_link needed.
+            val ownerRows = supabaseClient.from("pro_accounts")
+                .select(columns = Columns.list("id")) {
+                    filter {
+                        eq("id", proAccountId)
+                        eq("user_id", linkedAccountId)
+                    }
+                }
+                .decodeList<SimpleIdDto>()
+
+            if (ownerRows.isNotEmpty()) {
+                return Result.success(Unit)
+            }
+
+            val links = supabaseClient.from("company_links")
+                .select(columns = Columns.list("id", "status")) {
+                    filter {
+                        eq("linked_pro_account_id", proAccountId)
+                        eq("user_id", linkedAccountId)
+                    }
+                }
+                .decodeList<CompanyLinkStatusDto>()
+
+            if (links.any { it.status.equals("ACTIVE", ignoreCase = true) }) {
+                return Result.success(Unit)
+            }
+
+            val inactiveLink = links.firstOrNull { it.status.equals("INACTIVE", ignoreCase = true) }
+            if (inactiveLink == null) {
+                return Result.failure(Exception("Utilisateur non lié activement à ce compte Pro"))
+            }
+
+            val now = Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
+            supabaseClient.from("company_links")
+                .update({
+                    set("status", "ACTIVE")
+                    set("unlinked_at", null as String?)
+                    set("linked_activated_at", now)
+                    set("updated_at", now)
+                }) {
+                    filter {
+                        eq("id", inactiveLink.id)
+                    }
+                }
+
+            MotiumApplication.logger.i(
+                "Reactivated company_link ${inactiveLink.id} for user $linkedAccountId before license assignment",
+                "LicenseRepo"
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e(
+                "Failed to ensure ACTIVE company_link for user $linkedAccountId on pro $proAccountId: ${e.message}",
+                "LicenseRepo",
+                e
+            )
+            Result.failure(e)
         }
     }
 
@@ -1427,10 +1487,64 @@ class LicenseRemoteDataSource private constructor(
                 }
 
             MotiumApplication.logger.i("License $licenseId deleted permanently", "LicenseRepo")
+            syncProLicenseQuantityBestEffort(proAccountId)
             Result.success(Unit)
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error deleting license: ${e.message}", "LicenseRepo", e)
             Result.failure(e)
+        }
+    }
+
+    /**
+     * Best-effort sync to align Stripe subscription quantity with billable monthly licenses.
+     * This reduces drift windows while webhook reconciliation remains the source of truth.
+     */
+    private suspend fun syncProLicenseQuantityBestEffort(proAccountId: String) {
+        try {
+            var accessToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
+            if (accessToken == null) {
+                tokenRefreshCoordinator.refreshIfNeeded(force = true)
+                accessToken = supabaseClient.auth.currentSessionOrNull()?.accessToken
+            }
+
+            if (accessToken == null) {
+                MotiumApplication.logger.w(
+                    "Quantity sync skipped (no auth session) for pro account $proAccountId",
+                    "LicenseRepo"
+                )
+                return
+            }
+
+            val url = "${BuildConfig.SUPABASE_URL}/functions/v1/sync-pro-license-quantity"
+            val payload = """{"pro_account_id":"$proAccountId"}"""
+                .toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .post(payload)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val body = response.body?.string().orEmpty()
+                MotiumApplication.logger.w(
+                    "Quantity sync failed for $proAccountId: HTTP ${response.code} - $body",
+                    "LicenseRepo"
+                )
+            } else {
+                MotiumApplication.logger.i(
+                    "Quantity sync requested for pro account $proAccountId",
+                    "LicenseRepo"
+                )
+            }
+        } catch (e: Exception) {
+            MotiumApplication.logger.w(
+                "Quantity sync error for $proAccountId: ${e.message}",
+                "LicenseRepo"
+            )
         }
     }
 }
@@ -1501,6 +1615,35 @@ data class LicenseDto(
         )
     }
 }
+
+@Serializable
+private data class ProcessExpiredLicenseUnlinksResponse(
+    val success: Boolean,
+    val error: String? = null,
+    @SerialName("processed_count")
+    val processedCount: Int = 0,
+    @SerialName("deleted_count")
+    val deletedCount: Int = 0,
+    @SerialName("returned_to_pool_count")
+    val returnedToPoolCount: Int = 0
+)
+
+@Serializable
+private data class ProAccountRenewalConfigDto(
+    @SerialName("billing_anchor_day")
+    val billingAnchorDay: Int? = null
+)
+
+@Serializable
+private data class SimpleIdDto(
+    val id: String
+)
+
+@Serializable
+private data class CompanyLinkStatusDto(
+    val id: String,
+    val status: String
+)
 
 private fun parseInstant(value: String): Instant {
     return try {

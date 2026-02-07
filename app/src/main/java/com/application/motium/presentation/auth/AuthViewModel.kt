@@ -1,4 +1,4 @@
-package com.application.motium.presentation.auth
+﻿package com.application.motium.presentation.auth
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -46,7 +46,7 @@ class AuthViewModel(
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = AuthState(isLoading = true)  // ⚠️ CRITICAL: Must start as loading to wait for repository initialization
+            initialValue = AuthState(isLoading = true)  // âš ï¸ CRITICAL: Must start as loading to wait for repository initialization
         )
 
     private val _loginState = MutableStateFlow(LoginUiState())
@@ -72,21 +72,31 @@ class AuthViewModel(
         viewModelScope.launch {
             // DEBUG: Log entry with full details
             MotiumApplication.logger.w(
-                "🔍 DEBUG checkProLicense() START - userId: $userId",
+                "ðŸ” DEBUG checkProLicense() START - userId: $userId",
                 TAG
             )
 
-            // === STEP 0: TRIAL CHECK - If user is in trial, skip license check entirely ===
-            // Trial period is managed in users table (subscription_type = TRIAL)
-            // Pro users in trial have full access without needing a license
+            // === STEP 0: TRIAL CHECK - Skip license check only if trial is still active ===
+            // Trial period is managed in users table (subscription_type + trial_ends_at).
+            // IMPORTANT: subscription_type can remain TRIAL after expiry if backend status sync is delayed.
+            // We must validate temporal access (trial_ends_at) and not rely on type alone.
             val currentUser = authState.value.user
-            if (currentUser?.subscription?.type == SubscriptionType.TRIAL) {
+            if (
+                currentUser?.subscription?.type == SubscriptionType.TRIAL &&
+                currentUser.subscription.hasValidAccess()
+            ) {
                 MotiumApplication.logger.i(
-                    "✅ Pro user in TRIAL period - granting access (license check skipped)",
+                    "âœ… Pro user in TRIAL period - granting access (license check skipped)",
                     TAG
                 )
                 _proLicenseState.value = ProLicenseState.Licensed
                 return@launch
+            }
+            if (currentUser?.subscription?.type == SubscriptionType.TRIAL) {
+                MotiumApplication.logger.i(
+                    "TRIAL type detected but trial is expired - continuing with license check",
+                    TAG
+                )
             }
 
             // === STEP 1: CACHE-FIRST - Check cache IMMEDIATELY before any loading ===
@@ -95,7 +105,7 @@ class AuthViewModel(
 
             // DEBUG: Log cache state details
             MotiumApplication.logger.w(
-                "🔍 DEBUG checkProLicense() - Cache state:\n" +
+                "ðŸ” DEBUG checkProLicense() - Cache state:\n" +
                 "   cachedState: ${cachedState}\n" +
                 "   cacheValid: $cacheValid\n" +
                 "   isLicensed: ${cachedState?.isLicensed}\n" +
@@ -106,7 +116,7 @@ class AuthViewModel(
             if (cacheValid && cachedState.isLicensed && cachedState.proAccountId != null) {
                 // Cache says Licensed - navigate immediately, no Loading state shown
                 MotiumApplication.logger.i(
-                    "✅ Cache-first: Licensed (cached ${cachedState.getAgeHours()}h ago, proAccountId=${cachedState.proAccountId})",
+                    "âœ… Cache-first: Licensed (cached ${cachedState.getAgeHours()}h ago, proAccountId=${cachedState.proAccountId})",
                     TAG
                 )
                 _proLicenseState.value = ProLicenseState.Licensed
@@ -133,14 +143,14 @@ class AuthViewModel(
 
             // DEBUG: Log network result
             MotiumApplication.logger.w(
-                "🔍 DEBUG checkProLicense() - Network result: $networkResult",
+                "ðŸ” DEBUG checkProLicense() - Network result: $networkResult",
                 TAG
             )
 
             when (networkResult) {
                 is LicenseCheckResult.Licensed -> {
                     // Cache and return success
-                    MotiumApplication.logger.w("🟢 DEBUG: Network says LICENSED → setting ProLicenseState.Licensed", TAG)
+                    MotiumApplication.logger.w("ðŸŸ¢ DEBUG: Network says LICENSED â†’ setting ProLicenseState.Licensed", TAG)
                     proLicenseCache.saveLicenseState(
                         userId = userId,
                         isLicensed = true,
@@ -150,7 +160,7 @@ class AuthViewModel(
                 }
                 is LicenseCheckResult.NotLicensed -> {
                     // Network confirms not licensed - update cache and state
-                    MotiumApplication.logger.w("🔴 DEBUG: Network says NOT_LICENSED → setting ProLicenseState.NotLicensed", TAG)
+                    MotiumApplication.logger.w("ðŸ”´ DEBUG: Network says NOT_LICENSED â†’ setting ProLicenseState.NotLicensed", TAG)
                     proLicenseCache.saveLicenseState(
                         userId = userId,
                         isLicensed = false,
@@ -162,7 +172,7 @@ class AuthViewModel(
                     // No pro account found - BUT check if we have a stale cache first
                     // This handles the case where network sync is incomplete
                     MotiumApplication.logger.w(
-                        "🟠 DEBUG: Network says NO_PRO_ACCOUNT - checking cached state...",
+                        "ðŸŸ  DEBUG: Network says NO_PRO_ACCOUNT - checking cached state...",
                         TAG
                     )
                     if (cachedState != null && cachedState.isLicensed) {
@@ -176,7 +186,7 @@ class AuthViewModel(
                     } else {
                         // No cache or cache says not licensed - trust network
                         MotiumApplication.logger.w(
-                            "🔴 DEBUG: No cache or cache not licensed → setting ProLicenseState.NoProAccount",
+                            "ðŸ”´ DEBUG: No cache or cache not licensed â†’ setting ProLicenseState.NoProAccount",
                             TAG
                         )
                         proLicenseCache.saveLicenseState(
@@ -189,7 +199,7 @@ class AuthViewModel(
                 null -> {
                     // Network failed or timed out - try cache (even stale cache is better than error)
                     MotiumApplication.logger.w(
-                        "🟠 DEBUG: Network result is NULL (timeout/failure) → calling handleNetworkFailure()",
+                        "ðŸŸ  DEBUG: Network result is NULL (timeout/failure) â†’ calling handleNetworkFailure()",
                         TAG
                     )
                     handleNetworkFailure(userId)
@@ -296,7 +306,7 @@ class AuthViewModel(
         } else {
             // No valid cache - set error state but don't kick user out
             MotiumApplication.logger.w("License check failed and no valid cache - setting error state", TAG)
-            _proLicenseState.value = ProLicenseState.Error("Network unavailable. Please check your connection.")
+            _proLicenseState.value = ProLicenseState.Error("Réseau indisponible. Vérifiez votre connexion.")
         }
     }
 
@@ -306,7 +316,7 @@ class AuthViewModel(
     private sealed class LicenseCheckResult {
         data class Licensed(val proAccountId: String) : LicenseCheckResult()
         data class NotLicensed(val proAccountId: String) : LicenseCheckResult()
-        data object NoProAccount : LicenseCheckResult()
+        object NoProAccount : LicenseCheckResult()
     }
 
     /**
@@ -350,14 +360,14 @@ class AuthViewModel(
                     )
 
                     // Démarrer le service de connexion permanente après connexion réussie
-                    MotiumApplication.logger.i("✅ Login successful - starting connection service", "AuthViewModel")
+                    MotiumApplication.logger.i("âœ… Login successful - starting connection service", "AuthViewModel")
                     SupabaseConnectionService.startService(context)
 
                     // Trigger Pro data sync for Enterprise users (in background)
                     triggerProDataSyncIfNeeded()
                 }
                 is AuthResult.Error -> {
-                    MotiumApplication.logger.w("🔴 signIn error: ${result.message}", "AuthViewModel")
+                    MotiumApplication.logger.w("ðŸ”´ signIn error: ${result.message}", "AuthViewModel")
                     // Check for EMAIL_NOT_VERIFIED special error
                     if (result.message.startsWith("EMAIL_NOT_VERIFIED:")) {
                         val parts = result.message.split(":")
@@ -390,7 +400,7 @@ class AuthViewModel(
 
     /**
      * Resend verification email to the unverified user.
-     * Called when user clicks "Resend email" in the verification dialog.
+     * Called when user clicks "Renvoyer l'email" in the verification dialog.
      * Uses Supabase's native resend method which only requires email.
      */
     fun resendVerificationEmail(
@@ -410,13 +420,13 @@ class AuthViewModel(
                 val supabaseAuth = (authRepository as? SupabaseAuthRepository)
                 if (supabaseAuth != null) {
                     supabaseAuth.resendConfirmationEmail(email)
-                    MotiumApplication.logger.i("✅ Verification email resent to $email", "AuthViewModel")
+                    MotiumApplication.logger.i("âœ… Verification email resent to $email", "AuthViewModel")
                     onSuccess()
                 } else {
                     onError("Erreur de configuration")
                 }
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Error resending verification email: ${e.message}", "AuthViewModel", e)
+                MotiumApplication.logger.e("âŒ Error resending verification email: ${e.message}", "AuthViewModel", e)
                 onError(e.message ?: "Erreur lors de l'envoi")
             }
         }
@@ -488,7 +498,7 @@ class AuthViewModel(
                             )
 
                             // Démarrer le service de connexion permanente après inscription réussie
-                            MotiumApplication.logger.i("✅ Registration successful - starting connection service", "AuthViewModel")
+                            MotiumApplication.logger.i("âœ… Registration successful - starting connection service", "AuthViewModel")
                             SupabaseConnectionService.startService(context)
                         }
                         is AuthResult.Error -> {
@@ -537,7 +547,7 @@ class AuthViewModel(
                         // SUCCESS: Account created in auth.users
                         // Profile will be created when user confirms email and logs in
                         MotiumApplication.logger.i(
-                            "✅ Registration successful - email verification pending for: $email",
+                            "âœ… Registration successful - email verification pending for: $email",
                             "AuthViewModel"
                         )
 
@@ -597,7 +607,7 @@ class AuthViewModel(
             .putString("organizationName", organizationName)
             .putLong("timestamp", System.currentTimeMillis())
             .apply()
-        MotiumApplication.logger.i("📝 Saved pending user info for: $email", "AuthViewModel")
+        MotiumApplication.logger.i("ðŸ“ Saved pending user info for: $email", "AuthViewModel")
     }
 
     fun signInWithGoogle(idToken: String) {
@@ -649,7 +659,7 @@ class AuthViewModel(
     fun signOut() {
         viewModelScope.launch {
             // Arrêter le service de connexion permanente avant déconnexion
-            MotiumApplication.logger.i("🔌 Stopping connection service before sign out", "AuthViewModel")
+            MotiumApplication.logger.i("ðŸ”Œ Stopping connection service before sign out", "AuthViewModel")
             SupabaseConnectionService.stopService(context)
 
             // BATTERY OPTIMIZATION: Cleanup LicenseCacheManager background tasks
@@ -680,11 +690,11 @@ class AuthViewModel(
             val result = authRepository.updateUserProfile(user)
             when (result) {
                 is AuthResult.Success -> {
-                    MotiumApplication.logger.i("✅ User profile updated successfully", "AuthViewModel")
+                    MotiumApplication.logger.i("âœ… User profile updated successfully", "AuthViewModel")
                     onSuccess()
                 }
                 is AuthResult.Error -> {
-                    MotiumApplication.logger.e("❌ Failed to update profile: ${result.message}", "AuthViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to update profile: ${result.message}", "AuthViewModel")
                     onError(result.message)
                 }
                 AuthResult.Loading -> { /* ignore */ }
@@ -705,11 +715,11 @@ class AuthViewModel(
             val result = authRepository.updateEmail(newEmail)
             when (result) {
                 is AuthResult.Success -> {
-                    MotiumApplication.logger.i("✅ Email update request sent", "AuthViewModel")
+                    MotiumApplication.logger.i("âœ… Email update request sent", "AuthViewModel")
                     onSuccess()
                 }
                 is AuthResult.Error -> {
-                    MotiumApplication.logger.e("❌ Failed to update email: ${result.message}", "AuthViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to update email: ${result.message}", "AuthViewModel")
                     onError(result.message)
                 }
                 AuthResult.Loading -> { /* ignore */ }
@@ -729,11 +739,11 @@ class AuthViewModel(
             val result = authRepository.updatePassword(newPassword)
             when (result) {
                 is AuthResult.Success -> {
-                    MotiumApplication.logger.i("✅ Password updated successfully", "AuthViewModel")
+                    MotiumApplication.logger.i("âœ… Password updated successfully", "AuthViewModel")
                     onSuccess()
                 }
                 is AuthResult.Error -> {
-                    MotiumApplication.logger.e("❌ Failed to update password: ${result.message}", "AuthViewModel")
+                    MotiumApplication.logger.e("âŒ Failed to update password: ${result.message}", "AuthViewModel")
                     onError(result.message)
                 }
                 AuthResult.Loading -> { /* ignore */ }
@@ -835,10 +845,10 @@ class AuthViewModel(
         viewModelScope.launch {
             try {
                 authRepository.refreshAuthState()
-                MotiumApplication.logger.i("✅ Auth state refreshed", "AuthViewModel")
+                MotiumApplication.logger.i("âœ… Auth state refreshed", "AuthViewModel")
                 onComplete()
             } catch (e: Exception) {
-                MotiumApplication.logger.e("❌ Failed to refresh auth state: ${e.message}", "AuthViewModel", e)
+                MotiumApplication.logger.e("âŒ Failed to refresh auth state: ${e.message}", "AuthViewModel", e)
                 onComplete()
             }
         }
@@ -887,15 +897,17 @@ data class RegisterUiState(
  */
 sealed class ProLicenseState {
     /** Initial state before any check */
-    data object Idle : ProLicenseState()
+    object Idle : ProLicenseState()
     /** License check in progress */
-    data object Loading : ProLicenseState()
+    object Loading : ProLicenseState()
     /** Pro user has a valid license assigned */
-    data object Licensed : ProLicenseState()
+    object Licensed : ProLicenseState()
     /** Pro user exists but has no license assigned */
-    data object NotLicensed : ProLicenseState()
+    object NotLicensed : ProLicenseState()
     /** No pro account found for this user */
-    data object NoProAccount : ProLicenseState()
+    object NoProAccount : ProLicenseState()
     /** Error occurred during license check */
     data class Error(val message: String?) : ProLicenseState()
 }
+
+

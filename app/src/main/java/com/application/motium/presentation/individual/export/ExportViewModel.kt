@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.export
+﻿package com.application.motium.presentation.individual.export
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -202,7 +202,7 @@ class ExportViewModel(private val context: Context) : ViewModel() {
     }
 
     fun formatDate(timestamp: Long, pattern: String = "MMMM dd, yyyy"): String {
-        return SimpleDateFormat(pattern, Locale.ENGLISH).format(Date(timestamp))
+        return SimpleDateFormat(pattern, Locale.FRENCH).format(Date(timestamp))
     }
 
     fun exportToCSV(onSuccess: (File) -> Unit, onError: (String) -> Unit) {
@@ -484,3 +484,5 @@ class ExportViewModel(private val context: Context) : ViewModel() {
         }
     }
 }
+
+

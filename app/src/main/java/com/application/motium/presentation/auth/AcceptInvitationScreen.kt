@@ -1,4 +1,4 @@
-package com.application.motium.presentation.auth
+﻿package com.application.motium.presentation.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -472,3 +472,5 @@ private fun BenefitItem(text: String) {
         color = MaterialTheme.colorScheme.onSecondaryContainer
     )
 }
+
+

@@ -66,7 +66,7 @@ import com.application.motium.data.local.entities.WorkScheduleEntity
         ConsentEntity::class,
         LinkedUserEntity::class
     ],
-    version = 27,  // v27: Add cancelAtPeriodEnd to users for subscription resume feature
+    version = 28,  // v28: Add profilePhotoUrl to users for profile photo support
     exportSchema = true  // Export schema JSON for CI validation of migrations
 )
 @TypeConverters(TripConverters::class)
@@ -855,6 +855,16 @@ abstract class MotiumDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration from v27 to v28: Add profile photo URL to users
+         * - Add profilePhotoUrl column to store Settings avatar URL
+         */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE users ADD COLUMN profilePhotoUrl TEXT")
+            }
+        }
+
+        /**
          * Get singleton instance of the database.
          * Uses double-check locking for thread safety.
          */
@@ -889,7 +899,8 @@ abstract class MotiumDatabase : RoomDatabase() {
                     MIGRATION_23_24,
                     MIGRATION_24_25,
                     MIGRATION_25_26,
-                    MIGRATION_26_27
+                    MIGRATION_26_27,
+                    MIGRATION_27_28
                 )
                 .build()
         }

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -73,7 +73,7 @@ fun ColorPickerDialog(
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
-                    "Choose App Color",
+                    "Choisir la couleur de l'app",
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Bold
                     ),
@@ -117,7 +117,7 @@ fun ColorPickerDialog(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Cancel", color = textColor)
+                        Text("Annuler", color = textColor)
                     }
                     Button(
                         onClick = {
@@ -129,7 +129,7 @@ fun ColorPickerDialog(
                             containerColor = selectedColor
                         )
                     ) {
-                        Text("Apply", color = Color.White)
+                        Text("Appliquer", color = Color.White)
                     }
                 }
             }
@@ -282,3 +282,5 @@ private fun SaturationValuePicker(
         }
     }
 }
+
+

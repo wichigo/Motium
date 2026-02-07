@@ -1,4 +1,4 @@
-package com.application.motium.presentation.settings
+﻿package com.application.motium.presentation.settings
 
 import android.app.Application
 import android.content.Intent
@@ -244,3 +244,4 @@ class GdprViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 }
+

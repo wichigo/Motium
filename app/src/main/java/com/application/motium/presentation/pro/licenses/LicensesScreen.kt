@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.licenses
+﻿package com.application.motium.presentation.pro.licenses
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -932,3 +932,4 @@ private fun LicenseRow(
         }
     }
 }
+

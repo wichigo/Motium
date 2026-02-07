@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.export
+﻿package com.application.motium.presentation.pro.export
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
@@ -98,7 +98,7 @@ fun ProExportAdvancedScreen(
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            "Export Pro",
+                            "Exports Pro",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -1221,7 +1221,7 @@ fun ProExportAdvancedScreen(
                                                                         color = textColor
                                                                     )
                                                                     Text(
-                                                                        "${vehicle.type}${vehicle.power?.let { " • $it CV" } ?: ""}",
+                                                                        "${vehicle.type}${vehicle.power?.let { " â€¢ $it CV" } ?: ""}",
                                                                         style = MaterialTheme.typography.bodySmall,
                                                                         color = textSecondaryColor
                                                                     )
@@ -1744,3 +1744,4 @@ private fun ProQuickExportChip(
         )
     }
 }
+

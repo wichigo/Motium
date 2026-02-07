@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+﻿package com.application.motium.presentation.individual.vehicles
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -176,7 +176,7 @@ fun VehiclesScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        "Vehicles",
+                        "Véhicules",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -195,7 +195,7 @@ fun VehiclesScreen(
                     ) {
                         androidx.compose.material3.Icon(
                             imageVector = androidx.compose.material.icons.Icons.Default.Refresh,
-                            contentDescription = "Refresh vehicles",
+                            contentDescription = "Rafraîchir les véhicules",
                             tint = MotiumPrimary
                         )
                     }
@@ -217,12 +217,12 @@ fun VehiclesScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = "Add Vehicle",
+                    contentDescription = "Ajouter un véhicule",
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    "Add Vehicle",
+                    "Ajouter un véhicule",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp
                 )
@@ -267,14 +267,14 @@ fun VehiclesScreen(
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = "Session Expired",
+                                    text = "Session expirée",
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF721C24)
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Your authentication session has expired. Please sign in again to access your vehicles.",
+                                    text = "Votre session d'authentification a expiré. Reconnectez-vous pour accéder à vos véhicules.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color(0xFF721C24),
                                     modifier = Modifier.padding(horizontal = 16.dp)
@@ -289,7 +289,7 @@ fun VehiclesScreen(
                                         containerColor = Color(0xFFDC3545)
                                     )
                                 ) {
-                                    Text("Go to Settings", color = Color.White)
+                                    Text("Aller aux réglages", color = Color.White)
                                 }
                             }
                         }
@@ -317,13 +317,13 @@ fun VehiclesScreen(
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = "No vehicles yet",
+                                    text = "Aucun véhicule pour le moment",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = "Add your first vehicle to get started",
+                                    text = "Ajoutez votre premier véhicule pour commencer",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     modifier = Modifier.padding(top = 4.dp)
@@ -454,7 +454,7 @@ fun ModernVehicleCard(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Default",
+                                text = "Par défaut",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -471,7 +471,7 @@ fun ModernVehicleCard(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Star,
-                            contentDescription = "Set as default",
+                            contentDescription = "Définir par défaut",
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
                             modifier = Modifier.size(24.dp)
                         )
@@ -484,7 +484,7 @@ fun ModernVehicleCard(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Star,
-                            contentDescription = "Default vehicle",
+                            contentDescription = "Véhicule par défaut",
                             tint = MotiumPrimary,
                             modifier = Modifier.size(24.dp)
                         )
@@ -494,7 +494,7 @@ fun ModernVehicleCard(
                 // Chevron right
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowRight,
-                    contentDescription = "Details",
+                    contentDescription = "Détails",
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     modifier = Modifier.size(24.dp)
                 )
@@ -554,3 +554,5 @@ fun calculateCurrentMileageRate(vehicle: Vehicle): String {
         }
     }
 }
+
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.settings
+﻿package com.application.motium.presentation.settings
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -120,7 +120,7 @@ class CompanyLinkViewModel(
 
             val userId = currentUserId
             if (userId == null) {
-                _activationResult.value = LinkActivationResult.Error("User not authenticated")
+                _activationResult.value = LinkActivationResult.Error("Utilisateur non authentifié")
                 _uiState.update { it.copy(isLoading = false) }
                 return@launch
             }
@@ -135,7 +135,7 @@ class CompanyLinkViewModel(
                     MotiumApplication.logger.i("Successfully activated link with ${link.companyName}", TAG)
                 },
                 onFailure = { error ->
-                    val errorMessage = error.message ?: "Unknown error"
+                    val errorMessage = error.message ?: "Erreur inconnue"
                     val pendingLink = _uiState.value.companyLinks.firstOrNull {
                         it.status == LinkStatus.PENDING && it.invitationToken == token
                     }
@@ -341,3 +341,5 @@ sealed class LinkActivationResult {
     data class Success(val companyName: String) : LinkActivationResult()
     data class Error(val message: String) : LinkActivationResult()
 }
+
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.accounts
+﻿package com.application.motium.presentation.pro.accounts
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -625,7 +625,7 @@ private fun ContactInformationSection(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            "Contact Information",
+            "Informations de contact",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = textColor
@@ -721,7 +721,7 @@ private fun ActivitySummarySection(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            "Activity Summary",
+            "Résumé d'activité",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = textColor

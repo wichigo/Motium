@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.home
+﻿package com.application.motium.presentation.individual.home
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -141,9 +141,9 @@ fun NewHomeScreen(
             val tripDate = Calendar.getInstance().apply { timeInMillis = trip.startTime }
             val key = when {
                 tripDate.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) &&
-                tripDate.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> "Today"
+                tripDate.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> "Aujourd'hui"
                 tripDate.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR) &&
-                tripDate.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR) -> "Yesterday"
+                tripDate.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR) -> "Hier"
                 else -> SimpleDateFormat("EEEE, MMMM dd", Locale.getDefault()).format(Date(trip.startTime))
             }
             grouped[key] = (grouped[key] ?: emptyList()) + trip
@@ -338,7 +338,7 @@ fun NewHomeScreen(
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            "Trips",
+                            "Trajets",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             color = textColor
                         )
@@ -360,7 +360,7 @@ fun NewHomeScreen(
                         IconButton(onClick = { coroutineScope.launch { themeManager.toggleTheme() } }) {
                             Icon(
                                 imageVector = if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
-                                contentDescription = "Theme",
+                                contentDescription = "Thème",
                                 tint = subTextColor
                             )
                         }
@@ -422,7 +422,7 @@ fun NewHomeScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                // 1. GROS BOUTON VERT "ADD TRIP"
+                // 1. GROS BOUTON VERT "AJOUTER UN TRAJET"
                 item {
                     Button(
                         onClick = onNavigateToAddTrip,
@@ -437,7 +437,7 @@ fun NewHomeScreen(
                         elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
                     ) {
                         Text(
-                            "Add Trip",
+                            "Ajouter un trajet",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             fontSize = 18.sp
                         )
@@ -531,7 +531,7 @@ fun NewHomeScreen(
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             Text(
-                                "Daily Summary",
+                                "Résumé quotidien",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = textColor,
                                 modifier = Modifier.padding(bottom = 16.dp)
@@ -540,9 +540,9 @@ fun NewHomeScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                StatItem(String.format("%.1f", todayDistance / 1000), "Kilometers", MotiumPrimary, textColor, subTextColor)
-                                StatItem(String.format("%.2f€", todayIndemnities), "Indemnities", MotiumPrimary, textColor, subTextColor)
-                                StatItem(todayTrips.size.toString(), "Trips", MotiumPrimary, textColor, subTextColor)
+                                StatItem(String.format("%.1f", todayDistance / 1000), "Kilomètres", MotiumPrimary, textColor, subTextColor)
+                                StatItem(String.format("%.2f€", todayIndemnities), "Indemnités", MotiumPrimary, textColor, subTextColor)
+                                StatItem(todayTrips.size.toString(), "Trajets", MotiumPrimary, textColor, subTextColor)
                             }
                         }
                     }
@@ -589,7 +589,7 @@ fun NewHomeScreen(
                                 ) {
                                     Icon(
                                         Icons.Default.Visibility,
-                                        contentDescription = "View Expenses",
+                                        contentDescription = "Voir les dépenses",
                                         tint = MotiumPrimary,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -606,7 +606,7 @@ fun NewHomeScreen(
                                 ) {
                                     Icon(
                                         Icons.Default.Receipt,
-                                        contentDescription = "Add Expense",
+                                        contentDescription = "Ajouter une dépense",
                                         tint = MotiumPrimary,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -677,7 +677,7 @@ fun NewHomeScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "No trips yet",
+                                "Aucun trajet pour le moment",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = subTextColor
                             )
@@ -1049,7 +1049,7 @@ fun NewHomeTripCard(
                     // Départ
                     Column {
                         Text(
-                            text = trip.startAddress ?: "Unknown Start",
+                            text = trip.startAddress ?: "Départ inconnu",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                             color = textColor,
                             maxLines = 1
@@ -1064,7 +1064,7 @@ fun NewHomeTripCard(
                     // Arrivée
                     Column {
                         Text(
-                            text = trip.endAddress ?: "Unknown End",
+                            text = trip.endAddress ?: "Arrivée inconnue",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                             color = textColor,
                             maxLines = 1
@@ -1162,3 +1162,4 @@ fun NewHomeTripCard(
         }
     }
 }
+

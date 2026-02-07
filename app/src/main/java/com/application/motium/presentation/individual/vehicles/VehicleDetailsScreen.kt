@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+﻿package com.application.motium.presentation.individual.vehicles
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -69,7 +69,7 @@ fun VehicleDetailsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Vehicle Details",
+                        "Détails du véhicule",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -78,7 +78,7 @@ fun VehicleDetailsScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Retour"
                         )
                     }
                 },
@@ -86,7 +86,7 @@ fun VehicleDetailsScreen(
                     IconButton(onClick = { showEditScreen = true }) {
                         Icon(
                             imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit",
+                            contentDescription = "Modifier",
                             tint = MotiumPrimary
                         )
                     }
@@ -174,7 +174,7 @@ fun VehicleDetailsScreen(
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
                             Text(
-                                text = "⭐ Default",
+                                text = "⭐ Par défaut",
                                 color = MotiumPrimary,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
@@ -199,7 +199,7 @@ fun VehicleDetailsScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(
-                            "Vehicle Information",
+                            "Informations du véhicule",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
@@ -207,9 +207,9 @@ fun VehicleDetailsScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
                         VehicleInfoRow("Type", vehicle.type.displayName)
-                        VehicleInfoRow("License Plate", vehicle.licensePlate ?: "N/A")
-                        VehicleInfoRow("Fiscal Power", vehicle.power?.displayName ?: "N/A")
-                        VehicleInfoRow("Fuel Type", vehicle.fuelType?.displayName ?: "N/A")
+                        VehicleInfoRow("Plaque d'immatriculation", vehicle.licensePlate ?: "N/D")
+                        VehicleInfoRow("Puissance fiscale", vehicle.power?.displayName ?: "N/D")
+                        VehicleInfoRow("Type de carburant", vehicle.fuelType?.displayName ?: "N/D")
                     }
                 }
 
@@ -229,7 +229,7 @@ fun VehicleDetailsScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(
-                            "Annual Mileage & Rates",
+                            "Kilométrage annuel et barèmes",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
@@ -305,7 +305,7 @@ fun VehicleDetailsScreen(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "🗑️ Delete Vehicle",
+                        "🗑️ Supprimer le véhicule",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
@@ -353,7 +353,7 @@ private fun calculateWorkHomeMileageRate(vehicle: Vehicle): String {
     }
 
     // Pour les voitures, utiliser le barème officiel 2025
-    val power = vehicle.power ?: return "N/A"
+    val power = vehicle.power ?: return "N/D"
 
     // Barème kilométrique 2025 - valeurs directement en km
     return when {
@@ -402,7 +402,7 @@ private fun calculateCurrentMileageRate(vehicle: Vehicle, isProfessional: Boolea
     }
 
     // Pour les voitures, utiliser le barème officiel 2025
-    val power = vehicle.power ?: return "N/A"
+    val power = vehicle.power ?: return "N/D"
 
     // Barème kilométrique 2025 - valeurs directement en km (pas de conversion)
     return when {

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+﻿package com.application.motium.presentation.individual.vehicles
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -64,7 +64,7 @@ class VehicleViewModel(
         if (userId == null) {
             MotiumApplication.logger.w("loadVehicles called but user is not authenticated.", "VehicleViewModel")
             // Optionally, you can post an error to the UI state
-            // _uiState.value = _uiState.value.copy(error = "User not authenticated")
+            // _uiState.value = _uiState.value.copy(error = "Utilisateur non authentifié")
             return
         }
 
@@ -85,7 +85,7 @@ class VehicleViewModel(
                 MotiumApplication.logger.e("Error loading vehicles: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Failed to load vehicles"
+                    error = e.message ?: "Échec du chargement des véhicules"
                 )
             }
         }
@@ -102,7 +102,7 @@ class VehicleViewModel(
     ) {
         val userId = _userId.value
         if (userId == null) {
-            _uiState.value = _uiState.value.copy(error = "User not authenticated to add vehicle")
+            _uiState.value = _uiState.value.copy(error = "Utilisateur non authentifié pour ajouter un véhicule")
             return
         }
 
@@ -147,7 +147,7 @@ class VehicleViewModel(
                 MotiumApplication.logger.e("Error adding vehicle: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Failed to add vehicle"
+                    error = e.message ?: "Échec de l'ajout du véhicule"
                 )
             }
         }
@@ -179,7 +179,7 @@ class VehicleViewModel(
                 MotiumApplication.logger.e("Error updating vehicle: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Failed to update vehicle"
+                    error = e.message ?: "Échec de la mise à jour du véhicule"
                 )
             }
         }
@@ -210,7 +210,7 @@ class VehicleViewModel(
                 MotiumApplication.logger.e("Error deleting vehicle: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Failed to delete vehicle"
+                    error = e.message ?: "Échec de la suppression du véhicule"
                 )
             }
         }
@@ -219,7 +219,7 @@ class VehicleViewModel(
     fun setDefaultVehicle(vehicleId: String) {
         val userId = _userId.value
         if (userId == null) {
-            _uiState.value = _uiState.value.copy(error = "User not authenticated to set default vehicle")
+            _uiState.value = _uiState.value.copy(error = "Utilisateur non authentifié pour définir le véhicule par défaut")
             return
         }
         viewModelScope.launch {
@@ -246,7 +246,7 @@ class VehicleViewModel(
                 MotiumApplication.logger.e("Error setting default vehicle: ${e.message}", "VehicleViewModel", e)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Failed to set default vehicle"
+                    error = e.message ?: "Échec de la définition du véhicule par défaut"
                 )
             }
         }
@@ -275,3 +275,5 @@ data class VehicleUiState(
     val successMessage: String? = null,
     val showAddDialog: Boolean = false
 )
+
+

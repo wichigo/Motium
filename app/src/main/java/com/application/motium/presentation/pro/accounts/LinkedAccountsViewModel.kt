@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.accounts
+﻿package com.application.motium.presentation.pro.accounts
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -571,3 +571,4 @@ class LinkedAccountsViewModel(
     fun getActiveCount(): Int = getLicensedCount()
     fun getPendingCount(): Int = getUnlicensedCount()
 }
+

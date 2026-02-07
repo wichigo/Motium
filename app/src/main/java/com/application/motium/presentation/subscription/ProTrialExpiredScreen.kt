@@ -1,4 +1,4 @@
-package com.application.motium.presentation.subscription
+﻿package com.application.motium.presentation.subscription
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -916,3 +916,4 @@ private fun ProFeatureItem(text: String) {
         )
     }
 }
+

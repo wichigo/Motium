@@ -39,6 +39,22 @@ interface DeleteResponse {
   error?: string
 }
 
+const TERMINAL_STRIPE_STATUSES = new Set([
+  "canceled",
+  "incomplete_expired",
+])
+
+function isCancelableStripeStatus(status: string): boolean {
+  return !TERMINAL_STRIPE_STATUSES.has(status)
+}
+
+function normalizeStripeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+  return String(error)
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -168,41 +184,139 @@ serve(async (req) => {
       p_user_agent: userAgent
     })
 
+    const { data: dbSubscriptions, error: dbSubscriptionsError } = await supabaseAdmin
+      .from("stripe_subscriptions")
+      .select("stripe_subscription_id, stripe_customer_id")
+      .eq("user_id", userId)
+
+    if (dbSubscriptionsError) {
+      console.warn("Unable to load stripe_subscriptions fallback data:", dbSubscriptionsError)
+    }
+
+    const dbCustomerIds = Array.from(
+      new Set(
+        (dbSubscriptions ?? [])
+          .map((s) => s.stripe_customer_id)
+          .filter((id): id is string => !!id)
+      )
+    )
+    const dbSubscriptionIds = Array.from(
+      new Set(
+        (dbSubscriptions ?? [])
+          .map((s) => s.stripe_subscription_id)
+          .filter((id): id is string => !!id)
+      )
+    )
+
+    const effectiveStripeCustomerId = stripeCustomerId || dbCustomerIds[0] || null
     let stripeCleanupStatus = "not_required"
 
     // Handle Stripe cleanup if customer exists
-    if (stripeCustomerId && stripeSecretKey) {
+    if ((effectiveStripeCustomerId || dbSubscriptionIds.length > 0) && !stripeSecretKey) {
+      stripeCleanupStatus = "failed: missing STRIPE_SECRET_KEY"
+      console.error("Stripe cleanup skipped: STRIPE_SECRET_KEY is missing")
+    } else if ((effectiveStripeCustomerId || dbSubscriptionIds.length > 0) && stripeSecretKey) {
       try {
         const stripe = new Stripe(stripeSecretKey, {
           apiVersion: "2023-10-16",
           httpClient: Stripe.createFetchHttpClient(),
         })
 
-        console.log(`Processing Stripe cleanup for customer: ${stripeCustomerId}`)
+        console.log(
+          `Processing Stripe cleanup (customer: ${effectiveStripeCustomerId ?? "n/a"}, db_subscriptions: ${dbSubscriptionIds.length})`
+        )
 
-        // Cancel all active subscriptions
-        const subscriptions = await stripe.subscriptions.list({
-          customer: stripeCustomerId,
-          status: "active"
-        })
+        let canceledCount = 0
+        let skippedCount = 0
+        const canceledSubscriptionIds = new Set<string>()
+        const cleanupErrors: string[] = []
 
-        for (const sub of subscriptions.data) {
-          console.log(`Canceling subscription: ${sub.id}`)
-          await stripe.subscriptions.cancel(sub.id, {
-            prorate: true,  // Prorate final invoice
-            invoice_now: false  // Don't create final invoice
-          })
+        if (effectiveStripeCustomerId) {
+          let startingAfter: string | undefined
+
+          do {
+            const subscriptionsPage = await stripe.subscriptions.list({
+              customer: effectiveStripeCustomerId,
+              status: "all",
+              limit: 100,
+              ...(startingAfter ? { starting_after: startingAfter } : {}),
+            })
+
+            for (const sub of subscriptionsPage.data) {
+              if (!isCancelableStripeStatus(sub.status)) {
+                skippedCount += 1
+                continue
+              }
+
+              try {
+                console.log(`Canceling customer subscription: ${sub.id} (status: ${sub.status})`)
+                await stripe.subscriptions.cancel(sub.id, {
+                  prorate: false,
+                  invoice_now: false,
+                })
+                canceledCount += 1
+                canceledSubscriptionIds.add(sub.id)
+              } catch (cancelError) {
+                const message = normalizeStripeError(cancelError)
+                cleanupErrors.push(`cancel ${sub.id}: ${message}`)
+                console.error(`Failed to cancel subscription ${sub.id}:`, cancelError)
+              }
+            }
+
+            if (subscriptionsPage.has_more && subscriptionsPage.data.length > 0) {
+              startingAfter = subscriptionsPage.data[subscriptionsPage.data.length - 1].id
+            } else {
+              startingAfter = undefined
+            }
+          } while (startingAfter)
         }
 
-        // Delete the customer (also removes payment methods)
-        await stripe.customers.del(stripeCustomerId)
-        console.log(`Stripe customer ${stripeCustomerId} deleted`)
+        for (const dbSubId of dbSubscriptionIds) {
+          if (canceledSubscriptionIds.has(dbSubId)) {
+            continue
+          }
 
-        stripeCleanupStatus = "completed"
+          try {
+            const dbSub = await stripe.subscriptions.retrieve(dbSubId)
+            if (!isCancelableStripeStatus(dbSub.status)) {
+              skippedCount += 1
+              continue
+            }
+
+            console.log(`Canceling fallback DB subscription: ${dbSubId} (status: ${dbSub.status})`)
+            await stripe.subscriptions.cancel(dbSubId, {
+              prorate: false,
+              invoice_now: false,
+            })
+            canceledCount += 1
+            canceledSubscriptionIds.add(dbSubId)
+          } catch (fallbackError) {
+            const message = normalizeStripeError(fallbackError)
+            cleanupErrors.push(`fallback ${dbSubId}: ${message}`)
+            console.error(`Failed fallback cancellation for ${dbSubId}:`, fallbackError)
+          }
+        }
+
+        if (effectiveStripeCustomerId) {
+          try {
+            await stripe.customers.del(effectiveStripeCustomerId)
+            console.log(`Stripe customer ${effectiveStripeCustomerId} deleted`)
+          } catch (customerDeleteError) {
+            const message = normalizeStripeError(customerDeleteError)
+            cleanupErrors.push(`delete_customer ${effectiveStripeCustomerId}: ${message}`)
+            console.error(`Failed to delete Stripe customer ${effectiveStripeCustomerId}:`, customerDeleteError)
+          }
+        }
+
+        if (cleanupErrors.length > 0) {
+          stripeCleanupStatus = `partial_failed: canceled=${canceledCount}, skipped=${skippedCount}, errors=${cleanupErrors.length}`
+        } else {
+          stripeCleanupStatus = `completed: canceled=${canceledCount}, skipped=${skippedCount}`
+        }
 
       } catch (stripeError) {
         console.error("Stripe cleanup error:", stripeError)
-        stripeCleanupStatus = `failed: ${stripeError instanceof Error ? stripeError.message : "Unknown error"}`
+        stripeCleanupStatus = `failed: ${normalizeStripeError(stripeError)}`
         // Continue with deletion even if Stripe fails
       }
     }

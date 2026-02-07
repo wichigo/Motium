@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.calendar
+﻿package com.application.motium.presentation.individual.calendar
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -213,12 +213,12 @@ fun CalendarScreen(
                     }) {
                         Icon(
                             Icons.Default.KeyboardArrowLeft,
-                            contentDescription = "Previous month",
+                            contentDescription = "Mois précédent",
                             modifier = Modifier.size(24.dp)
                         )
                     }
                     Text(
-                        text = SimpleDateFormat("MMMM yyyy", Locale.ENGLISH).format(currentCalendar.time),
+                        text = SimpleDateFormat("MMMM yyyy", Locale.FRENCH).format(currentCalendar.time),
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -230,7 +230,7 @@ fun CalendarScreen(
                     }) {
                         Icon(
                             Icons.Default.KeyboardArrowRight,
-                            contentDescription = "Next month",
+                            contentDescription = "Mois suivant",
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -240,7 +240,7 @@ fun CalendarScreen(
             // Days of week header
             item {
                 Row(modifier = Modifier.fillMaxWidth()) {
-                    val daysOfWeek = listOf("S", "M", "T", "W", "T", "F", "S")
+                    val daysOfWeek = listOf("L", "M", "M", "J", "V", "S", "D")
                     daysOfWeek.forEach { day ->
                         Text(
                             text = day,
@@ -305,7 +305,7 @@ fun CalendarScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).format(day.time),
+                            text = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.FRENCH).format(day.time),
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -321,7 +321,7 @@ fun CalendarScreen(
                             ) {
                                 Icon(
                                     Icons.Default.Visibility,
-                                    contentDescription = "View Expenses",
+                                    contentDescription = "Voir les dépenses",
                                     tint = MotiumPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -334,7 +334,7 @@ fun CalendarScreen(
                             ) {
                                 Icon(
                                     Icons.Default.Receipt,
-                                    contentDescription = "Add Expense",
+                                    contentDescription = "Ajouter une dépense",
                                     tint = MotiumPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -355,7 +355,7 @@ fun CalendarScreen(
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             Text(
-                                "Daily Summary",
+                                "Résumé quotidien",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = textColor,
                                 modifier = Modifier.padding(bottom = 16.dp)
@@ -364,9 +364,9 @@ fun CalendarScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                CalendarStatItem(String.format("%.1f", totalDistance), "Kilometers", MotiumPrimary, textColor, subTextColor)
-                                CalendarStatItem(String.format("$%.2f", totalIndemnities), "Indemnities", MotiumPrimary, textColor, subTextColor)
-                                CalendarStatItem(selectedDayTrips.size.toString(), "Trips", MotiumPrimary, textColor, subTextColor)
+                                CalendarStatItem(String.format("%.1f", totalDistance), "Kilomètres", MotiumPrimary, textColor, subTextColor)
+                                CalendarStatItem(String.format("$%.2f", totalIndemnities), "Indemnités", MotiumPrimary, textColor, subTextColor)
+                                CalendarStatItem(selectedDayTrips.size.toString(), "Trajets", MotiumPrimary, textColor, subTextColor)
                             }
                         }
                     }
@@ -405,7 +405,7 @@ fun CalendarScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "No trips this day",
+                                    text = "Aucun trajet ce jour",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = subTextColor
                                 )
@@ -422,7 +422,7 @@ fun CalendarScreen(
             // Month label
             item {
                 Text(
-                    text = SimpleDateFormat("MMMM yyyy", Locale.ENGLISH).format(currentCalendar.time),
+                    text = SimpleDateFormat("MMMM yyyy", Locale.FRENCH).format(currentCalendar.time),
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Bold
                     )
@@ -432,18 +432,18 @@ fun CalendarScreen(
             // Total distance card
             item {
                 StatCard(
-                    title = "Total distance",
+                    title = "Distance totale",
                     value = "${monthlyStats.first.toInt()} km",
-                    subtitle = "${monthlyStats.third} trips"
+                    subtitle = "${monthlyStats.third} trajets"
                 )
             }
 
             // Total indemnities card
             item {
                 StatCard(
-                    title = "Total indemnities",
+                    title = "Total des indemnités",
                     value = "${monthlyStats.second.toInt()} €",
-                    subtitle = "${monthlyStats.third} trips"
+                    subtitle = "${monthlyStats.third} trajets"
                 )
             }
             } // End of Calendar section
@@ -609,7 +609,7 @@ fun CalendarTripCard(
                     // Départ
                     Column {
                         Text(
-                            text = trip.startAddress ?: "Unknown Start",
+                            text = trip.startAddress ?: "Départ inconnu",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                             color = textColor,
                             maxLines = 1
@@ -624,7 +624,7 @@ fun CalendarTripCard(
                     // Arrivée
                     Column {
                         Text(
-                            text = trip.endAddress ?: "Unknown End",
+                            text = trip.endAddress ?: "Arrivée inconnue",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                             color = textColor,
                             maxLines = 1
@@ -896,7 +896,7 @@ fun WeekView(onAutoTrackingSettingsClick: () -> Unit) {
         ) {
             Icon(Icons.Default.Settings, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Configuration Auto-tracking")
+            Text("Configuration auto-suivi")
         }
 
         Text(
@@ -906,7 +906,7 @@ fun WeekView(onAutoTrackingSettingsClick: () -> Unit) {
         )
 
         Text(
-            "Configurez vos horaires de travail pour activer l'auto-tracking automatiquement",
+            "Configurez vos horaires de travail pour activer l'auto-suivi automatiquement",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
         )
@@ -1075,13 +1075,13 @@ fun PlanningSection(
 
     // Initialize schedules for each day
     val daysOfWeek = listOf(
-        "Monday" to Calendar.MONDAY,
-        "Tuesday" to Calendar.TUESDAY,
-        "Wednesday" to Calendar.WEDNESDAY,
-        "Thursday" to Calendar.THURSDAY,
-        "Friday" to Calendar.FRIDAY,
-        "Saturday" to Calendar.SATURDAY,
-        "Sunday" to Calendar.SUNDAY
+        "Lundi" to Calendar.MONDAY,
+        "Mardi" to Calendar.TUESDAY,
+        "Mercredi" to Calendar.WEDNESDAY,
+        "Jeudi" to Calendar.THURSDAY,
+        "Vendredi" to Calendar.FRIDAY,
+        "Samedi" to Calendar.SATURDAY,
+        "Dimanche" to Calendar.SUNDAY
     )
 
     Column(
@@ -1106,7 +1106,7 @@ fun PlanningSection(
         // Professional Hours section
         // Note: Auto-tracking mode is now controlled from the Home screen dropdown
         Text(
-            text = "Professional Hours",
+            text = "Horaires professionnels",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             )
@@ -1181,7 +1181,7 @@ fun DayScheduleCard(
 
                 if (timeSlots.isEmpty()) {
                     Text(
-                        text = "Not worked",
+                        text = "Non travaillé",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
@@ -1193,7 +1193,7 @@ fun DayScheduleCard(
                         )
                     ) {
                         Text(
-                            text = "+ Add",
+                            text = "+ Ajouter",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -1213,7 +1213,7 @@ fun DayScheduleCard(
                     modifier = Modifier.align(Alignment.End)
                 ) {
                     Text(
-                        text = "+ Add",
+                        text = "+ Ajouter",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1255,7 +1255,7 @@ fun TimeSlotRow(
                 hour > 12 -> hour - 12
                 else -> hour
             }
-            val amPm = if (hour < 12) "AM" else "PM"
+            val amPm = if (hour < 12) "Matin" else "Après-midi"
             String.format("%02d:%02d %s", displayHour, minute, amPm)
         }
     }
@@ -1298,7 +1298,7 @@ fun TimeSlotRow(
 
             Icon(
                 imageVector = Icons.Default.Edit,
-                contentDescription = "Edit time slot",
+                contentDescription = "Modifier le créneau horaire",
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 modifier = Modifier.size(16.dp)
             )
@@ -1307,7 +1307,7 @@ fun TimeSlotRow(
         IconButton(onClick = onDelete) {
             Icon(
                 imageVector = Icons.Default.Delete,
-                contentDescription = "Delete time slot",
+                contentDescription = "Supprimer le créneau horaire",
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
         }
@@ -1352,7 +1352,7 @@ fun TimeSlotEditDialog(
         tonalElevation = 0.dp,
         title = {
             Text(
-                text = "Edit Time Slot",
+                text = "Modifier le créneau horaire",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 color = userPrimaryColor
             )
@@ -1363,7 +1363,7 @@ fun TimeSlotEditDialog(
             ) {
                 // Start time
                 Text(
-                    text = "Start Time",
+                    text = "Heure de début",
                     style = MaterialTheme.typography.labelMedium,
                     color = textColor.copy(alpha = 0.7f)
                 )
@@ -1381,7 +1381,7 @@ fun TimeSlotEditDialog(
                             }
                         },
                         modifier = Modifier.weight(1f),
-                        label = { Text("Hour") },
+                        label = { Text("Heure") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = userPrimaryColor,
@@ -1416,7 +1416,7 @@ fun TimeSlotEditDialog(
 
                 // End time
                 Text(
-                    text = "End Time",
+                    text = "Heure de fin",
                     style = MaterialTheme.typography.labelMedium,
                     color = textColor.copy(alpha = 0.7f)
                 )
@@ -1434,7 +1434,7 @@ fun TimeSlotEditDialog(
                             }
                         },
                         modifier = Modifier.weight(1f),
-                        label = { Text("Hour") },
+                        label = { Text("Heure") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = userPrimaryColor,
@@ -1480,7 +1480,7 @@ fun TimeSlotEditDialog(
                     onConfirm(updatedSlot)
                 }
             ) {
-                Text("Save", color = userPrimaryColor)
+                Text("Enregistrer", color = userPrimaryColor)
             }
         },
         dismissButton = {
@@ -1488,7 +1488,7 @@ fun TimeSlotEditDialog(
                 onClick = onDismiss,
                 colors = ButtonDefaults.textButtonColors(contentColor = userPrimaryColor)
             ) {
-                Text("Cancel")
+                Text("Annuler")
             }
         }
     )
@@ -1575,3 +1575,5 @@ fun generateCalendarDays(calendar: Calendar, trips: List<Trip>, expenses: List<E
 
     return emptyCells + dayCells
 }
+
+

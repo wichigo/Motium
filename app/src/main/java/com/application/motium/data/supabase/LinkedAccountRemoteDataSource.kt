@@ -247,18 +247,21 @@ class LinkedAccountRemoteDataSource private constructor(
                     Result.success(invitationToken)
                 } else {
                     val error = jsonResponse["error"]?.jsonPrimitive?.content ?: "Unknown error"
+                    val retryAfterMinutes = jsonResponse["retry_after_minutes"]?.jsonPrimitive?.content?.toIntOrNull()
                     MotiumApplication.logger.e("Invitation failed: $error", "LinkedAccountRepo")
-                    Result.failure(Exception(translateInvitationError(error)))
+                    Result.failure(Exception(translateInvitationError(error, retryAfterMinutes)))
                 }
             } else {
                 val error = try {
                     val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
-                    jsonResponse["error"]?.jsonPrimitive?.content ?: "Unknown error"
+                    val baseError = jsonResponse["error"]?.jsonPrimitive?.content ?: "Unknown error"
+                    val retryAfterMinutes = jsonResponse["retry_after_minutes"]?.jsonPrimitive?.content?.toIntOrNull()
+                    translateInvitationError(baseError, retryAfterMinutes)
                 } catch (e: Exception) {
                     responseBody.ifBlank { "Server error (${response.code})" }
                 }
                 MotiumApplication.logger.e("Invitation request failed: $error", "LinkedAccountRepo")
-                Result.failure(Exception(translateInvitationError(error)))
+                Result.failure(Exception(error))
             }
         } catch (e: Exception) {
             MotiumApplication.logger.e("Error inviting user with details: ${e.message}", "LinkedAccountRepo", e)
@@ -269,10 +272,18 @@ class LinkedAccountRemoteDataSource private constructor(
     /**
      * Translate error codes to user-friendly messages
      */
-    private fun translateInvitationError(error: String): String {
+    private fun translateInvitationError(error: String, retryAfterMinutes: Int? = null): String {
         return when (error) {
             "user_already_linked" -> "Cet utilisateur est déjà lié à votre entreprise"
             "invitation_already_pending" -> "Une invitation est déjà en attente pour cet email"
+            "invitation_recently_sent" -> {
+                if (retryAfterMinutes != null && retryAfterMinutes > 0) {
+                    "Invitation deja envoyee recemment. Reessayez dans $retryAfterMinutes min."
+                } else {
+                    "Invitation deja envoyee recemment. Merci d'attendre avant de renvoyer."
+                }
+            }
+            "email_send_failed" -> "L'invitation a ete enregistree mais l'envoi du mail a echoue"
             "Missing required fields" -> "Veuillez remplir tous les champs obligatoires"
             else -> error
         }

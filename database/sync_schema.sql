@@ -11,7 +11,8 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN DEFAULT false,
   ADD COLUMN IF NOT EXISTS verified_phone VARCHAR(20),
   ADD COLUMN IF NOT EXISTS device_fingerprint_id TEXT,
-  ADD COLUMN IF NOT EXISTS consider_full_distance BOOLEAN DEFAULT false;
+  ADD COLUMN IF NOT EXISTS consider_full_distance BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS profile_photo_url TEXT;
 
 -- ============================================
 -- TABLE: vehicles

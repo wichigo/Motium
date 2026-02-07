@@ -1,4 +1,4 @@
-package com.application.motium.presentation.auth
+﻿package com.application.motium.presentation.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -717,3 +717,4 @@ private fun isFormValid(
             isPasswordValid &&
             passwordsMatch
 }
+

@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  * 2. Return those licenses to the pool (clear linked_account_id)
  *
  * When a Pro user requests to unlink/cancel a license:
- * - Lifetime: unlink_effective_at = now (immediate)
+ * - Lifetime: unlink_effective_at = prochaine date de renouvellement
  * - Mensuelle: unlink_effective_at = endDate (date de renouvellement)
  * This worker processes those requests when they expire.
  */

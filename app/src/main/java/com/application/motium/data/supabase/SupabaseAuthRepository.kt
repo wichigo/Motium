@@ -175,7 +175,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val p_name: String,
         val p_email: String,
         val p_role: String = "INDIVIDUAL",
-        val p_device_fingerprint_id: String? = null
+        val p_device_fingerprint_id: String? = null,
+        val p_profile_photo_url: String? = null
     )
 
     /**
@@ -206,6 +207,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         // User preferences
         val phone_number: String = "",
         val address: String = "",
+        val profile_photo_url: String? = null,
         val consider_full_distance: Boolean = false,
         @Serializable(with = FavoriteColorsSerializer::class)
         val favorite_colors: List<String> = emptyList(), // JSON array of color strings
@@ -247,6 +249,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         val device_fingerprint_id: String? = null,
         val phone_number: String = "",
         val address: String = "",
+        val profile_photo_url: String? = null,
         val consider_full_distance: Boolean = false,
         @Serializable(with = FavoriteColorsSerializer::class)
         val favorite_colors: List<String> = emptyList(),
@@ -1660,7 +1663,8 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
                         p_name = name,
                         p_email = email,
                         p_role = role,
-                        p_device_fingerprint_id = deviceFingerprintId
+                        p_device_fingerprint_id = deviceFingerprintId,
+                        p_profile_photo_url = null
                     )
                 ).decodeAs<CreateUserProfileResult>()
             } catch (rpcError: Exception) {
@@ -1925,6 +1929,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
             ),
             phoneNumber = phone_number,
             address = address,
+            profilePhotoUrl = profile_photo_url,
             deviceFingerprintId = device_fingerprint_id,
             considerFullDistance = consider_full_distance,
             favoriteColors = favorite_colors,
@@ -1948,6 +1953,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         stripe_subscription_id = subscription.stripeSubscriptionId,
         phone_number = phoneNumber,
         address = address,
+        profile_photo_url = profilePhotoUrl,
         device_fingerprint_id = deviceFingerprintId,
         consider_full_distance = considerFullDistance,
         favorite_colors = favoriteColors,
@@ -1972,6 +1978,7 @@ class SupabaseAuthRepository(private val context: Context) : AuthRepository {
         stripe_subscription_id = subscription.stripeSubscriptionId,
         phone_number = phoneNumber,
         address = address,
+        profile_photo_url = profilePhotoUrl,
         device_fingerprint_id = deviceFingerprintId,
         consider_full_distance = considerFullDistance,
         favorite_colors = favoriteColors,

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import android.content.Context
 import android.content.Intent
@@ -148,3 +148,4 @@ fun openAppSettings(context: Context) {
     }
     context.startActivity(intent)
 }
+

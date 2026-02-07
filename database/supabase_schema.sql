@@ -23,6 +23,7 @@ CREATE TABLE users (
     monthly_trip_count INTEGER DEFAULT 0,
     phone_number VARCHAR(20) DEFAULT '',
     address TEXT DEFAULT '',
+    profile_photo_url TEXT,
     linked_to_company BOOLEAN DEFAULT FALSE,
     share_professional_trips BOOLEAN DEFAULT TRUE,
     share_personal_trips BOOLEAN DEFAULT FALSE,

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.components
+﻿package com.application.motium.presentation.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -132,3 +132,4 @@ fun MotiumStringDropdown(
         enabled = enabled
     )
 }
+

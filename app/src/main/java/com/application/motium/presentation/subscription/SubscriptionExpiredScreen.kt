@@ -1,4 +1,4 @@
-package com.application.motium.presentation.subscription
+﻿package com.application.motium.presentation.subscription
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -99,7 +99,7 @@ fun SubscriptionExpiredScreen(
                             SubscriptionType.LIFETIME else SubscriptionType.PREMIUM
 
                         if (freshUser.subscription.type == expectedType) {
-                            MotiumApplication.logger.i("✅ Subscription updated to $expectedType", "SubscriptionExpired")
+                            MotiumApplication.logger.i("âœ… Subscription updated to $expectedType", "SubscriptionExpired")
                             // CRITICAL: Refresh authState BEFORE navigating to update LaunchedEffect dependencies
                             authViewModel.refreshAuthState {
                                 isRefreshing = false
@@ -155,7 +155,7 @@ fun SubscriptionExpiredScreen(
                 showPaymentSheet = false
                 when (result) {
                     is PaymentSheetResult.Completed -> {
-                        MotiumApplication.logger.i("✅ Payment completed", "SubscriptionExpired")
+                        MotiumApplication.logger.i("âœ… Payment completed", "SubscriptionExpired")
                         paymentSuccess = true
                     }
                     is PaymentSheetResult.Canceled -> {
@@ -479,3 +479,4 @@ private fun FeatureItem(text: String) {
         )
     }
 }
+

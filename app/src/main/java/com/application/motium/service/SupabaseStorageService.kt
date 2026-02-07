@@ -30,6 +30,7 @@ class SupabaseStorageService(private val context: Context) {
         @Volatile
         private var instance: SupabaseStorageService? = null
         private const val RECEIPTS_BUCKET = "receipts"
+        private const val PROFILE_PHOTOS_PREFIX = "profiles"
 
         // Image compression settings
         private const val MAX_IMAGE_DIMENSION = 1280 // Max width/height in pixels
@@ -73,6 +74,37 @@ class SupabaseStorageService(private val context: Context) {
 
         } catch (e: Exception) {
             MotiumApplication.logger.e("❌ Failed to upload receipt photo: ${e.message}", "SupabaseStorage", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Upload a profile photo to Supabase Storage.
+     * Stored in receipts bucket under profiles/{userId}/...
+     *
+     * @param imageUri The content URI of the image to upload
+     * @param userId Current user ID for path partitioning
+     * @return Result with the public URL of the uploaded image
+     */
+    suspend fun uploadProfilePhoto(imageUri: Uri, userId: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            MotiumApplication.logger.i("📤 Uploading profile photo to Supabase Storage", "SupabaseStorage")
+
+            val imageBytes = compressImage(imageUri)
+                ?: return@withContext Result.failure(Exception("Failed to compress profile image"))
+
+            MotiumApplication.logger.i("📦 Compressed profile image size: ${imageBytes.size / 1024}KB", "SupabaseStorage")
+
+            val fileName = "${UUID.randomUUID()}.jpg"
+            val filePath = "$PROFILE_PHOTOS_PREFIX/$userId/$fileName"
+
+            storage.from(RECEIPTS_BUCKET).upload(filePath, imageBytes)
+            val publicUrl = storage.from(RECEIPTS_BUCKET).publicUrl(filePath)
+
+            MotiumApplication.logger.i("✅ Profile photo uploaded successfully: $publicUrl", "SupabaseStorage")
+            Result.success(publicUrl)
+        } catch (e: Exception) {
+            MotiumApplication.logger.e("❌ Failed to upload profile photo: ${e.message}", "SupabaseStorage", e)
             Result.failure(e)
         }
     }

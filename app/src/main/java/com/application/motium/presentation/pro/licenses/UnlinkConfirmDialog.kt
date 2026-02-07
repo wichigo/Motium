@@ -18,7 +18,7 @@ import com.application.motium.presentation.theme.PendingOrange
 
 /**
  * Dialog to confirm unlink/cancel request.
- * - Lifetime: déliaison immédiate
+ * - Lifetime: déliaison à la prochaine date de renouvellement
  * - Mensuelle: effective à la date de renouvellement
  */
 @Composable
@@ -30,14 +30,14 @@ fun UnlinkConfirmDialog(
 ) {
     val isLifetime = license.isLifetime
     val title = if (isLifetime) "Délier la licence" else "Résilier la licence"
-    val confirmText = if (isLifetime) "Confirmer la déliaison" else "Confirmer la résiliation"
+    val confirmText = if (isLifetime) "Planifier la déliaison" else "Confirmer la résiliation"
 
     // Format end date for monthly licenses
     val endDateText = license.endDate?.let { endDate ->
         val instant = endDate.toEpochMilliseconds()
         val date = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE).format(java.util.Date(instant))
         date
-    } ?: "immédiatement"
+    } ?: "la prochaine date de renouvellement"
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
@@ -77,14 +77,14 @@ fun UnlinkConfirmDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            if (isLifetime) "Déliaison immédiate" else "Résiliation au renouvellement",
+                            if (isLifetime) "Déliaison au renouvellement" else "Résiliation au renouvellement",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = PendingOrange
                         )
                         Text(
                             if (isLifetime) {
-                                "La licence sera libérée immédiatement. L'utilisateur perdra l'accès aux fonctionnalités Pro."
+                                "Pour éviter les abus, la licence restera active jusqu'à la prochaine date de renouvellement du compte Pro. L'utilisateur conservera l'accès jusque-là."
                             } else {
                                 "La licence restera active jusqu'au $endDateText (date de renouvellement). L'utilisateur conservera l'accès jusqu'à cette date."
                             },
@@ -96,7 +96,7 @@ fun UnlinkConfirmDialog(
 
                 // Explanation text
                 Text(
-                    if (isLifetime) "Après la déliaison :" else "Après la date de renouvellement :",
+                    "Après la date de renouvellement :",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -110,23 +110,20 @@ fun UnlinkConfirmDialog(
                     BulletPoint("Vous pourrez réassigner la licence à un autre compte")
                 }
 
-                // Cancel option notice - only for monthly (lifetime is immediate)
-                if (!isLifetime) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            "Vous pourrez annuler cette demande à tout moment avant la date de renouvellement.",
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        "Vous pourrez annuler cette demande à tout moment avant la date de renouvellement.",
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         },

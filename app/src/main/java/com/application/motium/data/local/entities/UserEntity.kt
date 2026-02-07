@@ -31,6 +31,7 @@ data class UserEntity(
     val cancelAtPeriodEnd: Boolean = false, // True if subscription is pending cancellation
     val phoneNumber: String,
     val address: String,
+    val profilePhotoUrl: String? = null,
     // Device fingerprint for anti-abuse
     val deviceFingerprintId: String? = null,
     // Fiscal settings
@@ -68,6 +69,7 @@ fun UserEntity.toDomainModel(): User {
         ),
         phoneNumber = phoneNumber,
         address = address,
+        profilePhotoUrl = profilePhotoUrl,
         deviceFingerprintId = deviceFingerprintId,
         considerFullDistance = considerFullDistance,
         favoriteColors = try {
@@ -99,6 +101,7 @@ fun User.toEntity(lastSyncedAt: Long? = null, isLocallyConnected: Boolean = true
         cancelAtPeriodEnd = subscription.cancelAtPeriodEnd,
         phoneNumber = phoneNumber,
         address = address,
+        profilePhotoUrl = profilePhotoUrl,
         deviceFingerprintId = deviceFingerprintId,
         considerFullDistance = considerFullDistance,
         favoriteColors = Json.encodeToString(favoriteColors),

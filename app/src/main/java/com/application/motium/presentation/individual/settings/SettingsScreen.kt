@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.settings
+﻿package com.application.motium.presentation.individual.settings
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +36,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
 import com.application.motium.data.supabase.ProAccountDto
 import com.application.motium.data.supabase.ProAccountRemoteDataSource
 import com.application.motium.data.supabase.ProSettingsRepository
@@ -76,6 +80,7 @@ import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.repository.OfflineFirstProAccountRepository
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
@@ -162,9 +167,12 @@ fun SettingsScreen(
 
     // Edit Profile dialog state
     var showEditProfileDialog by remember { mutableStateOf(false) }
+    var showProfilePhotoDialog by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
     var phoneNumber by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
+    var profilePhotoUrl by remember { mutableStateOf("") }
+    var isUploadingProfilePhoto by remember { mutableStateOf(false) }
     var isSavingProfile by remember { mutableStateOf(false) }
     var profileSaveError by remember { mutableStateOf<String?>(null) }
 
@@ -187,11 +195,13 @@ fun SettingsScreen(
             editName = user.name
             phoneNumber = user.phoneNumber
             address = user.address
+            profilePhotoUrl = user.profilePhotoUrl ?: ""
         }
     }
 
     // Work-Home Trip Settings state
     val localUserRepository = remember { LocalUserRepository.getInstance(context) }
+    val storageService = remember { com.application.motium.service.SupabaseStorageService.getInstance(context) }
     var considerFullDistance by remember { mutableStateOf(false) }
     var showConsiderFullDistanceConfirmDialog by remember { mutableStateOf(false) }
     var pendingConsiderFullDistanceValue by remember { mutableStateOf(false) }
@@ -332,7 +342,7 @@ fun SettingsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Settings",
+                            text = "Réglages",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -376,8 +386,10 @@ fun SettingsScreen(
             item {
                 UserProfileSection(
                     currentUser = currentUser,
+                    profilePhotoUrl = profilePhotoUrl,
                     textColor = textColor,
                     textSecondaryColor = textSecondaryColor,
+                    onPhotoClick = { showProfilePhotoDialog = true },
                     onEditProfileClick = { showEditProfileDialog = true }
                 )
             }
@@ -390,6 +402,7 @@ fun SettingsScreen(
                     textSecondaryColor = textSecondaryColor,
                     phoneNumber = phoneNumber,
                     address = address,
+                    profilePhotoUrl = profilePhotoUrl,
                     onPhoneChange = { phoneNumber = it },
                     onAddressChange = { address = it }
                 )
@@ -597,7 +610,7 @@ fun SettingsScreen(
                 showPremiumDialog = false
                 showUpgradeDialog = true
             },
-            featureName = "l'export de donnees"
+            featureName = "l'export de données"
         )
     }
 
@@ -633,9 +646,9 @@ fun SettingsScreen(
                 scope.launch {
                     try {
                         authViewModel.refreshAuthState()
-                        MotiumApplication.logger.i("✅ User data refreshed after cancellation", "Settings")
+                        MotiumApplication.logger.i("✅ User data refreshed after cancellation", "Réglages")
                     } catch (e: Exception) {
-                        MotiumApplication.logger.e("Failed to refresh user after cancellation: ${e.message}", "Settings", e)
+                        MotiumApplication.logger.e("Failed to refresh user after cancellation: ${e.message}", "Réglages", e)
                     }
                 }
             },
@@ -645,9 +658,9 @@ fun SettingsScreen(
                 scope.launch {
                     try {
                         authViewModel.refreshAuthState()
-                        MotiumApplication.logger.i("✅ User data refreshed after resume", "Settings")
+                        MotiumApplication.logger.i("✅ User data refreshed after resume", "Réglages")
                     } catch (e: Exception) {
-                        MotiumApplication.logger.e("Failed to refresh user after resume: ${e.message}", "Settings", e)
+                        MotiumApplication.logger.e("Failed to refresh user after resume: ${e.message}", "Réglages", e)
                     }
                 }
             }
@@ -790,7 +803,8 @@ fun SettingsScreen(
                     val updatedUser = user.copy(
                         name = editName,
                         phoneNumber = phoneNumber,
-                        address = address
+                        address = address,
+                        profilePhotoUrl = profilePhotoUrl.trim().ifBlank { null }
                     )
                     // FIX: Use offline-first sync pattern (same as consider_full_distance)
                     // instead of direct Supabase update which silently fails
@@ -798,7 +812,7 @@ fun SettingsScreen(
                         try {
                             localUserRepository.updateUser(updatedUser)
                             MotiumApplication.logger.i(
-                                "✅ Profile update queued for sync: name=${updatedUser.name}, phone=${updatedUser.phoneNumber}, address=${updatedUser.address}",
+                                "✅ Profile update queued for sync: name=${updatedUser.name}, phone=${updatedUser.phoneNumber}, address=${updatedUser.address}, hasPhoto=${!updatedUser.profilePhotoUrl.isNullOrBlank()}",
                                 "SettingsScreen"
                             )
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -834,6 +848,63 @@ fun SettingsScreen(
                 confirmPassword = ""
                 showChangePasswordDialog = true
             }
+        )
+    }
+
+    // Profile Photo Dialog
+    if (showProfilePhotoDialog) {
+        ProfilePhotoDialog(
+            profilePhotoUrl = profilePhotoUrl,
+            isUploading = isUploadingProfilePhoto,
+            errorMessage = profileSaveError,
+            onPickPhoto = { selectedUri ->
+                val userId = currentUser?.id
+                if (!userId.isNullOrBlank()) {
+                    isUploadingProfilePhoto = true
+                    profileSaveError = null
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val uploadResult = storageService.uploadProfilePhoto(selectedUri, userId)
+                        uploadResult.onSuccess { uploadedUrl ->
+                            profilePhotoUrl = uploadedUrl
+                            val user = localUserRepository.getLoggedInUser()
+                            if (user != null) {
+                                localUserRepository.updateUser(user.copy(profilePhotoUrl = uploadedUrl))
+                            }
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                Toast.makeText(context, "Photo uploadee", Toast.LENGTH_SHORT).show()
+                            }
+                        }.onFailure { e ->
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                profileSaveError = e.message ?: "Erreur lors de l'upload photo"
+                            }
+                        }
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            isUploadingProfilePhoto = false
+                        }
+                    }
+                }
+            },
+            onRemovePhoto = {
+                CoroutineScope(Dispatchers.IO).launch {
+                    val user = localUserRepository.getLoggedInUser()
+                    if (user != null) {
+                        localUserRepository.updateUser(user.copy(profilePhotoUrl = null))
+                    }
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        profilePhotoUrl = ""
+                        Toast.makeText(context, "Photo supprimee", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onDismiss = {
+                if (!isUploadingProfilePhoto) {
+                    showProfilePhotoDialog = false
+                    profileSaveError = null
+                }
+            },
+            surfaceColor = surfaceColor,
+            textColor = textColor,
+            textSecondaryColor = textSecondaryColor
         )
     }
 
@@ -1033,8 +1104,10 @@ fun SettingsScreen(
 @Composable
 fun UserProfileSection(
     currentUser: User?,
+    profilePhotoUrl: String,
     textColor: Color,
     textSecondaryColor: Color,
+    onPhotoClick: () -> Unit = {},
     onEditProfileClick: () -> Unit = {}
 ) {
     Column(
@@ -1046,20 +1119,34 @@ fun UserProfileSection(
             modifier = Modifier
                 .size(128.dp)
                 .clip(CircleShape)
-                .background(Color(0xFFE5D4C1)),
+                .background(Color(0xFFE5D4C1))
+                .clickable { onPhotoClick() },
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "👤",
-                fontSize = 64.sp
-            )
+            if (profilePhotoUrl.isNotBlank()) {
+                AsyncImage(
+                    model = profilePhotoUrl,
+                    contentDescription = "Photo de profil",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = null,
+                    tint = Color(0xFF5D4037),
+                    modifier = Modifier.size(64.dp)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         // Name
         Text(
-            text = currentUser?.name ?: "User",
+            text = currentUser?.name ?: "Utilisateur",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -1071,7 +1158,7 @@ fun UserProfileSection(
 
         // Email
         Text(
-            text = currentUser?.email ?: "No email",
+            text = currentUser?.email ?: "Aucun e-mail",
             style = MaterialTheme.typography.bodyMedium,
             color = textSecondaryColor,
             fontSize = 14.sp
@@ -1092,7 +1179,7 @@ fun UserProfileSection(
             shape = RoundedCornerShape(24.dp)
         ) {
             Text(
-                "Edit Profile",
+                "Modifier le profil",
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp
             )
@@ -1107,12 +1194,13 @@ fun ProfileInformationSection(
     textSecondaryColor: Color,
     phoneNumber: String,
     address: String,
+    profilePhotoUrl: String,
     onPhoneChange: (String) -> Unit,
     onAddressChange: (String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Profile Information",
+            text = "Informations du profil",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -1139,10 +1227,10 @@ fun ProfileInformationSection(
                     value = phoneNumber,
                     onValueChange = {},
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Phone Number") },
+                    label = { Text("Numéro de téléphone") },
                     placeholder = {
                         if (phoneNumber.isEmpty()) {
-                            Text("+1 (555) 123-4567")
+                            Text("+33 6 12 34 56 78")
                         }
                     },
                     leadingIcon = {
@@ -1170,10 +1258,10 @@ fun ProfileInformationSection(
                     value = address,
                     onValueChange = {},
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Address") },
+                    label = { Text("Adresse") },
                     placeholder = {
                         if (address.isEmpty()) {
-                            Text("123 Main St, Anytown, USA")
+                            Text("123 Rue de la Paix, Paris")
                         }
                     },
                     leadingIcon = {
@@ -1195,6 +1283,23 @@ fun ProfileInformationSection(
                     singleLine = true,
                     readOnly = true
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Image,
+                        contentDescription = null,
+                        tint = MotiumPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (profilePhotoUrl.isBlank()) "Aucune photo de profil" else "Photo de profil configuree",
+                        color = textSecondaryColor,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         }
     }
@@ -1296,7 +1401,7 @@ fun CompanyLinkSection(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Company Link",
+            text = "Liaison entreprise",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -1322,7 +1427,7 @@ fun CompanyLinkSection(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "Linked to a Company/Enterprise",
+                        "Lié à une entreprise",
                         style = MaterialTheme.typography.bodyLarge.copy(
                             fontWeight = FontWeight.Medium
                         ),
@@ -1357,7 +1462,7 @@ fun CompanyLinkSection(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            "Data Sharing Permissions",
+                            "Autorisations de partage des données",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -1379,7 +1484,7 @@ fun CompanyLinkSection(
                                 )
                             )
                             Text(
-                                "Professional Trips",
+                                "Trajets professionnels",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = textColor,
                                 fontSize = 14.sp
@@ -1400,7 +1505,7 @@ fun CompanyLinkSection(
                                 )
                             )
                             Text(
-                                "Personal Trips",
+                                "Trajets personnels",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = textColor,
                                 fontSize = 14.sp
@@ -1421,7 +1526,7 @@ fun CompanyLinkSection(
                                 )
                             )
                             Text(
-                                "Personal Information (Name, Email, etc.)",
+                                "Informations personnelles (nom, e-mail, etc.)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = textColor,
                                 fontSize = 14.sp
@@ -1688,7 +1793,7 @@ fun MileageRatesSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Mileage Rates",
+            text = "Barèmes kilométriques",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -2348,7 +2453,7 @@ fun SubscriptionSection(
 
     val planIcon = when {
         isLicensed -> "🏢"
-        isPremium -> "👑"
+        isPremium -> "💎"
         isInTrial -> "⏳"
         isExpired -> "⚠️"
         else -> "⭐"
@@ -2453,7 +2558,7 @@ fun SubscriptionSection(
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
                         ) {
                             Text(
-                                if (isExpired) "S'abonner" else "Upgrade",
+                                if (isExpired) "S'abonner" else "Mettre à niveau",
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 14.sp
                             )
@@ -2624,7 +2729,7 @@ fun ProLicenseSection(
 
                     // Color and icon based on status
                     val (statusColor, statusIcon) = when {
-                        ownerLicense.isLifetime -> Color(0xFFFFD700) to "👑"
+                        ownerLicense.isLifetime -> Color(0xFFFFD700) to "💎"
                         isPendingUnlink -> Color(0xFFFF9800) to "⏳"
                         else -> MotiumPrimary to "✓"
                     }
@@ -2972,7 +3077,7 @@ fun SubscriptionManagementDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "👑",
+                        text = "💎",
                         fontSize = 20.sp
                     )
                 }
@@ -3584,7 +3689,7 @@ fun DeveloperOptionsSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Developer Options",
+            text = "Options développeur",
             style = MaterialTheme.typography.titleLarge.copy(
                 fontWeight = FontWeight.Bold
             ),
@@ -3625,7 +3730,7 @@ fun DeveloperOptionsSection(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Export Full Diagnostics",
+                            text = "Exporter le diagnostic complet",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
@@ -3634,7 +3739,7 @@ fun DeveloperOptionsSection(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "App logs + logcat (best effort)",
+                            text = "Journaux de l'app + logcat (selon disponibilité)",
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 12.sp,
                             color = textSecondaryColor
@@ -3649,7 +3754,7 @@ fun DeveloperOptionsSection(
                                 val logFile = LogcatCapture.captureFullDiagnostics(context)
 
                                 if (logFile == null || !logFile.exists() || logFile.length() == 0L) {
-                                    Toast.makeText(context, "No diagnostic logs available", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Aucun journal de diagnostic disponible", Toast.LENGTH_SHORT).show()
                                     return@launch
                                 }
 
@@ -3662,18 +3767,18 @@ fun DeveloperOptionsSection(
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_STREAM, uri)
-                                    putExtra(Intent.EXTRA_SUBJECT, "Motium Full Diagnostics")
-                                    putExtra(Intent.EXTRA_TEXT, "Motium full diagnostics - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Diagnostic complet Motium")
+                                    putExtra(Intent.EXTRA_TEXT, "Diagnostic complet Motium - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
 
-                                context.startActivity(Intent.createChooser(shareIntent, "Export Full Diagnostics"))
+                                context.startActivity(Intent.createChooser(shareIntent, "Exporter le diagnostic complet"))
 
-                                MotiumApplication.logger.i("Full diagnostics exported successfully", "Settings")
+                                MotiumApplication.logger.i("Full diagnostics exported successfully", "Réglages")
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to export logs: ${e.message}", "Settings", e)
-                            Toast.makeText(context, "Failed to export logs: ${e.message}", Toast.LENGTH_LONG).show()
+                            MotiumApplication.logger.e("Failed to export logs: ${e.message}", "Réglages", e)
+                            Toast.makeText(context, "Échec de l'export des journaux: ${e.message}", Toast.LENGTH_LONG).show()
                         }
                     },
                     modifier = Modifier
@@ -3686,7 +3791,7 @@ fun DeveloperOptionsSection(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "📤 Export Full Diagnostics",
+                        "📤 Exporter le diagnostic complet",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
@@ -3707,7 +3812,7 @@ fun DeveloperOptionsSection(
                                 }
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to reset logs: ${e.message}", "Settings", e)
+                            MotiumApplication.logger.e("Failed to reset logs: ${e.message}", "Réglages", e)
                             Toast.makeText(context, "Failed to reset logs: ${e.message}", Toast.LENGTH_LONG).show()
                         }
                     },
@@ -3721,7 +3826,7 @@ fun DeveloperOptionsSection(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "🧹 Reset Logs (Start Fresh)",
+                        "🧹 Réinitialiser les journaux (repartir à zéro)",
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp
                     )
@@ -3750,7 +3855,7 @@ fun DeveloperOptionsSection(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Export Logcat",
+                            text = "Exporter Logcat",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
@@ -3759,7 +3864,7 @@ fun DeveloperOptionsSection(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Export system logs for debugging",
+                            text = "Exporter les journaux système pour le débogage",
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 12.sp,
                             color = textSecondaryColor
@@ -3774,7 +3879,7 @@ fun DeveloperOptionsSection(
                                 val logcatFile = LogcatCapture.captureMotiumLogcat(context)
 
                                 if (logcatFile == null || !logcatFile.exists() || logcatFile.length() == 0L) {
-                                    Toast.makeText(context, "No logcat logs available", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Aucun journal logcat disponible", Toast.LENGTH_SHORT).show()
                                     return@launch
                                 }
 
@@ -3787,18 +3892,18 @@ fun DeveloperOptionsSection(
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_STREAM, uri)
-                                    putExtra(Intent.EXTRA_SUBJECT, "Motium Logcat Logs")
-                                    putExtra(Intent.EXTRA_TEXT, "Motium logcat logs - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Journaux Logcat Motium")
+                                    putExtra(Intent.EXTRA_TEXT, "Journaux Logcat Motium - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
 
-                                context.startActivity(Intent.createChooser(shareIntent, "Export Logcat"))
+                                context.startActivity(Intent.createChooser(shareIntent, "Exporter Logcat"))
 
-                                MotiumApplication.logger.i("Logcat exported successfully", "Settings")
+                                MotiumApplication.logger.i("Logcat exported successfully", "Réglages")
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to export logcat: ${e.message}", "Settings", e)
-                            Toast.makeText(context, "Failed to export logcat: ${e.message}", Toast.LENGTH_LONG).show()
+                            MotiumApplication.logger.e("Failed to export logcat: ${e.message}", "Réglages", e)
+                            Toast.makeText(context, "Échec de l'export logcat: ${e.message}", Toast.LENGTH_LONG).show()
                         }
                     },
                     modifier = Modifier
@@ -3811,7 +3916,7 @@ fun DeveloperOptionsSection(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "📱 Export Logcat",
+                        "📱 Exporter Logcat",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
@@ -3840,7 +3945,7 @@ fun DeveloperOptionsSection(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Export Auto-Tracking Logs",
+                            text = "Exporter les journaux d'auto-suivi",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
@@ -3864,7 +3969,7 @@ fun DeveloperOptionsSection(
                                 val logFile = LogcatCapture.captureAutoTrackingLogs(context)
 
                                 if (logFile == null || !logFile.exists() || logFile.length() == 0L) {
-                                    Toast.makeText(context, "No auto-tracking logs found", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Aucun journal d'auto-suivi trouvé", Toast.LENGTH_SHORT).show()
                                     return@launch
                                 }
 
@@ -3877,18 +3982,18 @@ fun DeveloperOptionsSection(
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_STREAM, uri)
-                                    putExtra(Intent.EXTRA_SUBJECT, "Motium Auto-Tracking Logs")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Journaux d'auto-suivi Motium")
                                     putExtra(Intent.EXTRA_TEXT, "Logs auto-tracking - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
 
-                                context.startActivity(Intent.createChooser(shareIntent, "Export Auto-Tracking"))
+                                context.startActivity(Intent.createChooser(shareIntent, "Exporter auto-suivi"))
 
-                                MotiumApplication.logger.i("Auto-tracking logs exported successfully", "Settings")
+                                MotiumApplication.logger.i("Auto-tracking logs exported successfully", "Réglages")
                             }
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to export auto-tracking logs: ${e.message}", "Settings", e)
-                            Toast.makeText(context, "Failed to export: ${e.message}", Toast.LENGTH_LONG).show()
+                            MotiumApplication.logger.e("Failed to export auto-tracking logs: ${e.message}", "Réglages", e)
+                            Toast.makeText(context, "Échec de l'export: ${e.message}", Toast.LENGTH_LONG).show()
                         }
                     },
                     modifier = Modifier
@@ -3901,7 +4006,7 @@ fun DeveloperOptionsSection(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "🚗 Export Auto-Tracking",
+                        "🚗 Exporter auto-suivi",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
@@ -3930,7 +4035,7 @@ fun DeveloperOptionsSection(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Reset Activity Recognition",
+                            text = "Réinitialiser la détection d'activité",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
@@ -3939,7 +4044,7 @@ fun DeveloperOptionsSection(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Fix UID conflicts and crashes",
+                            text = "Corriger les conflits UID et plantages",
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 12.sp,
                             color = textSecondaryColor
@@ -3959,16 +4064,16 @@ fun DeveloperOptionsSection(
                             // Message de confirmation
                             Toast.makeText(
                                 context,
-                                "Activity Recognition reset! Please restart the app.",
+                                "Détection d'activité réinitialisée. Redémarrez l'application.",
                                 Toast.LENGTH_LONG
                             ).show()
 
-                            MotiumApplication.logger.i("✅ Activity Recognition reset from Settings", "Settings")
+                            MotiumApplication.logger.i("✅ Activity Recognition reset from Settings", "Réglages")
                         } catch (e: Exception) {
-                            MotiumApplication.logger.e("Failed to reset Activity Recognition: ${e.message}", "Settings", e)
+                            MotiumApplication.logger.e("Failed to reset Activity Recognition: ${e.message}", "Réglages", e)
                             Toast.makeText(
                                 context,
-                                "Failed to reset: ${e.message}",
+                                "Échec de la réinitialisation: ${e.message}",
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -3983,7 +4088,7 @@ fun DeveloperOptionsSection(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text(
-                        "🔄 Reset Activity Recognition",
+                        "🔄 Réinitialiser la détection d'activité",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
@@ -4246,7 +4351,7 @@ fun GdprSection(
                         color = textColor
                     )
                     Text(
-                        text = "Controler l'utilisation de vos donnees",
+                        text = "Contrôler l'utilisation de vos données",
                         style = MaterialTheme.typography.bodySmall,
                         color = textSecondaryColor
                     )
@@ -4278,12 +4383,12 @@ fun GdprSection(
                 Spacer(modifier = Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Exporter mes donnees",
+                        text = "Exporter mes données",
                         style = MaterialTheme.typography.bodyLarge,
                         color = textColor
                     )
                     Text(
-                        text = "Telecharger toutes vos donnees (Article 15)",
+                        text = "Télécharger toutes vos données (Article 15)",
                         style = MaterialTheme.typography.bodySmall,
                         color = textSecondaryColor
                     )
@@ -4320,7 +4425,7 @@ fun GdprSection(
                         color = Color(0xFFEF4444)
                     )
                     Text(
-                        text = "Effacer definitivement toutes les donnees",
+                        text = "Effacer définitivement toutes les données",
                         style = MaterialTheme.typography.bodySmall,
                         color = textSecondaryColor
                     )
@@ -4356,10 +4461,149 @@ fun LogoutSection(
         shape = RoundedCornerShape(16.dp)
     ) {
         Text(
-            "Sign Out",
+            "Déconnexion",
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp
         )
+    }
+}
+
+@Composable
+fun ProfilePhotoDialog(
+    profilePhotoUrl: String,
+    isUploading: Boolean,
+    errorMessage: String?,
+    onPickPhoto: (Uri) -> Unit,
+    onRemovePhoto: () -> Unit,
+    onDismiss: () -> Unit,
+    surfaceColor: Color,
+    textColor: Color,
+    textSecondaryColor: Color
+) {
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) onPickPhoto(uri)
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = { if (!isUploading) onDismiss() }) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = surfaceColor,
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Photo de profil",
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = textColor
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(132.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE5D4C1)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (profilePhotoUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = profilePhotoUrl,
+                            contentDescription = "Photo de profil",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = Color(0xFF5D4037),
+                            modifier = Modifier.size(64.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = if (profilePhotoUrl.isBlank()) "Aucune photo selectionnee" else "Photo actuelle",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = textSecondaryColor
+                )
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { galleryLauncher.launch("image/*") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(56.dp),
+                        enabled = !isUploading,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MotiumPrimary,
+                            contentColor = Color.White
+                        )
+                    ) {
+                        if (isUploading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Envoi...", maxLines = 1)
+                        } else {
+                            Text(if (profilePhotoUrl.isBlank()) "Choisir" else "Changer", maxLines = 1)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onRemovePhoto,
+                        enabled = profilePhotoUrl.isNotBlank() && !isUploading,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(56.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = "Supprimer la photo")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !isUploading
+                ) {
+                    Text("Fermer")
+                }
+            }
+        }
     }
 }
 
@@ -5765,3 +6009,5 @@ fun EditProInfoDialog(
         }
     }
 }
+
+

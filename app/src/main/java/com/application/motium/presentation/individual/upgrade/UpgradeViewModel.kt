@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.upgrade
+﻿package com.application.motium.presentation.individual.upgrade
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -175,7 +175,7 @@ class UpgradeViewModel(
     suspend fun confirmPayment(paymentMethodId: String): Result<String> {
         val state = _uiState.value
         val userId = state.userId ?: return Result.failure(Exception("Utilisateur non connecté"))
-        val deferredState = state.deferredPaymentReady ?: return Result.failure(Exception("Payment not initialized"))
+        val deferredState = state.deferredPaymentReady ?: return Result.failure(Exception("Paiement non initialisé"))
 
         return subscriptionManager.confirmPaymentWithMethod(
             paymentMethodId = paymentMethodId,
@@ -261,7 +261,7 @@ class UpgradeViewModel(
 
                         // Update local cache with fresh data
                         localUserRepository.saveUser(freshUser, isLocallyConnected = true)
-                        MotiumApplication.logger.i("🔄 User cache updated from Supabase: ${freshUser.subscription.type}", TAG)
+                        MotiumApplication.logger.i("ðŸ”„ User cache updated from Supabase: ${freshUser.subscription.type}", TAG)
 
                         if (freshUser.subscription.type == expectedType) {
                             // Notify AuthViewModel to update its state (so UI observing authState gets updated)
@@ -273,7 +273,7 @@ class UpgradeViewModel(
                                     currentSubscriptionType = freshUser.subscription.type
                                 )
                             }
-                            MotiumApplication.logger.i("✅ Subscription updated to $expectedType", TAG)
+                            MotiumApplication.logger.i("âœ… Subscription updated to $expectedType", TAG)
                             return@launch
                         } else {
                             MotiumApplication.logger.d("Attempt $attempts: subscription still ${freshUser.subscription.type}, expected $expectedType", TAG)
@@ -302,7 +302,7 @@ class UpgradeViewModel(
                                 currentSubscriptionType = result.data.subscription.type
                             )
                         }
-                        MotiumApplication.logger.i("📦 Final sync: subscription is ${result.data.subscription.type}", TAG)
+                        MotiumApplication.logger.i("ðŸ“¦ Final sync: subscription is ${result.data.subscription.type}", TAG)
                         return@launch
                     }
                 }
@@ -339,7 +339,7 @@ class UpgradeViewModel(
             if (modelClass.isAssignableFrom(UpgradeViewModel::class.java)) {
                 return UpgradeViewModel(context) as T
             }
-            throw IllegalArgumentException("Unknown ViewModel class")
+            throw IllegalArgumentException("Classe ViewModel inconnue")
         }
     }
 }
@@ -404,3 +404,5 @@ enum class PlanType {
     MONTHLY,
     LIFETIME
 }
+
+

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.accounts
+﻿package com.application.motium.presentation.pro.accounts
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -173,7 +173,7 @@ fun LinkedAccountVehiclesScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "Aucun vehicule",
+                            text = "Aucun véhicule",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = textColor
@@ -444,3 +444,5 @@ private fun VehicleDetailItem(
         )
     }
 }
+
+

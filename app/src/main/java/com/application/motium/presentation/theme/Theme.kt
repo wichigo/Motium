@@ -1,4 +1,4 @@
-package com.application.motium.presentation.theme
+﻿package com.application.motium.presentation.theme
 
 import android.app.Activity
 import android.os.Build
@@ -97,7 +97,7 @@ fun MotiumTheme(
             colorScheme = colorScheme,
             typography = Typography,
         ) {
-            // Fournir LocalTextSelectionColors APRÈS MaterialTheme pour surcharger les valeurs par défaut
+            // Fournir LocalTextSelectionColors APRÃˆS MaterialTheme pour surcharger les valeurs par défaut
             val customTextSelectionColors = TextSelectionColors(
                 handleColor = MotiumPrimary,
                 backgroundColor = MotiumPrimary.copy(alpha = 0.4f)

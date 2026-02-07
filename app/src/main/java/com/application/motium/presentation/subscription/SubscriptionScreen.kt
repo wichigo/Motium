@@ -1,4 +1,4 @@
-package com.application.motium.presentation.subscription
+﻿package com.application.motium.presentation.subscription
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -99,7 +99,7 @@ fun SubscriptionScreen(
                     PlanFeature("Trajets illimités", true),
                     PlanFeature("Suivi GPS", true),
                     PlanFeature("Historique complet", true),
-                    PlanFeature("Export PDF & CSV", true),
+                    PlanFeature("Export PDF et CSV", true),
                     PlanFeature("Support prioritaire", true),
                     PlanFeature("Sans engagement", true)
                 ),
@@ -410,3 +410,5 @@ private fun FeatureRow(feature: PlanFeature) {
         )
     }
 }
+
+

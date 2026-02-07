@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     subscription_type VARCHAR(20) DEFAULT 'FREE' CHECK (subscription_type IN ('FREE', 'PREMIUM', 'LIFETIME')),
     subscription_expires_at TIMESTAMPTZ,
     monthly_trip_count INTEGER DEFAULT 0,
+    profile_photo_url TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.vehicles
+﻿package com.application.motium.presentation.individual.vehicles
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -76,7 +76,7 @@ fun AddVehicleScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        "Add Vehicle",
+                        "Ajouter un véhicule",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold
                         )
@@ -86,7 +86,7 @@ fun AddVehicleScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Retour"
                         )
                     }
                 },
@@ -110,8 +110,8 @@ fun AddVehicleScreen(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Name") },
-                placeholder = { Text("e.g. My awesome car") },
+                label = { Text("Nom") },
+                placeholder = { Text("ex. Ma super voiture") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(nameFocusRequester),
@@ -188,8 +188,8 @@ fun AddVehicleScreen(
             OutlinedTextField(
                 value = licensePlate,
                 onValueChange = { licensePlate = it },
-                label = { Text("License Plate") },
-                placeholder = { Text("e.g. AB-123-CD") },
+                label = { Text("Plaque d'immatriculation") },
+                placeholder = { Text("ex. AB-123-CD") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(plateFocusRequester),
@@ -211,11 +211,11 @@ fun AddVehicleScreen(
             // Power dropdown
             Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
-                    value = selectedPower?.displayName ?: "Select power",
+                    value = selectedPower?.displayName ?: "Sélectionner la puissance",
                     onValueChange = { },
                     readOnly = true,
-                    label = { Text("Power (in hp)") },
-                    placeholder = { Text("e.g. 150") },
+                    label = { Text("Puissance (en CV)") },
+                    placeholder = { Text("ex. 150") },
                     trailingIcon = {
                         Icon(
                             if (showPowerDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -251,7 +251,7 @@ fun AddVehicleScreen(
                         )
                 ) {
                     DropdownMenuItem(
-                        text = { Text("None", color = MaterialTheme.colorScheme.onSurface) },
+                        text = { Text("Aucun", color = MaterialTheme.colorScheme.onSurface) },
                         onClick = {
                             selectedPower = null
                             showPowerDropdown = false
@@ -277,7 +277,7 @@ fun AddVehicleScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "Fuel Type",
+                    text = "Type de carburant",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -330,13 +330,13 @@ fun AddVehicleScreen(
                         )
                         Column {
                             Text(
-                                text = "Default Vehicle",
+                                text = "Véhicule par défaut",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isDefault) MotiumGreen else MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (isDefault) "Used for auto-tracked trips" else "Set as default for auto-tracking",
+                                text = if (isDefault) "Utilisé pour les trajets auto-suivis" else "Définir comme véhicule par défaut pour l'auto-suivi",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
@@ -379,7 +379,7 @@ fun AddVehicleScreen(
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    "Save Vehicle",
+                    "Enregistrer le véhicule",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -390,3 +390,4 @@ fun AddVehicleScreen(
         }
     }
 }
+

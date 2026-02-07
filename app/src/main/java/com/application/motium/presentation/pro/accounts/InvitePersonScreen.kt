@@ -1,4 +1,4 @@
-package com.application.motium.presentation.pro.accounts
+﻿package com.application.motium.presentation.pro.accounts
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -447,3 +447,4 @@ fun InvitePersonScreen(
         }
     }
 }
+

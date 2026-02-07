@@ -4,6 +4,7 @@ import android.content.Context
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.MotiumDatabase
 import com.application.motium.data.local.dao.LicenseDao
+import com.application.motium.data.local.dao.ProAccountDao
 import com.application.motium.data.local.entities.PendingOperationEntity
 import com.application.motium.data.local.entities.SyncStatus
 import com.application.motium.data.sync.OfflineFirstSyncManager
@@ -42,6 +43,7 @@ class OfflineFirstLicenseRepository private constructor(
 
     private val database = MotiumDatabase.getInstance(context)
     private val licenseDao: LicenseDao = database.licenseDao()
+    private val proAccountDao: ProAccountDao = database.proAccountDao()
     private val syncManager = OfflineFirstSyncManager.getInstance(context)
 
     // ==================== FLOW-BASED QUERIES ====================
@@ -147,10 +149,11 @@ class OfflineFirstLicenseRepository private constructor(
         val isLifetime = license?.isLifetime ?: false
 
         // Effective date:
-        // - Lifetime: déliaison immédiate (now)
+        // - Lifetime: prochaine date de renouvellement (anti-abus)
         // - Mensuelle: date de renouvellement (endDate), ou immédiat si endDate est null/passé
+        val billingAnchorDay = proAccountDao.getByIdOnce(proAccountId)?.billingAnchorDay
         val effectiveAt = when {
-            isLifetime -> now  // Lifetime = immédiat
+            isLifetime -> resolveLifetimeUnlinkEffectiveAt(now, billingAnchorDay)
             licenseEndDate != null && licenseEndDate > now -> licenseEndDate  // Mensuelle = endDate
             else -> now  // Pas de endDate ou dans le passé = immédiat
         }
@@ -176,11 +179,30 @@ class OfflineFirstLicenseRepository private constructor(
         )
 
         val daysUntilEffective = ((effectiveAt - now) / (24L * 60 * 60 * 1000)).toInt()
-        val effectiveType = if (isLifetime) "immédiat (lifetime)" else "date de renouvellement"
+        val effectiveType = if (isLifetime) "prochaine date de renouvellement (lifetime)" else "date de renouvellement"
         MotiumApplication.logger.w(
             "🟠 DEBUG requestUnlink() DONE - License $licenseId unlink requested ($effectiveType), effectiveAt: $effectiveAtIso ($daysUntilEffective jours), queued for sync (payload=$payload)",
             TAG
         )
+    }
+
+    private fun resolveLifetimeUnlinkEffectiveAt(nowMs: Long, billingAnchorDay: Int?): Long {
+        val anchorDay = billingAnchorDay ?: 5
+        return computeNextMonthBillingAnchorEpochMs(nowMs, anchorDay)
+    }
+
+    private fun computeNextMonthBillingAnchorEpochMs(nowMs: Long, billingAnchorDay: Int): Long {
+        val safeAnchorDay = billingAnchorDay.coerceIn(1, 28)
+        val nowInstant = java.time.Instant.ofEpochMilli(nowMs)
+        val nowUtc = java.time.ZonedDateTime.ofInstant(nowInstant, java.time.ZoneOffset.UTC)
+        val currentMonth = java.time.YearMonth.from(nowUtc)
+
+        val candidate = currentMonth
+            .plusMonths(1)
+            .atDay(safeAnchorDay)
+            .atStartOfDay(java.time.ZoneOffset.UTC)
+
+        return candidate.toInstant().toEpochMilli()
     }
 
     override suspend fun cancelUnlinkRequest(licenseId: String, proAccountId: String) {

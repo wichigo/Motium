@@ -1,4 +1,4 @@
-package com.application.motium.presentation.individual.tripdetails
+﻿package com.application.motium.presentation.individual.tripdetails
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -329,7 +329,7 @@ fun TripDetailsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "Trip not found",
+                    "Trajet introuvable",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -395,7 +395,7 @@ fun TripDetailsScreen(
                             }
                         } else {
                             Text(
-                                "No route data",
+                                "Aucune donnée d'itinéraire",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -906,7 +906,7 @@ fun TripDetailsScreen(
             onDismissRequest = { selectedPhotoUri = null },
             containerColor = cardColor,
             tonalElevation = 0.dp,
-            title = { Text("Receipt Photo") },
+            title = { Text("Photo du justificatif") },
             text = {
                 Text(
                     "Photo URI: $photoUri",
@@ -915,7 +915,7 @@ fun TripDetailsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { selectedPhotoUri = null }) {
-                    Text("Close")
+                    Text("Fermer")
                 }
             }
         )
@@ -982,7 +982,7 @@ fun ExpenseNotesSection(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                "Expense Notes",
+                "Notes de dépense",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 fontSize = 16.sp
             )
@@ -1055,7 +1055,7 @@ fun ExpenseItem(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Image,
-                            contentDescription = "Receipt",
+                            contentDescription = "Justificatif",
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -1082,3 +1082,4 @@ fun getExpenseIcon(type: ExpenseType): ImageVector {
         ExpenseType.OTHER -> Icons.Default.Receipt
     }
 }
+
