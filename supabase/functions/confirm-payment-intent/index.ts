@@ -19,6 +19,9 @@ const PRICES = {
   pro_license_lifetime: 14400,   // 144.00 EUR TTC (120.00 EUR HT)
 }
 
+const PRO_LICENSE_DISCOUNT_PER_LICENSE_PERCENT = 1
+const PRO_LICENSE_MAX_DISCOUNT_PERCENT = 50
+
 // Stripe Product IDs
 const PRODUCTS = {
   individual_monthly: "prod_TdmBT4sDscYZer",
@@ -32,6 +35,46 @@ const PRODUCTS = {
 const RECURRING_PRICE_IDS = {
   individual_monthly: Deno.env.get('STRIPE_PRICE_INDIVIDUAL_MONTHLY') || '',
   pro_license_monthly: Deno.env.get('STRIPE_PRICE_PRO_LICENSE_MONTHLY') || '',
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function calculateProLicenseDiscountPercent(
+  existingEligibleLicenses: number,
+  purchaseQuantity: number
+): number {
+  const normalizedExisting = Math.max(0, existingEligibleLicenses)
+  const normalizedQuantity = Math.max(0, purchaseQuantity)
+  const baseLicensesForDiscount = normalizedQuantity === 1
+    ? normalizedExisting
+    : normalizedExisting + normalizedQuantity
+  const rawPercent = baseLicensesForDiscount * PRO_LICENSE_DISCOUNT_PER_LICENSE_PERCENT
+  return clamp(rawPercent, 0, PRO_LICENSE_MAX_DISCOUNT_PERCENT)
+}
+
+function applyDiscountToUnitPriceCents(unitPriceCents: number, discountPercent: number): number {
+  const safePercent = clamp(discountPercent, 0, PRO_LICENSE_MAX_DISCOUNT_PERCENT)
+  // Keep deterministic integer cents with half-up rounding.
+  return Math.max(
+    0,
+    Math.round(unitPriceCents * (100 - safePercent) / 100)
+  )
+}
+
+async function getProDiscountEligibleLicenseCount(supabase: any, proAccountId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('licenses')
+    .select('id', { count: 'exact', head: true })
+    .eq('pro_account_id', proAccountId)
+    .neq('status', 'canceled')
+
+  if (error) {
+    throw new Error(`Failed to count existing licenses: ${error.message}`)
+  }
+
+  return count || 0
 }
 
 serve(async (req) => {
@@ -74,6 +117,13 @@ serve(async (req) => {
       )
     }
 
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      return new Response(
+        JSON.stringify({ error: 'quantity must be an integer >= 1' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     // Determine customer context
     const isProPurchase = !!pro_account_id
     const isIndividual = !!user_id && !pro_account_id
@@ -88,11 +138,24 @@ serve(async (req) => {
     }
 
     // Calculate amount
-    const unitPrice = PRICES[price_type as keyof typeof PRICES]
-    const totalAmount = unitPrice * quantity
+    const baseUnitPrice = PRICES[price_type as keyof typeof PRICES]
+    let existingEligibleLicenseCount = 0
+    let proDiscountPercent = 0
+    let effectiveUnitPrice = baseUnitPrice
+
+    if (isProPurchase && pro_account_id) {
+      existingEligibleLicenseCount = await getProDiscountEligibleLicenseCount(supabase, pro_account_id)
+      proDiscountPercent = calculateProLicenseDiscountPercent(existingEligibleLicenseCount, quantity)
+      effectiveUnitPrice = applyDiscountToUnitPriceCents(baseUnitPrice, proDiscountPercent)
+    }
+
+    const totalAmount = effectiveUnitPrice * quantity
     const productId = PRODUCTS[price_type as keyof typeof PRODUCTS]
 
-    console.log(`Processing: ${price_type}, quantity=${quantity}, amount=${totalAmount} cents, isMonthly=${isMonthly}`)
+    console.log(
+      `Processing: ${price_type}, quantity=${quantity}, unit=${effectiveUnitPrice} cents, ` +
+      `amount=${totalAmount} cents, isMonthly=${isMonthly}, discount=${proDiscountPercent}%`
+    )
 
     // Get or create Stripe Customer
     let stripeCustomerId: string | null = null
@@ -219,6 +282,10 @@ serve(async (req) => {
           price_type,
           quantity: quantity.toString(),
           product_id: productId,
+          pro_existing_licenses: existingEligibleLicenseCount.toString(),
+          pro_discount_percent: proDiscountPercent.toString(),
+          pro_base_unit_price_cents: baseUnitPrice.toString(),
+          pro_effective_unit_price_cents: effectiveUnitPrice.toString(),
         },
         return_url: 'https://motium.app/payment/complete',
       })
@@ -258,6 +325,10 @@ serve(async (req) => {
           quantity: quantity.toString(),
           product_id: productId,
           is_initial_payment: 'true', // Mark as initial payment
+          pro_existing_licenses: existingEligibleLicenseCount.toString(),
+          pro_discount_percent: proDiscountPercent.toString(),
+          pro_base_unit_price_cents: baseUnitPrice.toString(),
+          pro_effective_unit_price_cents: effectiveUnitPrice.toString(),
         },
         return_url: 'https://motium.app/payment/complete',
       })
@@ -277,17 +348,27 @@ serve(async (req) => {
       }
 
       // 2. Get or create the recurring Price ID
-      const recurringPriceId = RECURRING_PRICE_IDS[price_type as keyof typeof RECURRING_PRICE_IDS]
+      // For Pro monthly licenses, always create a dynamic price to carry the current discount tier.
+      const mustUseDynamicRecurringPrice = isProPurchase && price_type === 'pro_license_monthly'
+      const recurringPriceId = mustUseDynamicRecurringPrice
+        ? ''
+        : RECURRING_PRICE_IDS[price_type as keyof typeof RECURRING_PRICE_IDS]
 
       if (!recurringPriceId) {
         // Create price on-the-fly if not configured
         console.log(`Creating recurring price for ${price_type}`)
         const price = await stripe.prices.create({
-          unit_amount: unitPrice,
+          unit_amount: effectiveUnitPrice,
           currency: 'eur',
           recurring: { interval: 'month' },
           product: productId,
-          metadata: { price_type },
+          metadata: {
+            price_type,
+            pro_existing_licenses: existingEligibleLicenseCount.toString(),
+            pro_discount_percent: proDiscountPercent.toString(),
+            pro_base_unit_price_cents: baseUnitPrice.toString(),
+            pro_effective_unit_price_cents: effectiveUnitPrice.toString(),
+          },
         })
         console.log(`Created recurring price: ${price.id}`)
 
@@ -299,7 +380,8 @@ serve(async (req) => {
           await handleProSubscription(
             stripe, supabase, pro_account_id, stripeCustomerId!,
             createdPriceId, quantity, proAccountData, billing_anchor_day,
-            user_id, paymentIntent.id
+            user_id, paymentIntent.id,
+            proDiscountPercent, baseUnitPrice, effectiveUnitPrice
           )
         } else if (isIndividual && user_id) {
           await handleIndividualSubscription(
@@ -313,7 +395,8 @@ serve(async (req) => {
           await handleProSubscription(
             stripe, supabase, pro_account_id, stripeCustomerId!,
             recurringPriceId, quantity, proAccountData, billing_anchor_day,
-            user_id, paymentIntent.id
+            user_id, paymentIntent.id,
+            proDiscountPercent, baseUnitPrice, effectiveUnitPrice
           )
         } else if (isIndividual && user_id) {
           await handleIndividualSubscription(
@@ -367,7 +450,10 @@ async function handleProSubscription(
   proAccountData: any,
   billingAnchorDay: number | undefined,
   userId: string,
-  paymentIntentId: string
+  paymentIntentId: string,
+  discountPercent: number,
+  baseUnitPriceCents: number,
+  effectiveUnitPriceCents: number
 ) {
   const existingSubscriptionId = proAccountData?.stripe_subscription_id
   const existingAnchorDay = proAccountData?.billing_anchor_day
@@ -397,6 +483,7 @@ async function handleProSubscription(
       await stripe.subscriptions.update(existingSubscriptionId, {
         items: [{
           id: subscriptionItem.id,
+          price: priceId,
           quantity: newQuantity,
         }],
         proration_behavior: 'none', // No proration, user already paid
@@ -404,9 +491,12 @@ async function handleProSubscription(
           ...subscription.metadata,
           last_updated: new Date().toISOString(),
           last_payment_intent: paymentIntentId,
+          discount_percent: discountPercent.toString(),
+          base_unit_price_cents: baseUnitPriceCents.toString(),
+          effective_unit_price_cents: effectiveUnitPriceCents.toString(),
         },
       })
-      console.log(`✅ Updated subscription quantity to ${newQuantity} (stripe=${stripeQuantity}, db=${dbQuantity})`)
+      console.log(`Updated subscription quantity to ${newQuantity} (stripe=${stripeQuantity}, db=${dbQuantity})`)
     }
   } else {
     // Create new subscription for this Pro account
@@ -433,6 +523,9 @@ async function handleProSubscription(
         supabase_user_id: userId || '',
         price_type: 'pro_license_monthly',
         initial_payment_intent: paymentIntentId,
+        discount_percent: discountPercent.toString(),
+        base_unit_price_cents: baseUnitPriceCents.toString(),
+        effective_unit_price_cents: effectiveUnitPriceCents.toString(),
       },
     })
 

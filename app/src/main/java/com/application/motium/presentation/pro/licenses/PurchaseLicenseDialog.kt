@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.application.motium.domain.model.License
+import com.application.motium.domain.model.ProLicensePricing
 import com.application.motium.presentation.theme.MotiumPrimary
 
 /**
@@ -21,6 +22,7 @@ import com.application.motium.presentation.theme.MotiumPrimary
 fun PurchaseLicenseDialog(
     onDismiss: () -> Unit,
     onPurchase: (quantity: Int, isLifetime: Boolean) -> Unit,
+    existingLicenseCount: Int = 0,
     isLoading: Boolean = false
 ) {
     var quantity by remember { mutableIntStateOf(1) }
@@ -28,9 +30,17 @@ fun PurchaseLicenseDialog(
 
     // Calculate prices based on mode
     val unitPriceHT = if (isLifetime) License.LICENSE_LIFETIME_PRICE_HT else License.LICENSE_PRICE_HT
-    val priceHT = quantity * unitPriceHT
+    val discountPercent = ProLicensePricing.calculateDiscountPercent(existingLicenseCount, quantity)
+    val discountedUnitPriceHT = ProLicensePricing.applyDiscount(unitPriceHT, discountPercent)
+    val initialPriceHT = quantity * unitPriceHT
+    val priceHT = quantity * discountedUnitPriceHT
+    val discountAmountHT = (initialPriceHT - priceHT).coerceAtLeast(0.0)
     val vat = priceHT * License.VAT_RATE
     val priceTTC = priceHT + vat
+    val baseUnitPriceLabel = buildString {
+        append("$quantity x ${String.format("%.2f", unitPriceHT)} € HT")
+        if (!isLifetime) append(" /mois")
+    }
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
@@ -123,13 +133,46 @@ fun PurchaseLicenseDialog(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                "$quantity x ${unitPriceHT.toInt()} € HT" +
-                                    if (!isLifetime) " /mois" else "",
+                                baseUnitPriceLabel,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                String.format("%.2f €", priceHT),
+                                String.format("%.2f €", initialPriceHT),
                                 style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
+                        if (discountPercent > 0) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Remise degressive",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MotiumPrimary
+                                )
+                                Text(
+                                    "-${String.format("%.2f €", discountAmountHT)} HT",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MotiumPrimary
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Total HT apres remise",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                            Text(
+                                String.format("%.2f €", priceHT),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                             )
                         }
 
@@ -180,9 +223,9 @@ fun PurchaseLicenseDialog(
                 ) {
                     Text(
                         if (isLifetime) {
-                            "Les licences a vie n'expirent jamais et ne necessitent aucun renouvellement. Paiement unique via Stripe."
+                            "Les licences a vie n'expirent jamais. Remise: achat unitaire = licences possedees, achat en lot = possedees + quantite (max -50%). Paiement unique via Stripe."
                         } else {
-                            "Le paiement sera effectue via Stripe. Vous recevrez une facture par email chaque mois."
+                            "Remise degressive appliquee: -$discountPercent% (max -50%). Le paiement sera effectue via Stripe."
                         },
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall,

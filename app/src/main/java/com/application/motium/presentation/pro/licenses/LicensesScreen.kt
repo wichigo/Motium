@@ -256,9 +256,11 @@ fun LicensesScreen(
 
     // Purchase dialog
     if (uiState.showPurchaseDialog) {
+        val existingLicenseCount = uiState.licenses.count { it.status != LicenseStatus.CANCELED }
         PurchaseLicenseDialog(
             onDismiss = { viewModel.hidePurchaseDialog() },
             onPurchase = { quantity, isLifetime -> viewModel.purchaseLicenses(quantity, isLifetime) },
+            existingLicenseCount = existingLicenseCount,
             isLoading = uiState.isPurchasing
         )
     }
@@ -608,6 +610,18 @@ private fun PricingInfoCard(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
+                    "Remise degressive: achat unitaire = -1% par licence possedee",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Text(
+                    "Achat en lot (>1): -1% sur (licences possedees + quantite). Exemple: 20 + 10 = -30% (max -50%)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textSecondaryColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
                     "Tarif a vie: 120 € HT / licence",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
@@ -615,6 +629,11 @@ private fun PricingInfoCard(
                 )
                 Text(
                     "Soit 144 € TTC - paiement unique",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textSecondaryColor
+                )
+                Text(
+                    "La meme remise degressive s'applique aussi aux licences a vie.",
                     style = MaterialTheme.typography.bodySmall,
                     color = textSecondaryColor
                 )

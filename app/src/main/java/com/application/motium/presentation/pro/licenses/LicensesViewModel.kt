@@ -15,6 +15,7 @@ import com.application.motium.data.supabase.SupabaseAuthRepository
 import com.application.motium.data.subscription.SubscriptionManager
 import com.application.motium.domain.model.License
 import com.application.motium.domain.model.LicensesSummary
+import com.application.motium.domain.model.LicenseStatus
 import com.application.motium.domain.model.LinkStatus
 import com.stripe.android.paymentsheet.PaymentSheetResult
 import kotlinx.coroutines.CancellationException
@@ -127,7 +128,9 @@ data class PaymentReadyState(
 data class DeferredPaymentReadyState(
     val amountCents: Long,
     val priceType: String,
-    val quantity: Int
+    val quantity: Int,
+    val existingLicenseCount: Int = 0,
+    val discountPercent: Int = 0
 )
 
 /**
@@ -318,9 +321,22 @@ class LicensesViewModel(
                 }
 
                 val priceType = if (isLifetime) "pro_license_lifetime" else "pro_license_monthly"
-                val amountCents = subscriptionManager.getAmountCents(priceType, quantity)
+                val existingLicenseCount = getExistingLicenseCountForPricing(proAccountId)
+                val discountPercent = subscriptionManager.getProLicenseDiscountPercent(
+                    existingProLicenseCount = existingLicenseCount,
+                    quantity = quantity
+                )
+                val amountCents = subscriptionManager.getAmountCents(
+                    priceType = priceType,
+                    quantity = quantity,
+                    existingProLicenseCount = existingLicenseCount
+                )
 
-                MotiumApplication.logger.i("Initializing deferred license payment: $quantity x $priceType (${amountCents / 100.0}€)", TAG)
+                MotiumApplication.logger.i(
+                    "Initializing deferred license payment: $quantity x $priceType " +
+                        "(${amountCents / 100.0} EUR, existing=$existingLicenseCount, discount=$discountPercent%)",
+                    TAG
+                )
 
                 // Store pending purchase and open PaymentSheet
                 _dialogState.update { it.copy(
@@ -331,7 +347,9 @@ class LicensesViewModel(
                     deferredPaymentReady = DeferredPaymentReadyState(
                         amountCents = amountCents,
                         priceType = priceType,
-                        quantity = quantity
+                        quantity = quantity,
+                        existingLicenseCount = existingLicenseCount,
+                        discountPercent = discountPercent
                     )
                 )}
 
@@ -358,6 +376,20 @@ class LicensesViewModel(
                 )}
             }
         }
+    }
+
+    /**
+     * Best-effort count of currently owned licenses used for price preview.
+     * Tries remote first (fresh), then falls back to local cache.
+     */
+    private suspend fun getExistingLicenseCountForPricing(proAccountId: String): Int {
+        val remoteLicenses = licenseRemoteDataSource.getLicenses(proAccountId).getOrNull()
+        if (remoteLicenses != null) {
+            return remoteLicenses.count { it.status != LicenseStatus.CANCELED }
+        }
+
+        return licenseCacheManager.getLicensesByProAccountOnce(proAccountId)
+            .count { it.status != LicenseStatus.CANCELED }
     }
 
     /**

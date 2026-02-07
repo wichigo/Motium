@@ -5,6 +5,7 @@ import com.application.motium.BuildConfig
 import com.application.motium.MotiumApplication
 import com.application.motium.data.local.LocalUserRepository
 import com.application.motium.data.preferences.SecureSessionStorage
+import com.application.motium.domain.model.ProLicensePricing
 import com.application.motium.domain.model.Subscription
 import com.application.motium.domain.model.SubscriptionType
 import com.application.motium.domain.model.User
@@ -901,15 +902,34 @@ class SubscriptionManager private constructor(private val context: Context) {
     /**
      * Get the amount in cents for a given price type and quantity
      */
-    fun getAmountCents(priceType: String, quantity: Int = 1): Long {
-        val pricePerUnit = when (priceType) {
-            "individual_monthly" -> INDIVIDUAL_MONTHLY_PRICE
-            "individual_lifetime" -> INDIVIDUAL_LIFETIME_PRICE
-            "pro_license_monthly" -> PRO_LICENSE_MONTHLY_PRICE
-            "pro_license_lifetime" -> PRO_LICENSE_LIFETIME_PRICE
-            else -> 0.0
+    fun getAmountCents(
+        priceType: String,
+        quantity: Int = 1,
+        existingProLicenseCount: Int = 0
+    ): Long {
+        if (quantity <= 0) return 0L
+
+        return when (priceType) {
+            "individual_monthly" -> (INDIVIDUAL_MONTHLY_PRICE * 100 * quantity).toLong()
+            "individual_lifetime" -> (INDIVIDUAL_LIFETIME_PRICE * 100 * quantity).toLong()
+            "pro_license_monthly" -> {
+                val discountPercent = ProLicensePricing.calculateDiscountPercent(existingProLicenseCount, quantity)
+                val unitPriceCents = (PRO_LICENSE_MONTHLY_PRICE * 100).toInt()
+                val discountedUnitCents = ProLicensePricing.applyDiscountCents(unitPriceCents, discountPercent)
+                (discountedUnitCents * quantity).toLong()
+            }
+            "pro_license_lifetime" -> {
+                val discountPercent = ProLicensePricing.calculateDiscountPercent(existingProLicenseCount, quantity)
+                val unitPriceCents = (PRO_LICENSE_LIFETIME_PRICE * 100).toInt()
+                val discountedUnitCents = ProLicensePricing.applyDiscountCents(unitPriceCents, discountPercent)
+                (discountedUnitCents * quantity).toLong()
+            }
+            else -> 0L
         }
-        return (pricePerUnit * 100 * quantity).toLong()
+    }
+
+    fun getProLicenseDiscountPercent(existingProLicenseCount: Int, quantity: Int): Int {
+        return ProLicensePricing.calculateDiscountPercent(existingProLicenseCount, quantity)
     }
 }
 
